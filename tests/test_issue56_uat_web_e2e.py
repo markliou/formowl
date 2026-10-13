@@ -5106,6 +5106,10 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                         "request_count",
                         "result",
                         "timestamp",
+                        "schema_version",
+                        "request_id",
+                        "citation_stages",
+                        "final_answer",
                     },
                 )
                 self.assertEqual(record["prompt"], recorded_prompt)

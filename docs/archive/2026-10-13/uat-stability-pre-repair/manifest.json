@@ -1,0 +1,32 @@
+{
+  "utc": "2026-10-13T10:14:35.400181+00:00",
+  "status": "immutable-history",
+  "scope": "exact five pre-edit documentation files before in-progress UAT stability checkpoint",
+  "files": [
+    {
+      "path": "SPEC.md",
+      "sha256": "5b0bfeeecf3552f058ffbc02e601a335f9878756beb931300dd05f12ebb42871",
+      "bytes": 108930
+    },
+    {
+      "path": "README.md",
+      "sha256": "e797a032eacb83deec7157a9567657b121c17f0509237685690b99139dde6690",
+      "bytes": 48116
+    },
+    {
+      "path": "docs/implementation-task-breakdown.md",
+      "sha256": "184a5958278855882a88c6bfbea08737b6904c0bf41ce9d002c7f0104cd01f8b",
+      "bytes": 23445
+    },
+    {
+      "path": "docs/agent-goals/kg-research-agent.md",
+      "sha256": "fd356270870ad8e858fbeacbfb342b59a2ba840f7a4b8a67dd5820529e97c393",
+      "bytes": 12979
+    },
+    {
+      "path": "docs/agent-goals/handoff-log.md",
+      "sha256": "ecea2bc6b24921eed9bb0b409e06093bcc691c087e2f98cffee2fd43bd160dac",
+      "bytes": 16287
+    }
+  ]
+}

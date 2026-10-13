@@ -7,6 +7,26 @@ from formowl_mail.semantic_plan import deterministic_query_class, requires_works
 
 
 class SemanticPlanRoutingTests(unittest.TestCase):
+    def test_inventory_keywords_require_complete_english_words(self) -> None:
+        for prompt in ("Look up country for ITEM-R8", "Find counterpart for ITEM-R8",
+                       "Find the discount in the record", "Find inventory_code for ITEM-R8"):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(deterministic_query_class(prompt), "evidence_lookup")
+        for prompt in ("COUNT records", "count: records", "exact set of records",
+                       "List all records and provide source citations."):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(deterministic_query_class(prompt), "exact_set_or_inventory")
+
+    def test_ancillary_citation_presentation_does_not_quantify_records(self) -> None:
+        for prompt in ("查 ITEM-R8 的價格；列出所有來源引用。",
+                       "Find the record's price and list all source citations."):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(deterministic_query_class(prompt), "evidence_lookup")
+        for prompt in ("列出所有授權文件；列出所有來源引用。",
+                       "Count records; provide source citations."):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(deterministic_query_class(prompt), "exact_set_or_inventory")
+
     def test_excerpt_listing_is_not_an_exhaustive_inventory(self) -> None:
         prompts = (
             "搜尋授權郵件附件的校準說明段落，列出原文並附來源引用。",

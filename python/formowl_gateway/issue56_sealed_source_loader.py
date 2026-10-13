@@ -1616,11 +1616,10 @@ def _build_source_start_semantic_handler(
                     incomplete_reason = "observation_limit"
                     break
                 now = time.monotonic()
-                family_deadline = (
-                    now + max(0, kwargs["deadline_monotonic"] - now) / family_left
-                    if any(item in {"attachment_table", "mail_inline_table"} for item in families)
-                    else kwargs["deadline_monotonic"]
-                )
+                # Every authorized family gets a share of the same absolute
+                # deadline, including mail/document-only requests. An earlier
+                # slow family must not spend a later family's allocation.
+                family_deadline = now + max(0, kwargs["deadline_monotonic"] - now) / family_left
                 if family in {"attachment_table", "mail_inline_table"}:
                     scan = exact_lookup.scan_source_rows(
                         required_terms=required_terms,
@@ -1638,23 +1637,23 @@ def _build_source_start_semantic_handler(
                         if incomplete_reason in {"callback", "context_limit"} or time.monotonic() >= kwargs["deadline_monotonic"]:
                             return RevisionOwnedMailSourceScan((), scanned, False, incomplete_reason)
                     continue
+                family_start_scanned = scanned
                 for selector_index, family_selector in enumerate(selectors):
                     active_selector = family_selector
                     selectors_left = len(selectors) - selector_index
-                    left = min(
-                        family_limit,
-                        max(1, (family_limit - (scanned % family_limit)) // selectors_left),
-                    )
+                    left = (family_limit - (scanned - family_start_scanned)) // selectors_left
                     if left <= 0:
                         incomplete_reason = "observation_limit"
                         break
+                    now = time.monotonic()
+                    selector_deadline = now + max(0, family_deadline - now) / selectors_left
                     scan = records.scan_authorized_observations(
                         source_family=family, source_scope_ids=(
                             source.source_scope_ids if family == "document_text" else ()
                         ),
                         mail_import_session_id=family_selector,
                         max_observations=left,
-                        deadline_monotonic=family_deadline,
+                        deadline_monotonic=selector_deadline,
                         observation_callback=consume,
                         context_anchor_callback=lambda item, scope: item is last_anchor,
                         context_callback=consume_context,

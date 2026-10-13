@@ -35,6 +35,9 @@ from formowl_mail.human_uat_orchestrator import (
     _MAX_PROVIDER_REQUESTS_PER_TURN,
     _UatTurnRequestContractBinder,
     _MAX_UAT_TURN_SECONDS,
+    _PRIVATE_UAT_CITATION_TRACE,
+    _private_citation_ids_snapshot,
+    _validated_field_support,
     _evidence_results_are_incomplete,
     _explicit_source_families,
     compact_evidence_for_model,
@@ -46,7 +49,10 @@ from formowl_mail.human_uat_orchestrator import (
     safe_provider_loop_diagnostics,
     safe_provider_transport_diagnostics,
 )
-from formowl_mail.semantic_plan import deterministic_query_class, requires_workspace_evidence
+from formowl_mail.semantic_plan import (
+    deterministic_query_class, requires_workspace_evidence,
+    is_identifier_reference, protected_reference_identifiers,
+)
 from formowl_retrieval.gateway import source_evidence_deadline_scope
 
 from .issue56_diagnostic import (
@@ -303,6 +309,7 @@ class _ConversationState:
     history: tuple[UatConversationMessage, ...] = ()
     latest_evidence: Mapping[str, Any] | None = None
     turns: tuple[Mapping[str, Any], ...] = ()
+    reference_binding: Mapping[str, Any] | None = None
 
 
 class Issue56UatQueryService:
@@ -516,6 +523,7 @@ class Issue56UatQueryService:
                     prompt=prompt,
                     history=state.history,
                     latest_evidence=state.latest_evidence,
+                    reference_binding=state.reference_binding,
                     safety_identifier=conversation_identifier,
                     formowl_tool_descriptor=turn_tool_descriptor,
                     authorized_capability_summary=turn_capability_summary,
@@ -800,7 +808,12 @@ class Issue56TemporaryLanQueryService:
             failure_sha256: str | None = None
             outcome: UatConversationOutcome | None = None
             conversation_identifier = _conversation_identifier(session_id)
-            browser_request_sha256 = _browser_request_fingerprint(session_id, prompt)
+            # Independent of prompt/session so repeated turns remain distinguishable.
+            browser_request_sha256 = "sha256:" + secrets.token_hex(32)
+            citation_stages: list[dict[str, Any]] = []
+            private_trace_token = _PRIVATE_UAT_CITATION_TRACE.set(
+                citation_stages if self._behavior_log_path is not None else None,
+            )
             try:
                 (
                     turn_tool_descriptor,
@@ -814,9 +827,11 @@ class Issue56TemporaryLanQueryService:
                     prompt=prompt,
                     history=previous_history,
                     latest_evidence=previous_evidence,
+                    reference_binding=state.reference_binding,
                     safety_identifier=conversation_identifier,
                     formowl_tool_descriptor=turn_tool_descriptor,
                     authorized_capability_summary=turn_capability_summary,
+                    request_id=browser_request_sha256,
                     mcp_call=lambda request: self._call(
                         request,
                         trace_sink=call_traces,
@@ -896,24 +911,32 @@ class Issue56TemporaryLanQueryService:
                     "turn", started_at=started_at, outcome=outcome, result=result,
                     mcp_call_count=self.request_count,
                     failure_class=self.last_failure_class if failure_sha256 is not None else None,
+                    request_id=browser_request_sha256,
                 )
-                if self._behavior_log_path is not None:
-                    _append_behavior_log(
-                        self._behavior_log_path,
-                        prompt=prompt,
-                        result=result,
-                        request_count=self.request_count,
-                        statuses=self.last_mcp_statuses,
-                        call_traces=call_traces,
-                        failure_sha256=failure_sha256,
-                        provider_diagnostic=_diagnostic_with_mcp(
-                            outcome.provider_diagnostic if outcome is not None else None,
-                            call_traces,
-                            source_binding_fingerprint=self._source_binding_fingerprint,
-                            deployment_binding=getattr(self, "_diagnostic_deployment_binding", None),
-                        ),
-                        elapsed_ms=(time.perf_counter() - started_at) * 1_000.0,
-                    )
+                try:
+                    if self._behavior_log_path is not None:
+                        _append_behavior_log(
+                            self._behavior_log_path,
+                            request_id=browser_request_sha256,
+                            citation_stages=citation_stages,
+                            prompt=prompt,
+                            result=result,
+                            request_count=self.request_count,
+                            statuses=self.last_mcp_statuses,
+                            call_traces=call_traces,
+                            failure_sha256=failure_sha256,
+                            provider_diagnostic=_diagnostic_with_mcp(
+                                outcome.provider_diagnostic if outcome is not None else None,
+                                call_traces,
+                                source_binding_fingerprint=self._source_binding_fingerprint,
+                                deployment_binding=getattr(self, "_diagnostic_deployment_binding", None),
+                            ),
+                            elapsed_ms=(time.perf_counter() - started_at) * 1_000.0,
+                        )
+                except Exception as exc:
+                    _emit_behavior_log_failure(browser_request_sha256, exc)
+                finally:
+                    _PRIVATE_UAT_CITATION_TRACE.reset(private_trace_token)
 
     def _call(
         self,
@@ -1077,6 +1100,13 @@ class Issue56TemporaryLanQueryService:
             if _is_browser_request_fingerprint(browser_request_sha256):
                 trace["browser_request_sha256"] = browser_request_sha256
                 trace["mcp_call_index"] = call_index
+            if self._record_raw_uat_interactions:
+                try:
+                    trace["private_diagnostic"] = _private_behavior_call_diagnostic(
+                        request, trace, data if response_stage == "payload_validated" else None,
+                    )
+                except Exception as exc:
+                    _emit_behavior_log_failure(browser_request_sha256, exc)
             trace_sink.append(trace)
             # Keep the gateway's safe owner frame available only on the
             # service object for private diagnostics.  Public projections use
@@ -1105,6 +1135,8 @@ def _append_behavior_log(
     failure_sha256: str | None,
     provider_diagnostic: Mapping[str, Any] | None,
     elapsed_ms: float,
+    request_id: str,
+    citation_stages: Sequence[Mapping[str, Any]],
 ) -> None:
     visible_result = (
         {key: result.get(key) for key in ("status", "answer", "clarification", "citations")}
@@ -1112,6 +1144,8 @@ def _append_behavior_log(
         else None
     )
     record = {
+        "schema_version": 2,
+        "request_id": request_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "prompt": prompt,
         "result": visible_result,
@@ -1123,6 +1157,10 @@ def _append_behavior_log(
             dict(provider_diagnostic) if provider_diagnostic is not None else None
         ),
         "elapsed_ms": round(elapsed_ms, 3),
+        "citation_stages": list(citation_stages),
+        "final_answer": _private_citation_ids_snapshot(
+            evidence_citation_ids(result) if result is not None else (),
+        ),
     }
     assert_no_public_raw_references(record, "issue56_temporary_lan_behavior_log")
     encoded = (
@@ -1136,9 +1174,59 @@ def _append_behavior_log(
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise ValueError("behavior log must be a regular file")
         os.fchmod(descriptor, 0o600)
-        os.write(descriptor, encoded)
+        remaining = memoryview(encoded)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("behavior_log_short_write")
+            remaining = remaining[written:]
     finally:
         os.close(descriptor)
+
+
+def _emit_behavior_log_failure(request_id: str | None, exc: Exception) -> None:
+    """Never let observation failures replace a result or expose error text."""
+    try:
+        payload = {
+            "event": "issue56_private_uat_behavior_log_failure",
+            "failure_kind": (
+                "validation" if isinstance(exc, ContractValidationError)
+                else "io" if isinstance(exc, OSError) else "recording"
+            ),
+        }
+        if _is_browser_request_fingerprint(request_id):
+            payload["request_id"] = request_id
+        print(json.dumps(payload, sort_keys=True), file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+def _private_behavior_call_diagnostic(
+    request: UatEvidenceToolRequest, trace: Mapping[str, Any],
+    validated_response: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Observe already-validated requests/coverage; never infer missing fields."""
+    contract = request.request_contract
+    diagnostic: dict[str, Any] = {
+        "tool_name": request.tool_name,
+        "request_contract": dict(contract) if contract is not None else None,
+        "required_terms": list(request.required_terms) if request.required_terms else None,
+        "table_query_present": request.table_query is not None,
+        "raw_governed": _private_citation_ids_snapshot(
+            evidence_citation_ids(validated_response) if validated_response is not None else (),
+        ),
+    }
+    if validated_response is not None:
+        diagnostic["source_recovery"] = _private_graph_recheck_trace(trace, validated_response)
+        diagnostic["mail_recheck"] = _private_mail_recheck_trace(trace, validated_response)
+        if contract is not None and contract.get("requested_fields"):
+            supported = _validated_field_support(request, validated_response)
+            diagnostic["field_support"] = {
+                "requested_field_hashes": [sha256_json(field) for field in contract["requested_fields"]],
+                "verified_supported_field_hashes": sorted(supported),
+            }
+    assert_no_public_raw_references(diagnostic, "issue56_private_behavior_call")
+    return diagnostic
 
 
 def _bounded_insert(
@@ -1310,22 +1398,43 @@ def _run_gpt_query_agent(
     formowl_tool_descriptor: Mapping[str, Any] | None,
     authorized_capability_summary: Mapping[str, Any] | None,
     mcp_call: Callable[[UatEvidenceToolRequest], Mapping[str, Any]],
+    request_id: str | None = None,
+    reference_binding: Mapping[str, Any] | None = None,
 ) -> tuple[
     dict[str, Any],
     tuple[Mapping[str, Any], ...],
     UatConversationOutcome,
 ]:
     responses: list[Mapping[str, Any]] = []
+    identifiers = protected_reference_identifiers(prompt)
+    reference_only = is_identifier_reference(prompt) and not identifiers
+    if reference_only:
+        families = (authorized_capability_summary or {}).get("source_families", ())
+        if not reference_binding or not set(reference_binding["source_family_scope"]).issubset(families):
+            outcome = UatConversationOutcome(
+                response_kind="clarification", answer_text="請提供要查詢的明確識別碼；目前無法唯一確認所指的對象。",
+                display_format="narrative", model_name="server-reference-validation",
+            )
+            return _browser_projection(outcome, (), latest_evidence=None), (), outcome
+        authorized_capability_summary = {
+            **authorized_capability_summary,
+            "source_families": list(reference_binding["source_family_scope"]),
+            "conversation_reference_binding": dict(reference_binding),
+        }
+    validated_reference = None
     request_contract_binder = _UatTurnRequestContractBinder(
         user_text=prompt,
         authorized_capability_summary=authorized_capability_summary,
     )
+    if reference_only:
+        _emit_private_reference_trace(reference_binding, request_contract_binder._original_query_hash, request_id)
     prior_evidence_present = latest_evidence is not None
     prior_evidence_citeable = prior_evidence_present and bool(
         evidence_citation_ids(latest_evidence)
     )
 
     def evidence_tool(request: UatEvidenceToolRequest) -> Mapping[str, Any]:
+        nonlocal validated_reference
         if not requires_workspace_evidence(
             prompt,
             query_class=request_contract_binder._query_class,
@@ -1353,8 +1462,26 @@ def _run_gpt_query_agent(
             )
             if bound_terms is not None and bound_terms != request.required_terms:
                 request = replace(request, required_terms=bound_terms)
+        if reference_only:
+            request_contract_binder.validate_tool_query_shape(
+                request.query_text, request_contract_present=request.request_contract is not None,
+                request_contract=request.request_contract, required_terms=request.required_terms,
+                table_query=request.table_query, has_typed_selector=False,
+            )
         data = mcp_call(request)
         responses.append(data)
+        if (request.request_contract and evidence_citation_ids(data)
+                and data.get("status") not in {"error", "permission_denied"}):
+            if reference_only:
+                validated_reference = reference_binding
+            elif (len(identifiers) == 1 and identifiers[0] in (request.required_terms or ())
+                  and identifiers == protected_reference_identifiers(request.query_text)):
+                validated_reference = {
+                    "schema_version": 1,
+                    "identifier": identifiers[0],
+                    "source_turn_hash": request_contract_binder._original_query_hash,
+                    "source_family_scope": list(request.request_contract["source_family_scope"]),
+                }
         return data
 
     provider_started_at = time.perf_counter()
@@ -1367,9 +1494,11 @@ def _run_gpt_query_agent(
         formowl_tool_descriptor=formowl_tool_descriptor,
         authorized_capability_summary=authorized_capability_summary,
     )
+    outcome = replace(outcome, validated_reference_binding=validated_reference)
     _emit_private_uat_terminal_trace(
         "provider", started_at=provider_started_at, outcome=outcome,
         mcp_call_count=len(responses),
+        request_id=request_id,
     )
     return (
         _browser_projection(
@@ -2505,6 +2634,11 @@ def _advance_conversation_state(
     outcome: UatConversationOutcome,
     responses: Sequence[Mapping[str, Any]],
 ) -> None:
+    state.reference_binding = (
+        outcome.validated_reference_binding
+        if result.get("status") in {"complete", "partial"} and result.get("citations")
+        and outcome.response_kind == "answer" else None
+    )
     diagnostic = result.get("diagnostic")
     mcp_diagnostic = diagnostic.get("mcp") if isinstance(diagnostic, Mapping) else None
     if (
@@ -2606,6 +2740,7 @@ def _record_failed_conversation_turn(
     previous_turns: tuple[Mapping[str, Any], ...],
 ) -> None:
     state.history = previous_history
+    state.reference_binding = None
     state.latest_evidence = previous_evidence
     state.turns = (
         *previous_turns,
@@ -3035,13 +3170,31 @@ def _private_graph_recheck_trace(
             safe["scan_complete"] = complete
         if reason is None or (
             isinstance(reason, str)
-            and reason in {"deadline", "observation_limit", "callback", "source_reference_unavailable"}
+            and reason in {"deadline", "observation_limit", "callback", "source_reference_unavailable",
+                           "indexed_shortlist_miss"}
         ):
             safe["scan_stop_reason"] = reason
     for key in ("recovery_fingerprint", "source_authority_fingerprint", "source_session_binding_fingerprint"):
         if _is_browser_request_fingerprint(recovery.get(key)):
             safe[key] = recovery[key]
     return safe
+
+
+def _emit_private_reference_trace(binding: Mapping[str, Any], current_hash: str, request_id: str | None) -> None:
+    """Retain provenance before provider/tool execution, without history or identifiers."""
+    try:
+        payload = {
+            "event": "issue56_private_uat_reference_binding",
+            "binding_fingerprint": sha256_json(binding),
+            "source_turn_hash": binding["source_turn_hash"],
+            "original_query_hash": current_hash,
+        }
+        if _is_browser_request_fingerprint(request_id):
+            payload["request_id"] = request_id
+        assert_no_public_raw_references(payload, "issue56_private_uat_reference_binding")
+        print(json.dumps(payload, sort_keys=True), file=sys.stderr, flush=True)
+    except Exception:
+        pass
 
 
 def _emit_private_uat_terminal_trace(
@@ -3052,6 +3205,7 @@ def _emit_private_uat_terminal_trace(
     result: Mapping[str, Any] | None = None,
     mcp_call_count: int = 0,
     failure_class: str | None = None,
+    request_id: str | None = None,
 ) -> None:
     """Best-effort metadata only; independent of raw logging and HTTP delivery."""
     try:
@@ -3070,6 +3224,8 @@ def _emit_private_uat_terminal_trace(
                 "partial", "clarification_required", "error",
             } else "unknown",
         }
+        if _is_browser_request_fingerprint(request_id):
+            payload["request_id"] = request_id
         elapsed_ms = (time.perf_counter() - started_at) * 1000
         # A terminal event may occur after the turn budget; do not hide overruns.
         if math.isfinite(elapsed_ms) and elapsed_ms >= 0:

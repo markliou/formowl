@@ -753,6 +753,7 @@ class IngestionRevisionSourceRecords:
         scanned = 0
         seen_mail_parents: dict[tuple[str, ...], str] = {}
         context_hashes: set[str] = set()
+        delivered_bindings: dict[str, tuple[str, str]] = {}
         pending_mail_children: dict[tuple[str, ...], list[tuple[Observation, str]]] = {}
         attachment_parents: dict[tuple[str, str], Observation] = {}
         pending_attachment_children: dict[tuple[str, str], list[tuple[Observation, str]]] = {}
@@ -789,9 +790,15 @@ class IngestionRevisionSourceRecords:
                 nonlocal scanned, emit_stop_reason
                 if observation_callback is None:
                     selected.append((item, scope))
+                    delivered_bindings[sha256_json(item.to_dict())] = (
+                        authority.job_fingerprint, item.observation_id,
+                    )
                     return True
                 if not observation_callback(item, scope):
                     return False
+                delivered_bindings[sha256_json(item.to_dict())] = (
+                    authority.job_fingerprint, item.observation_id,
+                )
                 if context_callback is not None and context_anchor_callback(item, scope):
                     key = (
                         authority.job_fingerprint, item.extractor_run_id,
@@ -1035,6 +1042,14 @@ class IngestionRevisionSourceRecords:
                 job_index = reference["job_index"]
                 observed_scope = source_scope_by_job_index.get(job_index)
                 if observed_scope is None:
+                    continue
+                # A child may already have hydrated and delivered its genuine
+                # parent. Its later shortlist entry adds no new source read or
+                # callback. Keep helper/scope validation above this check;
+                # context-only neighbors may still become independent anchors.
+                if delivered_bindings.get(observation_hash) == (
+                    authority.job_fingerprint, helper["observation_id"],
+                ):
                     continue
                 if scanned >= max_observations:
                     return RevisionOwnedMailSourceScan(

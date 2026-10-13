@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 import json
 import unittest
 from unittest import mock
@@ -51,6 +52,87 @@ def _result(citations, *, contract=None, supported=(), prose="Synthetic source c
 
 
 class RequeryProgressTests(unittest.TestCase):
+    def test_actual_source_start_shortlist_miss_stops_before_second_provider(self):
+        from test_issue56_source_query_stability import SourceQueryStabilityTests
+
+        _, handler, arguments = SourceQueryStabilityTests.prepare(self, ("mail", "document_text"))
+        prompt = "Find the review condition for MISSING-Q47 in authorized records."
+        contract = {**arguments["request_contract"], "original_query_hash": sha256_json(prompt)}
+        provider = orchestrator.CodexResponsesConversationModel(
+            base_url="https://provider.example.test/v1", api_key="synthetic-provider-key",
+        )
+        requests, results = [], []
+
+        def execute(request):
+            requests.append(request)
+            result = handler({
+                **arguments, "query_text": request.query_text,
+                "required_terms": list(request.required_terms), "request_contract": request.request_contract,
+            })
+            results.append(result)
+            return result
+
+        tool_response = {"status": "completed", "output": [{
+            "type": "function_call", "name": "query_effective_graph_view", "call_id": "empty-source",
+            "arguments": json.dumps({"query_text": prompt, "required_terms": ["MISSING-Q47"],
+                                     "request_contract": contract, "table_query": None}),
+        }]}
+        with mock.patch.object(provider, "_request_response", side_effect=[
+            tool_response, AssertionError("unnecessary provider continuation after bound empty source scan"),
+        ]) as transport:
+            outcome = provider.respond(
+                history=(), user_text=prompt, latest_evidence=None,
+                safety_identifier="synthetic-empty-source", evidence_tool=execute,
+                authorized_capability_summary={"source_families": ["mail", "document_text"]},
+            )
+        transport.assert_called_once()
+        self.assertEqual(len(requests), 1)
+        result, request = results[0], requests[0]
+        recovery = result["query_agent"]["context_bundle"]["source_recovery"]
+        self.assertEqual(result["status"], "pending_review")
+        self.assertEqual(orchestrator.evidence_citation_ids(result), ())
+        self.assertTrue(recovery["attempted"])
+        self.assertEqual(set(recovery["warnings"]), {"used", "incomplete"})
+        self.assertEqual(recovery["scan"], {
+            "scanned_observation_count": 0, "complete": False, "stop_reason": "indexed_shortlist_miss",
+        })
+        self.assertEqual(outcome.response_kind, "clarification")
+        self.assertEqual(outcome.coverage_status, "incomplete")
+        self.assertTrue(outcome.coverage_note)
+        self.assertEqual(outcome.citation_ids, ())
+        self.assertTrue(orchestrator._source_fallback_exhausted(request, result))
+        trace = _private_graph_recheck_trace({
+            "response_stage": "payload_validated", "browser_request_sha256": sha256_json("turn"),
+            "query_hash": sha256_json(prompt), "mcp_call_index": 1, "citation_count": 0,
+            "request_discriminator": {
+                "tool_name": "query_effective_graph_view", "query_text_char_count": len(prompt),
+                "selector_kind": "none", "selector_present": False, "selector_count": 0,
+            },
+        }, result)
+        self.assertEqual(trace["scan_stop_reason"], "indexed_shortlist_miss")
+        for section, key, value in (
+            ("agent", "original_query_hash", sha256_json("wrong")),
+            ("recovery", "query_hash", sha256_json("wrong")),
+            ("recovery", "source_family_scope", ["mail"]),
+            ("recovery", "attempted", False),
+            ("scan", "stop_reason", "indexed_shortlist"),
+            ("result", "status", "error"),
+            ("result", "status", "permission_denied"),
+            ("result", "citations", ["citation-a"]),
+        ):
+            with self.subTest(section=section, key=key, value=value):
+                changed = copy.deepcopy(result)
+                agent = changed["query_agent"]
+                recovered = agent["context_bundle"]["source_recovery"]
+                {"result": changed, "agent": agent, "recovery": recovered,
+                 "scan": recovered["scan"]}[section][key] = value
+                self.assertFalse(orchestrator._source_fallback_exhausted(request, changed))
+        exact = replace(request, request_contract={
+            **request.request_contract, "query_class": "exact_set_or_inventory",
+            "maximum_claim_strength": "complete_authorized_scope",
+        })
+        self.assertFalse(orchestrator._source_fallback_exhausted(exact, result))
+
     def _run(self, families, results):
         payloads, controls = [], []
         prompt = "Find category and owner for cerulean records and cite authorized evidence."

@@ -1,6 +1,71 @@
 # Implementation Task Breakdown
-## LAN target and publication checkpoint — 2026-10-13 UTC, ACTIVE / 待測
-- User-confirmed target `8088`: `formowl-uat-live-8088-20261013` serves the unchanged
+## UAT consistency assessment — 2026-10-13 UTC, IN-PROGRESS / 待測
+- [ ] Verify the bounded generic repairs, replay candidate browser diagnostics
+  and obtain three scoped reviewer decisions before acceptance.
+- Git progress checkpoint selects verified [r2](../.formowl/uat-stability-20261013/package-r2.json)
+  (`1a502d97…`, five code deltas/252 files,37 tests) plus frozen comparator only.
+  R2 pinned `edbcd163…`: focused146/146 PASS237.894s, integration3/3 PASS108.250s,
+  lint/compile11 PASS. Comparator local15/15 PASS0.840s/Ruff; no r3 integrated,
+  final-review or deployment acceptance. Live8088 stays observability `4544e59a…`.
+- [Assessment](../.formowl/uat-stability-20261013/assessment-safe.json): baseline ten
+  actual browser turns/file=HTTP=DOM,5partial/1chat/2unexpected clarification/
+  1honest incomplete/1provider error,8comparable. Generic country→count routing,
+  lossy prior-citeability and synthetic family/selector/read-cap/parent-read defects
+  have bounded repairs; historical500ms subcause remains unproved.
+- Fixture resolver correction2/2 PASS17.935s retains hash/lineage rejection and
+  unique identities. Original r1 focused128/126PASS/2ERROR233.369s preserved;
+  original tag-based36/34PASS/2ERROR247.999s retained. Graph/mail test-key bug
+  corrected; tag `f53b8dd7…` lacks pypdf, pinned image has it; no PDF product fix.
+- R2 actual manufacturer followup has correct identifier/citation but is
+  incomparable solely due to repair_recovered. Server-owned cited unique protected
+  alphanumeric ID binding is narrow; no general numeric/person/history inference.
+  Four r2 browser lifecycle turns/reload/reset PASS; missing reference clarifies MCP0.
+- R2 indexed_shortlist_miss handling did not stop actual empty table+mail query;
+  native source_table_shortlist omission led to115s SSE timeout. Local native-stop
+  WIP is stopped/unstaged:32 tests/3ERROR,28.468s (two native subcases plus shared
+  old case; invalid negative table_query fixture). No inferred pass count; Ruff
+  not run. Next resume narrows those fixture errors and remaining stop work.
+- Artifact/source-hash anomalies and upstream causes remain OPEN; exact/error
+  exclusions, honest incomplete, source guards and unchanged budgets still apply.
+  Four methodology gates blocked, step4 in-progress; requested sol/high metadata
+  unverified. No checkbox/whole-UAT/standard promotion. This publication checkpoint
+  pauses bounded edits; it creates no blanket stop on later authorized Master/B work.
+- [Handoff](agent-goals/handoff-log.md) retains detailed failures/results. Five exact
+  pre-edit docs/hashes: [immutable checkpoint](archive/2026-10-13/uat-stability-r2-pre-sync/SNAPSHOT.md).
+
+## Opt-in private UAT logging — 2026-10-13 UTC, diagnostic-only / 待測
+- [ ] Capture and verify the authorized UAT interaction recorder in the candidate
+  and live browser, then obtain three sequential scoped reviewer approvals.
+  [Frozen r1](../.formowl/uat-observability-20261013/package-r1.json), code `4544e59a…`,
+  copies r12 plus only two logging owners and two tests; unrelated dirty drift preserved.
+- Local canonical worker evidence: final logging9/9 + terminal6/6, Ruff/diff PASS;
+  earlier working-tree fixture PASS predates final provider correlation.
+  Master frozen36/36,2.192s,EXIT0 (`focused-r1b.log`); prior Docker125/zero tests
+  preserved. Final integration2: cookie PASS, opt-in fixture FAIL before service
+  with `private_artifact_fingerprint_invalid` (`integration-r1.log`,20.501s/EXIT1).
+  Candidate8096 Chromium/log capture PASS: repeated chat MCP0/distinct IDs,
+  unrelated LQP MCP1/provider2/citations2, private9→7→2 IDs/file=HTTP=DOM.
+  All3 scoped reviewers AGREE for logging activation only; exact evidence and
+  commands: [handoff](agent-goals/handoff-log.md). No all-green integration claim.
+- Current8088: `formowl-uat-observability-live-20261013`, code4544e59a…/252drift0,
+  same source/image/gpt-5.5 high/budgets. Live ChromiumEXIT0: chat11195ms MCP0/provider1;
+  unrelated lookup23844ms MCP1/provider2/citations2/partial, file=HTTP=DOM,
+  raw9→7→2 IDs, provider/turn/MCP sameID/zero log failures/private-log URL404 twice.
+  [Live proof](../.formowl/uat-observability-20261013/live-browser-log-safe.json) and
+  [correlation](../.formowl/uat-observability-20261013/live-correlation-safe.json).
+  Repeat-prompt proof remains candidate-only. [Cleanup](../.formowl/uat-observability-20261013/final-operational-safe.json)
+  09:28:05Z: candidate removed/logs retained, live healthy/restart0/OOMfalse,
+  prior r12 stopped/preserved rollback; unrelated containers untouched.
+- Private schema v2 retains unique turn IDs, available validated plan/query/support,
+  citation membership and scan-stop metadata. Paired flags, private0600 persistent
+  operator mount, safe recording failures and unchanged public schemas/budgets:
+  [SPEC](../SPEC.md#731-source-neutral-evidence-double-check--待測).
+- Underlying COO inconsistency remains unresolved. [Canonical authority](../.formowl/uat-observability-20261013/authority-check.json)
+  valid=true/ready=false/errors=[], four gates blocked. No checkbox/standard/readiness
+  promotion; whole regression non-green and source-stability investigation OPEN.
+- Five complete pre-edit docs and hashes: [immutable checkpoint](archive/2026-10-13/uat-observability-checkpoint/SNAPSHOT.md).
+## Prior r12 LAN publication checkpoint — 2026-10-13 UTC, historical / 待測
+- User-confirmed target `8088`: `formowl-uat-live-8088-20261013` served the unchanged
   verified r12 snapshot (`b2f4fa44…`), inventory252/drift0, same partial source `5e222fc…`.
   [Readiness](../.formowl/publication-20261013/uat-8088/ready-safe.json): health OK;
   [Final cutover](../.formowl/publication-20261013/uat-8088/final-safe.json): old8088/8089
@@ -22,7 +87,7 @@
   ready=false, errors=[], four gates blocked. No release/feature/methodology completion
   or checkbox promotion; whole regression non-green, source-stability investigation parked/OPEN.
 ## Delivery-resolution checkpoint — 2026-10-12 UTC, ACTIVE / 待測
-- Live `8089` now runs r12/new partial source `5e222fc…`; full252 files, drift0.
+- At that dated checkpoint live `8089` ran r12/new partial source `5e222fc…`; full252 files, drift0.
   Chromium LAN journey EXIT0: cited delivery and unrelated actual attachment,
   ordinary MCP0/reload/reset/postreset pass; all four responses comparable.
   **This observed question's source-verified answer was obtained in the real LAN
@@ -80,12 +145,12 @@
   407,401 helpers /10,671,080 postings**, still partial, zero independent-document
   helpers. Admission found a successful native PDF run and three preserved indexed
   paragraphs. Old runs, pins and ledgers remain preserved.
-- Serving r12 (`b2f4fa44…`), exact252+34: B's frozen retention-only repair
+- Prior serving r12 (`b2f4fa44…`), exact252+34: B's frozen retention-only repair
   derives safe diagnostic capacity from the **unchanged six-request cap**;
   **19/19,0.818s**, zero failures/errors/skips, Ruff. Final focused r12
   **117/117,174.049s,EXIT0**, zero failures/errors/skips; pre/post exact252+34.
   Hypatia/Archimedes/Lagrange scoped **AGREE (3/3)**. Active serving manifest is
-  now r12 on live8089; candidate8096 proved then removed at19:35:25Z.
+  then r12 on live8089; that candidate8096 proved then removed at19:35:25Z.
   Old r5 remains stopped/preserved for rollback.
   Initial freeze-helper TypeError/empty unpublished tree and operator readonly-
   template chmod failure remain preserved; only the operator helper's private
@@ -122,7 +187,7 @@ unobserved actual metadata as unverified; current explicit bounded assignments
 supersede dated stop/closure language. No descendants or silent tier relabelling.
 
 ## Generic attachment/query recovery — 2026-10-12 UTC, 待測
-- [ ] Fixed source-order offline recovery windows: version0.6.2 same2048/all-formats r3 and prep-r4 completed; preserved native paragraphs admitted, partial source now deployed with r12. First live reopen failed completed-job validation; later instrumented native proof passed without changing guards. Cause/stability and full-source acceptance remain open. Earlier directory-index ENOSPC and separate metadata_unreadable failure are preserved, not overwritten or conflated.
+- [ ] Fixed source-order offline recovery windows: version0.6.2 same2048/all-formats r3 and prep-r4 completed; preserved native paragraphs admitted, partial source was deployed with r12 at that checkpoint. First live reopen failed completed-job validation; later instrumented native proof passed without changing guards. Cause/stability and full-source acceptance remain open. Earlier directory-index ENOSPC and separate metadata_unreadable failure are preserved, not overwritten or conflated.
 - [x] Bounded source-start exact identifier/field implementation: final12/12+Ruff, integrated39/39, three scoped reviewers AGREE, synthetic native XLSX real-provider browser passed. Corpus/live integration and native-value limitations remain separate.
 - [x] Bounded new-evidence/field-support progress and safe attachment-scope trace: final15/15+Ruff, integrated39/39, three scoped reviewers AGREE. Repeated citations alone are not progress; no full-provider-lifecycle acceptance.
 - [ ] Completed partial source-native artifacts validated; r12 candidate original-source crosswalk passed, live delivery/attachment content/citation/lifecycle browser passed. Observed live answer/native source proof has scoped AGREE; unresolved first reopen failure blocks stability/reproducibility, not that observed answer. Full-source/transfer acceptance remains open. Earlier r5 proof is historical; no checkbox promotion.
@@ -133,7 +198,7 @@ supersede dated stop/closure language. No descendants or silent tier relabelling
 - [ ] Stage 4 candidate/live basic chat/reload/reset PASS; candidate delivery EXIT1/mail_failed despite provider completion and repair_recovered. Preserve no_data_match=true/source_binding_verified=false; business/full-UAT/provider-stability acceptance stays open. That slice did not rerun postlive delivery; later partial diagnostics are archived.
 
 ## Earlier bounded repairs — unresolved acceptance carried forward
-- [ ] Earlier source guard and provider scope/transport repairs were assigned without waiting for dense indexing; no whole-UAT/full-source acceptance. That slice's unchanged-live boundary is historical; current r12 deployment and live source-stability failure are recorded above.
+- [ ] Earlier source guard and provider scope/transport repairs were assigned without waiting for dense indexing; no whole-UAT/full-source acceptance. That slice's unchanged-live boundary is historical; prior r12 deployment and source-stability failure remain dated evidence above.
 - [ ] Generic parser/backfill/RAG activation and browser delivery remain **待測**. Four explicit XLS/PDF/PDF-text/PPTX parser failures now preserve failed children and partial-parent binding; unknown/mixed failures still abort. Canonical parser/backfill/prior binding `21/21` passed; parent-binding focused `3/3` passed; full composition + connected attachment modules `98/98`, zero skips, `286.778s`, passed. Scoped lint/diff passed; not full regression or live acceptance.
 Prior provider failures, failed batches, independent source-integrity checks,
 partial browser passes and scoped reviewer decisions remain in the lossless

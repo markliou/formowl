@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections import OrderedDict, deque
+from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -34,6 +36,8 @@ from .semantic_plan import (
     SEMANTIC_CLAIM_STRENGTH_BY_CLASS,
     deterministic_query_class,
     is_ordinary_greeting,
+    is_identifier_reference,
+    protected_reference_identifiers,
     requires_query_expansion,
     requires_workspace_evidence,
     validate_semantic_request_contract,
@@ -54,6 +58,9 @@ _MAX_ANSWER_CHARS = 12_000
 _MAX_MODEL_EVIDENCE_ITEMS = 30
 _MAX_MODEL_EVIDENCE_BYTES = 16 * 1024
 _MAX_MODEL_CITATIONS = 100
+_PRIVATE_UAT_CITATION_TRACE: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+    "private_uat_citation_trace", default=None,
+)
 _MAX_RESPONSE_CITATIONS = 24
 _MAX_TOOL_CALLS_PER_TURN = 3
 _MAX_PUBLIC_TERM_CALLS_PER_TURN = 1
@@ -380,11 +387,22 @@ _CODEX_GRAPH_TOOL_ARGUMENT_GUIDANCE = """
   complete bounded scan and sealed coverage within that authorized revision;
 """.strip()
 
+_RESOLVED_REFERENCE_GUIDANCE = (
+    "Only when trusted turn context supplies resolved_reference, its identifier "
+    "is a server-validated exception to original-request-span grounding. Include "
+    "that concrete identifier in both query_text and required_terms; generic "
+    "reference words are not substitutes. Preserve the original current-turn "
+    "original_query_hash and authorized source-family scope. source_turn_hash "
+    "identifies the prior validated cited turn; it must not replace the current "
+    "hash. No other history, assistant text, or inferred identifier is authorized."
+)
+
 _CODEX_MAIL_TOOL_ARGUMENT_GUIDANCE = """
 - for a mail evidence lookup, provide the selected tool's standalone query_text,
   one authorized mail selector, required_terms, and optional limit;
 - provide 1-8 literal identity and genuine topic terms grounded as contiguous
-  text in the original user request. All terms are conjunctive and must match
+  text in the original user request, except for the single server-validated
+  resolved_reference identifier in trusted turn context. All terms are conjunctive and must match
   within the same candidate evidence item. The authorized selector and
   request_contract determine source-family/scope; source-family and
   operation/action words are routing semantics, not content terms unless the
@@ -666,6 +684,11 @@ class _UatTurnRequestContractBinder:
         )
         self._contract: dict[str, Any] | None = None
         self._normalized_user_text = unicodedata.normalize("NFKC", user_text).casefold()
+        self._reference_only = is_identifier_reference(user_text) and not protected_reference_identifiers(user_text)
+        self._reference_binding = (
+            (authorized_capability_summary or {}).get("conversation_reference_binding")
+            if self._reference_only else None
+        )
         self._attachment_document_label = (
             _without_attached_document_labels(self._normalized_user_text) != self._normalized_user_text
         )
@@ -691,6 +714,7 @@ class _UatTurnRequestContractBinder:
         return {
             "artifact_id": "formowl_uat_turn_request_contract_boundary_v1",
             "original_query_hash": self._original_query_hash,
+            **({"resolved_reference": self._reference_binding} if self._reference_binding else {}),
             "query_class": self._query_class,
             "maximum_claim_strength": SEMANTIC_CLAIM_STRENGTH_BY_CLASS[self._query_class],
             "available_source_families": list(self._available_source_families),
@@ -707,6 +731,7 @@ class _UatTurnRequestContractBinder:
                 "original task."
                 + " " + EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE
                 + " " + SOURCE_EVIDENCE_RECHECK_PLANNING_GUIDANCE
+                + " " + _RESOLVED_REFERENCE_GUIDANCE
             ),
         }
 
@@ -808,6 +833,12 @@ class _UatTurnRequestContractBinder:
     ) -> None:
         """Reject an unexpanded terse copy before it reaches the UAT tool."""
 
+        if self._reference_only and (
+            not self._reference_binding
+            or protected_reference_identifiers(query_text) != (self._reference_binding["identifier"],)
+        ):
+            raise ContractValidationError("UAT reference requires a resolved identifier")
+
         expansion_required = requires_query_expansion(self._normalized_user_text)
         typed_expansion_present = (
             required_terms is not None
@@ -844,10 +875,14 @@ class _UatTurnRequestContractBinder:
     ) -> tuple[str, ...] | None:
         """Bind grounded identity/topic phrases to this turn, including retries."""
 
+        anchor = self._reference_binding["identifier"] if self._reference_binding else None
+        if self._reference_only and not anchor:
+            raise ContractValidationError("UAT evidence required terms are not grounded: unresolved reference")
+
         if candidate is None:
             if self._required_terms is not None:
                 return self._required_terms
-            if allow_missing:
+            if allow_missing and anchor is None:
                 return None
         if (
             not isinstance(candidate, list)
@@ -869,7 +904,8 @@ class _UatTurnRequestContractBinder:
         if (
             any(not term for term in terms)
             or len(set(terms)) != len(terms)
-            or any(term not in self._normalized_user_text for term in terms)
+            or any(term not in self._normalized_user_text and term != anchor for term in terms)
+            or (anchor is not None and anchor not in terms)
         ):
             raise ContractValidationError("UAT evidence required terms are not grounded")
         for term in terms:
@@ -1020,6 +1056,7 @@ class UatConversationOutcome:
     tool_requests: tuple[UatEvidenceToolRequest, ...] = ()
     tool_results: tuple[Mapping[str, Any], ...] = ()
     provider_diagnostic: Mapping[str, Any] | None = None
+    validated_reference_binding: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.response_kind not in _RESPONSE_KINDS:
@@ -3281,6 +3318,28 @@ def _citation_ids_snapshot(citation_ids: Sequence[str]) -> dict[str, Any]:
     }
 
 
+def _private_citation_ids_snapshot(citation_ids: Sequence[str]) -> dict[str, Any]:
+    """Private membership trace: preserve hash IDs; hash all other identifiers."""
+    normalized = sorted(set(citation_ids))
+    return {
+        **_citation_ids_snapshot(normalized),
+        "citation_ids": [
+            _safe_diagnostic_fingerprint(value) or sha256_json(value)
+            for value in normalized[:_MAX_MODEL_CITATIONS]
+        ],
+        "identifier_encoding": "sha256_or_sha256_json",
+        "truncated": len(normalized) > _MAX_MODEL_CITATIONS,
+    }
+
+
+def _record_private_citation_stage(event: Mapping[str, Any]) -> None:
+    sink = _PRIVATE_UAT_CITATION_TRACE.get()
+    if sink is not None and len(sink) < (
+        _MAX_MCP_CITATION_STAGE_DIAGNOSTICS + _MAX_FINALIZATION_VALIDATION_DIAGNOSTICS
+    ):
+        sink.append(dict(event))
+
+
 def _safe_enum_value(value: Any, allowed: frozenset[str], *, max_length: int = 96) -> str | None:
     if isinstance(value, str) and 0 < len(value) <= max_length and value in allowed:
         return value
@@ -3374,6 +3433,12 @@ def _mcp_citation_stage_diagnostic(
     presented_citations = (
         evidence_citation_ids(presented_result) if presented_result is not None else ()
     )
+    _record_private_citation_stage({
+        "stage": "mcp", "call_index": call_index,
+        "raw_governed": _private_citation_ids_snapshot(raw_citations),
+        "compacted_presented": _private_citation_ids_snapshot(presented_citations),
+        "projection_result": projection_result,
+    })
     return {
         "call_index": max(1, int(call_index)),
         "elapsed_ms": round(max(0.0, float(elapsed_ms)), 3),
@@ -3393,6 +3458,13 @@ def _finalization_validation_diagnostic(
     validation_result: str,
     repair_attempted: bool,
 ) -> dict[str, Any]:
+    _record_private_citation_stage({
+        "stage": "finalization",
+        "final_model": _private_citation_ids_snapshot(final_citation_ids),
+        "available_governed": _private_citation_ids_snapshot(available_citation_ids),
+        "validation_result": validation_result,
+        "repair_attempted": bool(repair_attempted),
+    })
     return {
         "final_model": _citation_ids_snapshot(final_citation_ids),
         "available_governed": _citation_ids_snapshot(available_citation_ids),
@@ -3948,7 +4020,19 @@ def diagnostic_comparability(
         for name in ("deployment", "code", "build"):
             result[f"{name}_binding_fingerprint"] = getattr(binding, f"{name}_binding_fingerprint")
         mcp = diagnostic.get("mcp", {}) if isinstance(diagnostic, Mapping) else {}
-        failed_projection = loop.get("answer_projection_result") not in (None, "passed")
+        finalizations = loop.get("finalization_validation", ())
+        recovered_projection = (
+            loop.get("answer_projection_result") == "repair_recovered"
+            and loop.get("provider_attempts_valid") is True and bool(attempts)
+            and attempts[-1].get("outcome") == "completed"
+            and attempts[-1].get("response_status") == "completed"
+            and bool(finalizations)
+            and finalizations[-1].get("validation_result") == "passed"
+            and finalizations[-1].get("repair_attempted") is True
+        )
+        failed_projection = (
+            loop.get("answer_projection_result") not in (None, "passed") and not recovered_projection
+        )
         failed_mcp = isinstance(mcp, Mapping) and (
             mcp.get("timeout") is True
             or any(status in {"error", "mcp_failed"} for status in mcp.get("status", ()))
@@ -4408,7 +4492,10 @@ class CodexResponsesConversationModel:
         evidence_required = requires_workspace_evidence(
             user_text,
             query_class=request_contract_binder._query_class,
-            prior_evidence_citeable=prior_evidence_citeable,
+            # Routing uses the server-retained binding, as the runtime's tool
+            # gate does. A lossy model presentation cannot turn chat into a
+            # mandatory lookup. Rendering still requires presented citations.
+            prior_evidence_citeable=bool(evidence_citation_ids(latest_evidence)),
             prior_evidence_present=latest_evidence is not None,
         )
         auto_tools_allowed = (
@@ -6020,7 +6107,12 @@ def _validated_formowl_tool_descriptor(
         for item in input_schema.get("anyOf", ())
     ):
         raise ContractValidationError("UAT mail evidence selector schema is invalid")
-    return dict(descriptor)
+    descriptor = deepcopy(dict(descriptor))
+    descriptor["description"] += " " + _RESOLVED_REFERENCE_GUIDANCE
+    terms_schema = descriptor["inputSchema"]["properties"].get("required_terms")
+    if isinstance(terms_schema, dict):
+        terms_schema["description"] = terms_schema.get("description", "") + " " + _RESOLVED_REFERENCE_GUIDANCE
+    return descriptor
 
 
 def _formowl_tool_descriptor_fingerprint(descriptor: Mapping[str, Any]) -> str:
@@ -7270,6 +7362,7 @@ def _source_fallback_exhausted(
         not scan["complete"] and "incomplete" in warnings
         and scan.get("stop_reason") in {
             "deadline", "observation_limit", "callback", "source_reference_unavailable",
+            "indexed_shortlist_miss",
         }
     ) or (
         scan["complete"] and scan.get("stop_reason") is None

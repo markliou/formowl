@@ -1,0 +1,32 @@
+{
+  "utc": "2026-10-13T09:13:37.036677+00:00",
+  "status": "immutable-history",
+  "scope": "five authorized pre-edit documents only",
+  "files": {
+    "SPEC.md": {
+      "sha256": "6258f4e48d8a0a715f3e8f65d0bce97233fc81a4de71559d9a58f06e74005717",
+      "bytes": 106062,
+      "lines": 2107
+    },
+    "README.md": {
+      "sha256": "f6165259fe8c01c6d11fc496739772fd711469c658f130f6a16da78d2f336972",
+      "bytes": 45841,
+      "lines": 916
+    },
+    "docs/implementation-task-breakdown.md": {
+      "sha256": "5cb6ce70d2ffa3a40c2ce10423e504e7a1a86ba22f8259d021f26e4127fbdf56",
+      "bytes": 20724,
+      "lines": 248
+    },
+    "docs/agent-goals/kg-research-agent.md": {
+      "sha256": "eb7d35093522c476e9f3e1730836fcb329d43346ac40b90603332218651e2b2f",
+      "bytes": 13694,
+      "lines": 180
+    },
+    "docs/agent-goals/handoff-log.md": {
+      "sha256": "161aed79299bf9cef0fdbd64d617099380512e8c6559d75596bd877a6fe48806",
+      "bytes": 23706,
+      "lines": 299
+    }
+  }
+}

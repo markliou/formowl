@@ -88,6 +88,84 @@ class DiagnosticDeploymentBindingTests(unittest.TestCase):
             deployment_binding=binding or self.verify(),
         )
 
+    def repaired_diagnostic(self):
+        return {**self.diagnostic(3), "answer_projection_result": "repair_recovered",
+                "finalization_validation": [owner._finalization_validation_diagnostic(
+                    final_citation_ids=("synthetic-citation",),
+                    available_citation_ids=("synthetic-citation",),
+                    validation_result="passed", repair_attempted=repaired,
+                ) for repaired in (False, True)]}
+
+    def test_validated_completed_repair_remains_comparable_through_safe_projection(self):
+        raw, binding = self.repaired_diagnostic(), self.verify()
+        compared = self.compare(raw, binding)
+        self.assertEqual(compared["missing_bindings"], [])
+        self.assertEqual(compared["missing_fields"], [])
+        self.assertEqual(compared["status"], "comparable")
+        service = runtime._diagnostic_with_mcp(
+            raw, [], source_binding_fingerprint=self.source, deployment_binding=binding,
+        )
+        for safe in (service, runtime._safe_provider_diagnostic(service), _safe_provider_diagnostic(service)):
+            self.assertEqual(safe["diagnostic_comparability"]["status"], "comparable")
+            self.assertEqual(safe["diagnostic_comparability"]["claim_scope"], "diagnostic_only")
+            self.assertEqual(safe["answer_projection_result"], "repair_recovered")
+        self.assertEqual(raw, self.repaired_diagnostic())
+
+    def test_repair_label_cannot_override_invalid_or_unsuccessful_terminal_evidence(self):
+        binding = self.verify()
+        for defect in ("missing_validation", "empty_validation", "malformed_last", "last_rejected",
+                       "truncated_validation", "over_cap_validation", "not_repaired", "last_timeout",
+                       "last_incomplete", "truncated_attempts", "missing_http", "earlier_error",
+                       "mcp_error", "mcp_timeout", "exhausted", "rejected", "unknown_projection"):
+            raw = self.repaired_diagnostic()
+            validations = raw["finalization_validation"]
+            attempts = raw["provider_attempts"]
+            if defect == "missing_validation":
+                raw.pop("finalization_validation")
+            elif defect == "empty_validation":
+                validations.clear()
+            elif defect == "malformed_last":
+                validations.append({"validation_result": "passed"})
+            elif defect == "last_rejected":
+                validations[-1]["validation_result"] = "citation_rejected"
+            elif defect == "truncated_validation":
+                validations.pop()
+            elif defect == "over_cap_validation":
+                validations.extend([validations[-1]] * 20)
+            elif defect == "not_repaired":
+                validations[-1]["repair_attempted"] = False
+            elif defect == "last_timeout":
+                attempts[-1]["outcome"] = "timeout"
+            elif defect == "last_incomplete":
+                attempts[-1]["response_status"] = "incomplete"
+            elif defect == "truncated_attempts":
+                attempts.pop()
+            elif defect == "missing_http":
+                attempts[-1].pop("http_status")
+            elif defect == "earlier_error":
+                attempts[0]["http_status"] = 503
+            elif defect == "mcp_error":
+                raw["mcp"] = {"status": ["mcp_failed"]}
+            elif defect == "mcp_timeout":
+                raw["mcp"] = {"timeout": True}
+            else:
+                raw["answer_projection_result"] = {
+                    "exhausted": "recovery_exhausted", "rejected": "public_safety_rejected",
+                    "unknown_projection": "unknown_repair",
+                }[defect]
+            with self.subTest(defect=defect):
+                self.assertEqual(self.compare(raw, binding)["status"], "incomparable")
+
+    def test_repaired_result_still_requires_trusted_matching_bindings(self):
+        raw = self.repaired_diagnostic()
+        for source, binding in ((self.source, None), (None, self.verify()),
+                                (sha256_json("other-source"), self.verify())):
+            result = owner.diagnostic_comparability(
+                raw, source_binding_fingerprint=source, deployment_binding=binding,
+            )
+            self.assertEqual(result["status"], "incomparable")
+            self.assertTrue(result["missing_bindings"])
+
     def test_verified_binding_survives_projection_not_serialization(self):
         before = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
         binding = self.verify()

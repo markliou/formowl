@@ -174,7 +174,7 @@ independent source bindings. The bounded integration target is exact
 UnitPrice/Quantity retrieval, DOCX attachment content and a standalone clause.
 It does not establish aggregation, currency math or latest-revision completeness.
 
-At the 2026-10-12 checkpoint, active serving manifest r12 (`b2f4fa44…`) runs on
+At the historical 2026-10-12 checkpoint, serving manifest r12 (`b2f4fa44…`) ran on
 live8089, full252 product files/drift0; candidate8096 was deployed/proved, then
 removed at19:35:25Z. Old r5 remains stopped/preserved for rollback.
 Canonical focused **117/117,174.049s,EXIT0**, zero
@@ -223,6 +223,83 @@ identity remains incomparable. Canonical authority-resume4 is
 valid=true/ready=false/errors=[]/EXIT0. Feature待測, step4 in-progress and all four
 blocked gates remain unchanged; no user-only blocker. Safe evidence and next
 action: [handoff](docs/agent-goals/handoff-log.md).
+
+For explicitly authorized temporary LAN UAT diagnostics, the existing launcher
+requires both opt-in flags together:
+
+```text
+--behavior-log /uat-private/behavior.jsonl --record-raw-uat-interactions
+```
+
+The operator must provide a persistent writable mount at the chosen log
+directory, restricted to the service/operator, outside browser-served content.
+The recorder enforces a regular `0600` JSONL file and rejects symlink files.
+Raw prompt, expanded query and available visible answer stay only in this private
+file; public diagnostics/stderr contain safe metadata and request correlation,
+never raw content, credentials, headers, cookies or backend storage paths.
+Schema v2 distinguishes repeated questions and records citation membership at
+raw/presented/final stages plus available validated plan, field support and scan
+stop metadata. Recording errors retain the business result and emit a safe
+failure event. Operator persistence must survive container replacement; the
+file is not an HTTP/MCP download or a general logging exemption.
+
+This logging slice is **diagnostic-only / 待測**. Its frozen package is
+[package-r1.json](.formowl/uat-observability-20261013/package-r1.json). Canonical36/36
+and observed candidate/live browser/log capture passed; three scoped reviewers
+Chandrasekhar/Gibbs/Harvey AGREE for logging activation only. Current8088 serves
+`formowl-uat-observability-live-20261013`, code4544e59a…/252files/drift0, same
+source/image/gpt-5.5 high/budgets; old r12 is stopped/preserved for rollback.
+Live ordinary chat MCP0 and unrelated lookup MCP1/provider2/citations2 passed;
+private file=HTTP=DOM, raw9/presented7/final2 IDs, matching provider/turn/MCP IDs,
+zero log failures and private-log URL404 checks. Repeated-prompt verification is
+candidate evidence, not a repeated live test. Candidate cleanup completed with
+logs retained and live healthy; unrelated containers untouched. Frozen fixture
+integration retains one PASS/one pre-service artifact-fingerprint ERROR, root
+unresolved; it is not all green. The COO-answer
+inconsistency is still unresolved, and all four methodology
+gates remain blocked. Contract and limitations: [SPEC](SPEC.md#731-source-neutral-evidence-double-check--待測)
+and [handoff](docs/agent-goals/handoff-log.md).
+
+The later authorized **UAT consistency repair is IN-PROGRESS / 待測**.
+[Baseline](.formowl/uat-stability-20261013/baseline-safe.json): ten actual browser
+turns/file=HTTP=DOM, five cited partial answers, one chat, two unexpected
+clarifications, one honest incomplete lookup and one provider error; eight
+comparable. Demonstrated causes include `country` matching the `count` substring
+and provider chat routing using lossy prior evidence while runtime retained
+citeability. Synthetic repros separately prove source-family/selector starvation,
+read-cap accounting loss and duplicate parent reads; the historical 500 ms cause
+is not established. Generic fixes preserve budgets, source guards and exact/all-fields contracts.
+
+[Stability package-r2](.formowl/uat-stability-20261013/package-r2.json), `1a502d97…`,
+has five code deltas/252 files and 37 test files. Pinned `edbcd163…` verification:
+focused146/146 PASS237.894s, integration3/3 PASS108.250s, lint/compile11 PASS.
+Two fixture path corrections passed2/2,17.935s; original r1 126PASS/2ERROR and
+tag-based34PASS/2ERROR remain preserved. The tag lacks `pypdf`; the pinned image
+includes it. No PDF product regression or parser/skip patch was established.
+
+The server now binds a unique validated cited protected alphanumeric identifier
+for a followup; explicit normalized current IDs win, original current/source-turn
+hashes remain distinct, and missing/ambiguous/reset/scope-invalid references stop
+before provider/MCP. It does not infer arbitrary history or general numeric/person
+coreference; [SPEC §7.1](SPEC.md#71-core-query-agent-and-query-classes) defines the boundary.
+Actual r2 manufacturer identifier/citation is correct but remains incomparable
+solely due to `repair_recovered`; B's frozen comparator has local15/15 PASS0.840s/Ruff.
+The Git progress checkpoint selects verified r2 plus that comparator only.
+Native-table `source_table_shortlist` stop work is pending: r2 mail/document
+`indexed_shortlist_miss` handling alone still allowed an empty table+mail query
+to continue into a115s SSE timeout. Exact/error exclusions and honest incomplete
+outcomes remain required; no upstream root-fix claim. Master reports four r2
+browser lifecycle turns/reload/reset PASS; missing reference clarifies with MCP0.
+
+Native-stop code/tests remain stopped/unstaged WIP:32tests/3ERROR,28.468s (two native
+subcases plus shared old case; invalid negative `table_query` fixture). No inferred
+pass count; Ruff not run. Resume narrows these errors and remaining stop behavior.
+Live8088 STILL serves observability `4544e59a…`; no r3 integrated/final-review/deploy
+claim. Artifact/source-hash anomalies remain OPEN. Four methodology gates
+are blocked, step4 in-progress, metadata unverified; no whole-UAT/standard promotion.
+Later authorized Master/B work remains open. [Current handoff](docs/agent-goals/handoff-log.md)
+and [exact pre-edit docs](docs/archive/2026-10-13/uat-stability-r2-pre-sync/SNAPSHOT.md)
+preserve the evidence and prior failures.
 
 Current adapter limits are explicit in [SPEC §14](SPEC.md#14-current-implementation-and-methodology-status):
 

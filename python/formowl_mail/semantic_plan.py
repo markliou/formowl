@@ -16,6 +16,7 @@ from formowl_contract import (
     validate_permission_scope,
 )
 from formowl_graph import EffectiveGraphView
+from formowl_core.tokenization import _protected_identifier_spans
 
 from ._guards import assert_public_payload_safe, safe_public_string
 
@@ -97,6 +98,14 @@ _CJK_EXACT_OUTPUT_GRAMMAR_V1 = (
     ("列出", "列舉", "調閱", "整理"),
     ("出來",),
     ("全部", "都", "所有", "每"),
+)
+# A separate citation-presentation clause does not quantify the source records
+# requested by the preceding lookup. Keep record inventories/counts intact.
+_CITATION_PRESENTATION_SUFFIX = re.compile(
+    r"(?:[,;，；。]|\band\b)\s*(?:please\s+)?"
+    r"(?:list|show|include|provide|列出|附上|提供)\s*"
+    r"(?:(?:all|the|所有|全部)\s*)?(?:source\s+)?"
+    r"(?:citations?|references?|來源引用|引用來源|來源出處|來源連結)\s*[.!。！]?$"
 )
 _GREETING_MARKERS = ("hello", "hi", "hey", "嗨", "你好", "您好")
 _PRIOR_PRESENTATION_MARKERS = (
@@ -272,6 +281,29 @@ _BUSINESS_CURRENT_STATE_MARKERS = (
 )
 
 
+def protected_reference_identifiers(text: str) -> tuple[str, ...]:
+    """Reuse the frozen identifier policy; prose, dates and amounts are not anchors."""
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return tuple(sorted({span.exact_token for span in _protected_identifier_spans(normalized)
+                         if span.identifier_kind == "business_identifier"}))
+
+
+def is_identifier_reference(text: str) -> bool:
+    """Recognize a reference data request, not a bare pronoun or product mention."""
+    text = _normalize_routing_text(text)
+    if not (any(
+        re.search(rf"\b{re.escape(term)}\b", text) if term.isascii() else term in text
+        for term in _EVIDENCE_QUERY_ACTION_MARKERS
+    ) or re.search(r"\b(?:what|which|who|where|when)\b|什麼|什么|誰|谁|哪|(?:呢|嗎|吗)[?？]?$", text)):
+        return False
+    return bool(re.search(
+        r"\b(?:this|that|same|previous)\s+(?:part|item|product|component|record|identifier|order)\b"
+        r"|\b(?:its|their)\s+\w+|(?:這|这|那|該|该|此|上述|前述)(?:個|个|筆|笔|項|项)?"
+        r"(?:料號|料号|零件|產品|产品|品項|品项|紀錄|记录|訂單|订单)|(?:它|其)的",
+        text, re.IGNORECASE,
+    ))
+
+
 def requires_workspace_evidence(
     query_text: str,
     *,
@@ -292,13 +324,9 @@ def requires_workspace_evidence(
             marker in normalized for marker in _PRIOR_PRESENTATION_MARKERS
         ):
             return False
-        if not prior_evidence_citeable:
-            # Keep the existing unresolved-evidence boundary: a short follow-up
-            # after a non-citeable workspace result may still need a governed
-            # lookup, while ordinary turns with no prior result remain chat.
-            return True
-    # An explicit source/task request wins over conversational wording.
-    return _has_explicit_workspace_evidence_marker(
+    # Prior misses do not authorize tools for ordinary chat. Current data
+    # requests still require evidence; unresolved references are bound/clarified.
+    return is_identifier_reference(normalized) or _has_explicit_workspace_evidence_marker(
         normalized
     ) or _has_business_source_signal(normalized)
 
@@ -827,8 +855,12 @@ def deterministic_query_class(query_text: str) -> str:
     """Classify a query without model calls, hidden state, or nondeterministic repair."""
 
     _require_nonempty_public_string(query_text, "query_text")
-    normalized = query_text.casefold()
-    if any(term in normalized for term in _EXACT_TERMS):
+    normalized = _CITATION_PRESENTATION_SUFFIX.sub("", query_text.casefold())
+    if any(
+        re.search(r"(?<![a-z0-9_])" + re.escape(term) + r"(?![a-z0-9_])", normalized)
+        if term.isascii() else term in normalized
+        for term in _EXACT_TERMS
+    ):
         return "exact_set_or_inventory"
     output_verbs, _completion_markers, inventory_markers = _CJK_EXACT_OUTPUT_GRAMMAR_V1
     if any(term in normalized for term in output_verbs) and any(

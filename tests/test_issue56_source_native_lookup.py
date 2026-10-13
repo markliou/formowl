@@ -19,6 +19,7 @@ from starlette.testclient import TestClient
 from formowl_contract import ContractValidationError, sha256_json, stable_resource_contract_id
 from formowl_core import load_issue56_target_mail_tokenizer_profile
 from formowl_ingestion.extractors.mail import fixture as mail_fixture
+from formowl_ingestion.storage import ObservationStore
 from formowl_mail.import_workflow import CompletedIngestionJobAuthority
 from formowl_mail.issue56_sealed_source import (
     SourceNativeLexicalLookup, load_issue56_ingestion_revision,
@@ -578,10 +579,17 @@ class SourceNativeLexicalBuilderTests(unittest.TestCase):
             fixture = self._fixture(root)
             reference = fixture.snapshot["observation_references"][-1]
             store = Path(fixture.snapshot["job_store_bindings"][reference[0]]["store_directory"])
-            path = store / "ingestion" / "observations" / f"{reference[1]}.json"
+            observations = ObservationStore(store, create_directory=False)
+            path = observations._store._record_path(reference[1])
+            self.assertTrue(path.is_file())
+            record_paths = set(observations._store.base_dir.rglob("*.json"))
+            self.assertEqual(len(record_paths), len({item.stem for item in record_paths}))
+            self.assertEqual(list(observations._store.base_dir.rglob(f"{reference[1]}.json")), [path])
             raw = json.loads(path.read_bytes())
             raw["text"] = "GENERIC-TAMPERED-002"
             path.write_text(json.dumps(raw))
+            self.assertEqual(set(observations._store.base_dir.rglob("*.json")), record_paths)
+            self.assertEqual(observations.get(reference[1]).text, raw["text"])
             with self.assertRaisesRegex(ContractValidationError, "indexed Observation binding is invalid"):
                 self._build(fixture, root / "lookup")
             self.assertFalse((root / "lookup").exists())
@@ -922,8 +930,15 @@ class SourceNativePrefixSeedTests(unittest.TestCase):
             # inventory identity to the synthetic parent, as real mail does.
             parent = replace(parent, payload={**parent.payload, "source_inventory_item_id": "synthetic-native-table"})
             store = Path(delta.snapshot["job_store_bindings"][0]["store_directory"])
-            parent_path = store / "ingestion" / "observations" / (parent.observation_id + ".json")
+            observations = ObservationStore(store, create_directory=False)
+            parent_path = observations._store._record_path(parent.observation_id)
+            self.assertTrue(parent_path.is_file())
+            record_paths = set(observations._store.base_dir.rglob("*.json"))
+            self.assertEqual(len(record_paths), len({item.stem for item in record_paths}))
+            self.assertEqual(list(observations._store.base_dir.rglob(f"{parent.observation_id}.json")), [parent_path])
             parent_path.write_text(json.dumps(parent.to_dict()))
+            self.assertEqual(set(observations._store.base_dir.rglob("*.json")), record_paths)
+            self.assertEqual(observations.get(parent.observation_id).to_dict(), parent.to_dict())
             for ref in delta.snapshot["observation_references"]:
                 if ref[1] == parent.observation_id:
                     ref[2] = sha256_json(parent.to_dict())
@@ -949,8 +964,12 @@ class SourceNativePrefixSeedTests(unittest.TestCase):
             changed = replace(child, payload={**child.payload, "lineage": {
                 **child.payload["lineage"], "child_content_hash": "sha256:" + "0" * 64,
             }})
-            child_path = store / "ingestion" / "observations" / (child.observation_id + ".json")
+            child_path = observations._store._record_path(child.observation_id)
+            self.assertTrue(child_path.is_file())
+            self.assertEqual(list(observations._store.base_dir.rglob(f"{child.observation_id}.json")), [child_path])
             child_path.write_text(json.dumps(changed.to_dict()))
+            self.assertEqual(set(observations._store.base_dir.rglob("*.json")), record_paths)
+            self.assertEqual(observations.get(child.observation_id).to_dict(), changed.to_dict())
             for ref in old.snapshot["observation_references"]:
                 if ref[1] == child.observation_id:
                     ref[2] = sha256_json(changed.to_dict())

@@ -536,6 +536,18 @@ arguments. If a reference remains missing or ambiguous, it asks for
 clarification or fails closed; an MCP tool may not guess what an earlier turn
 meant.
 
+The bounded protected-business-identifier implementation may retain one unique
+server-owned identifier from an actually dispatched validated request with
+citations, admitted only after a cited final answer or partial result. A reference
+request must bind that same identifier in its tool query and conjunctive terms.
+NFKC/casefold normalization applies before identifier extraction; an explicit
+current identifier wins. The original current-prompt hash remains unchanged and
+separate from the prior source-turn hash. Missing, ambiguous, reset or invalid-scope
+references clarify/fail closed before provider or MCP execution; uncited/failed
+turns cannot establish an anchor. Retention cannot widen source permissions or
+parse arbitrary history. This narrow alphanumeric-ID capability does not establish
+general numeric, person or natural-language coreference support.
+
 The server owns both conversation-state and transcript selection. Client
 payloads may carry the current prompt, but cannot inject, replace, or extend
 trusted prior turns. A failed turn may remain visible as a sanitized transcript
@@ -839,7 +851,7 @@ provenance-linked groups stay whole and exact inventory is all-or-none. This
 does not cap the entire provider request/context size. Provider diagnostics must
 carry the authoritative count (maximum `6`, derived from existing execution
 budgets) and all safe attempt/timing records within that budget. Frozen r11's
-latest-`3` truncation contradicts this contract; serving r12 includes the frozen
+latest-`3` truncation contradicts this contract; the prior r12 included the frozen
 retention repair with canonical focused117/117 verified as described below.
 All three retention-only scoped reviews agree. No timeout, execution
 budget or retry allowance is increased.
@@ -1010,7 +1022,9 @@ For mail and eligible graph `evidence_lookup` recovery, the bounded
 at most `80` characters. The request binder accepts only terms that occur as
 contiguous spans in the original request under NFKC/casefold normalization,
 then freezes the first valid set for that turn; retries cannot remove or
-replace it. The same AND predicate applies to initial cited observations and
+replace it. The sole retained-reference exception is the unique server-validated
+cited protected identifier above, with explicit current/source-turn provenance;
+all other terms still require current-request grounding. The same AND predicate applies to initial cited observations and
 the same-scope source recheck. These terms constrain relevance, not
 authorization; no name list, alias, or smoke-specific rule is permitted.
 This does not require every graph relation/summary plan to use same-item AND
@@ -1068,6 +1082,10 @@ not full-natural-language-query subset matching.
   Attempted, bound evidence-lookup recovery with zero citations and explicit
   terminal/incomplete scan metadata stops safely without redundant provider
   continuation; incomplete stop requests clarification, not an absence claim.
+  Mail/document `indexed_shortlist_miss` and native-table `source_table_shortlist`
+  must retain their distinct stop metadata through the same validated terminal
+  decision. The native-table integration remains pending in the checkpoint below;
+  an enum alone cannot bypass attempted/binding/scope/exact/error guards.
   This separate provider plan repair must not bypass the automatic all-fields
   source-recheck rule. For graph results, outer
   `unsupported/planner_stopped_partial` qualifies
@@ -1105,7 +1123,7 @@ incomparable. This three-record truncation is not the desired contract. B's
 frozen repair derives the diagnostic-retention constant from the unchanged
 six-request cap; all other product AST is unchanged. Canonical local19/19,
 zero failures/errors/skips,0.818s/Ruff verifies four/six-attempt positives and
-missing-history negatives. Serving r12 includes this repair; final canonical focused
+missing-history negatives. The prior r12 included this repair; final canonical focused
 117/117 passed,174.049s,EXIT0, zero failures/errors/skips, exact252 code/34 tests
 verified pre/post and rechecked. Hypatia/Archimedes/Lagrange scoped AGREE3/3. It changes
 no execution budget/model/deadline or retry allowance, and genuinely missing/
@@ -1117,12 +1135,99 @@ proof in §14.
 If any required binding or field is missing, mismatched, or truncated (including
 provider-attempt history), classify the artifact as
 `diagnostic_only/incomparable`; it must not support a loaded-code mismatch,
-no-data, provider-success, root-cause, or UAT-acceptance claim. Do not output
-raw queries, source payloads, headers, or secrets.
+no-data, provider-success, root-cause, or UAT-acceptance claim. Public payloads
+and stderr must not output raw queries, source payloads, headers, or secrets.
 
 This **ANY required diagnostic identity metadata missing → incomparable**
 predicate is separate from **ALL requested business fields missing → source
 recheck**; the business-field rule does not relax metadata safety.
+
+`repair_recovered` may be comparable only with complete validated attempt history,
+latest completed outcome and provider response, and latest sanitized passed
+finalization with `repair_attempted=true`. All deployment/code/build/source,
+HTTP and MCP error/timeout checks remain mandatory. Missing, malformed, truncated,
+over-cap or latest-failed records remain incomparable. This comparator has local
+15/15 verification; frozen/browser acceptance remains pending.
+
+**Opt-in private UAT interaction recorder — diagnostic-only / 待測 (2026-10-13)**
+
+Explicitly authorized temporary LAN UAT may pair `--behavior-log` with
+`--record-raw-uat-interactions`. Only that private operator file may retain the
+raw prompt, expanded tool query and available visible answer. The file is JSONL,
+mode `0600`, on an operator-owned persistent writable mount; it is never served
+through the browser, MCP, public diagnostics or stderr. Credentials, headers,
+cookies, raw storage paths and hidden-source internals remain excluded; rejected
+unsafe records produce a safe recording-failure event rather than a raw record.
+
+Schema v2 uses a unique per-turn `request_id` even for repeated prompts in one
+session, correlated with safe provider/turn terminal and MCP traces. It retains
+the service-visible status/answer/clarification/citations, actual validated
+request contract and query when available, verified field-support hashes and
+existing source-recheck/scan-stop metadata. Missing plans or coverage are not
+inferred. Runtime exceptions retain a failure fingerprint and available result;
+the later HTTP error envelope is not reconstructed by this recorder.
+Private raw-governed, compacted-presented, final-model and final-answer citation
+sets preserve hash IDs and hash non-hash identifiers, with count/fingerprint,
+encoding and explicit truncation above 100 IDs per set. Stage capture is bounded
+by the existing three MCP calls and two finalization validation records.
+Recording failure must preserve the business result/original exception and emit
+only a safe failure category plus request ID. Retrieval, execution budgets,
+models and public diagnostic schemas remain unchanged.
+
+The frozen observability package passed canonical36/36, Ruff/compile4 and observed
+candidate/live browser capture. Three scoped reviewers (Chandrasekhar/Gibbs/Harvey)
+agreed to logging activation only. Live8088 now serves `4544e59a…` in
+`formowl-uat-observability-live-20261013` (252 files/drift0, same source/image/model/
+budgets): private file=HTTP=DOM answer, raw9/presented7/final2 IDs, provider/turn/MCP
+correlation, zero recording failures and two private-log URL404 checks.
+Repeated-prompt distinct IDs were verified in the earlier candidate, not rerun live.
+The old r12 container is stopped/preserved for rollback; candidate cleanup completed
+with logs retained. Frozen integration still has one PASS/one pre-service ERROR
+in candidate-artifact fingerprint validation; that failure is not
+erased by candidate proof or an earlier working-tree fixture pass. The underlying
+COO-answer inconsistency is unresolved. Four methodology gates, source guards
+and promotion rules remain unchanged; this exception grants no general raw
+logging or completion claim. Dated evidence: [handoff](docs/agent-goals/handoff-log.md).
+
+**UAT consistency assessment — IN-PROGRESS / 待測 (2026-10-13)**
+
+The newly authorized bounded repair follows the closed logging slice.
+[Baseline](.formowl/uat-stability-20261013/baseline-safe.json) records ten actual
+browser turns with file=HTTP=DOM: five cited partial answers, one ordinary chat,
+two unexpected clarifications, one honest incomplete unknown lookup and one
+provider error; eight turns are comparable. The rephrase exposed `count`
+substring matching inside `country`; ordinary-chat routing consulted a lossy
+prior-evidence envelope while runtime retained citeability. Controlled synthetic
+repros separately demonstrated source-family/selector starvation, read-cap
+accounting loss and duplicate parent hydration. These do not prove the
+historical 500 ms subcause. Generic repairs retain exact/native execution,
+ALL-requested-fields eligibility, source/hash/lineage/permission guards and budgets.
+
+[Frozen stability r2](.formowl/uat-stability-20261013/package-r2.json), code
+`1a502d97…`, contains five code deltas/252 files and 37 test files. Master reports
+pinned `edbcd163…` focused146/146 PASS,237.894s; integration3/3 PASS,108.250s;
+lint/compile11 PASS. The two sharded-record fixture corrections passed2/2,17.935s;
+original r1 focused128/126 PASS/2 ERRORs,233.369s remains preserved. Earlier
+tag-based36/34 PASS/2 ERRORs also remains: corrected graph/mail coverage-key bug
+and missing `pypdf` in tag `f53b8dd7…`; pinned image has it. No PDF product fix.
+
+Actual r2 manufacturer followup now binds the correct identifier and citation,
+but that record remains incomparable solely due to `repair_recovered`. B's
+comparator repair passed15/15,0.840s/Ruff locally and is frozen for the Git progress
+checkpoint alongside verified r2. R2's mail/document `indexed_shortlist_miss` fix was insufficient: actual
+empty table+mail retrieval continued into a115s SSE timeout because the native
+`source_table_shortlist` stop was omitted. No upstream root-fix claim follows.
+Master reports four r2 browser lifecycle turns/reload/reset PASS and missing
+reference clarification with MCP0. These observations do not establish all-UAT
+acceptance. Native-table stop code/tests remain stopped, unstaged WIP:32tests/
+3ERROR,28.468s (two native subcases plus a shared old case; invalid negative
+`table_query` fixture). No derived pass count; Ruff not run. Resume narrows those
+errors and remaining stop behavior. Live8088 STILL serves observability `4544e59a…`;
+no r3 integrated, final-review or deployment claim. Prior artifact/source-hash anomalies
+remain OPEN; four methodology gates blocked, step4 in-progress, metadata unverified.
+This Git progress checkpoint preserves later authorized Master/B work. Exact evidence and next action:
+[handoff](docs/agent-goals/handoff-log.md); exact pre-edit docs/hashes:
+[immutable checkpoint](docs/archive/2026-10-13/uat-stability-r2-pre-sync/SNAPSHOT.md).
 
 **Promotion gate: 待測 → 標準功能**
 
@@ -1839,7 +1944,7 @@ Current tested compatibility paths do not prove source-complete heterogeneous
 integration, automatic canonical commits, universal parser coverage,
 enterprise-scale readiness, or KG + ontology superiority.
 
-At the 2026-10-12 checkpoint, r12 is the active serving manifest on live8089,
+At the historical 2026-10-12 checkpoint, r12 was the serving manifest on live8089,
 all252 product files/zero drift. Candidate8096 was deployed/proved, then removed
 at19:35:25Z; old r5 remains stopped/preserved for rollback. Its historical128-parent source-window000-r3
 had4,996,943 Observations/1,044,332 references/399,548 mail helpers/
@@ -1853,7 +1958,7 @@ Hypatia/Archimedes/Lagrange scoped **AGREE3/3**, not whole-suite acceptance.
 Fixture-r11 EXIT0 verifies synthetic native PDF/independent-document late cue,
 native citation and chat/lifecycle. All six responses remain incomparable:
 deployment/code/build absent; four-attempt business turns retained only three.
-Serving r12 (`b2f4fa44…`) adds retention from unchanged cap6, exact252+34:
+The prior r12 (`b2f4fa44…`) added retention from unchanged cap6, exact252+34:
 focused **117/117,174.049s,EXIT0**, zero failures/errors/skips, verified pre/post
 and current inventories, three retention-only scoped agreements. Freeze-helper
 TypeError/empty unpublished tree remains preserved; no product/test bytes were
