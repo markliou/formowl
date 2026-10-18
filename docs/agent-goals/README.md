@@ -31,7 +31,7 @@ active goal and must not be selected for restart.
 
 ## Issue #56 Current Operating Mode — user override
 
-- The latest 2026-10-06 authorization permits up to two ordinary
+- The latest 2026-10-06 worker authorization permits up to two ordinary
   worker slots requesting `gpt-6.1-sol`/`reasoning_effort=high`, superseding earlier
   sol/xhigh and luna/max settings. This is the requested tier, not a metadata
   gate: each worker records its actual configuration as verified, unverified,
@@ -64,8 +64,13 @@ active goal and must not be selected for restart.
   raw paths/content, prompts or secrets. Missing/mismatched metadata is
   diagnostic `unverified`, not a blocker. Never label an unobserved fallback as
   sol/high.
-- The UAT provider runtime remains pinned to `gpt-5.5` with
-  `reasoning_effort=high`.
+- The 2026-10-15 user authorization requests UAT `gpt-6-luna` with
+  `reasoning_effort=high`. Runtime/provider support, observed model binding, and
+  browser acceptance remain pending; this is not rollout evidence. Worker
+  requests remain sol/high, and dated earlier model evidence is preserved.
+  Master owns the authorized downtime repair and time-based recovery plan.
+  Missing July/newer mail is an accepted coverage limitation, not a user-export
+  blocker; source integrity and incomplete-answer disclosures remain required.
 - The independent release gate remains three effective read-only Codex/GPT
   reviewers across engineering, governance/safety, and research methodology.
 - `reviewer-gate.md` retains the independent acceptance and safety requirements;

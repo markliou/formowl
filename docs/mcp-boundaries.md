@@ -173,6 +173,18 @@ index, graph-engine, model-server, parser, or worker controls.
 
 ### 6.1 Plan validation
 
+For the pending ontology-aware product contract (SPEC §3.1.1/§7.2.1/§15.6),
+bind the semantic-annotation ledger, coverage fingerprint, reviewed overlay and
+actual annotation IDs used to select source evidence. Revalidate original
+Observations/native locators before answering; tags, regex hits, or loading an
+ontology alone do not prove semantic use. These are backend plan/trace bindings,
+not public caller-controlled parser/model/storage arguments or implemented flags.
+Direct baseline retrieval remains available with honest coverage limits; a
+missing annotation never proves source absence, nor independently triggers a
+recheck outside §7.3.1 ALL-fields eligibility. Tool descriptions must explain
+business-semantic fields, evidence/date roles and incomplete outcomes, not
+promise ontology support absent a configured, verified backend.
+
 A planner model may propose a plan. The backend validates:
 
 ```text

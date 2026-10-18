@@ -1,0 +1,13 @@
+{
+  "utc": "2026-10-17T11:59:11.496728+00:00",
+  "files": {
+    "root/SPEC.md": "sha256:db2a7310e8f9cb7b93778139270efc52382edcdbddf7b1b5ae2587f0a8baa08b",
+    "root/docs/implementation-task-breakdown.md": "sha256:b2b293270c732eef5e91128a7db6a9fa3b5451979826fa74dac2dc7f5d6187ad",
+    "root/docs/agent-goals/kg-research-agent.md": "sha256:8447a8716ea5efab6de06a678657e6a5b22267222e670d3cab0ff8eb56d912d9",
+    "root/docs/agent-goals/handoff-log.md": "sha256:337bbb3149297e2742fa2b4bdf7ec10fc381134e07f929a4f7dd5f3c3a2fe8da",
+    "worktree/SPEC.md": "sha256:1cf7842c3b0962fa4f396340cc0d65c6b2d4b0d07fa3295578e54c691af59d0b",
+    "worktree/docs/implementation-task-breakdown.md": "sha256:6abfdfd93822186f7446efe3f7dc5057eb9b1921bf431924b545fcef596ed254",
+    "worktree/docs/agent-goals/kg-research-agent.md": "sha256:ff39cd1f4414f77c1505a7e3760671619cf3dd2688e3865b2cc0955e35c62995",
+    "worktree/docs/agent-goals/handoff-log.md": "sha256:5a8ce4e8f86885063d43d9727557b37c387b3377156b59c412840336f43b50f3"
+  }
+}

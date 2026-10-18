@@ -11,7 +11,7 @@ user explicitly reassigns it.
 
 ## Current Execution Topology
 
-The latest 2026-10-06 authorization permits up to two ordinary implementation
+The latest 2026-10-06 worker authorization permits up to two ordinary implementation
 worker slots requesting `gpt-6.1-sol` with `reasoning_effort=high`.
 Stale current worker-specific assignments, earlier sol/xhigh and luna/max
 tiers, and any “no recreation” work order are not current authority.
@@ -20,8 +20,14 @@ No descendants, duplication, or additional worker is authorized. The two-worker
 cap remains in force, but a missing or unavailable handle is not an availability
 gate for bounded work. No silent model, effort, or worker identity relabelling
 is authorized.
-The UAT provider remains `gpt-5.5`/`high`; the tier alone grants no provider/build/index
-actions. Explicit user assignments govern provider, Docker, source, and UAT actions.
+The 2026-10-15 UAT authorization requests `gpt-6-luna` with
+`reasoning_effort=high`; runtime/provider support, observed identity, and browser
+acceptance remain pending. This is not rollout evidence or a change to the
+sol/high worker tier. Dated earlier model evidence retains its original identity.
+Explicit user assignments govern provider, Docker, source, and UAT actions.
+Master owns the authorized downtime repair and time-based recovery plan; workers
+retain their bounded assignments. Missing July/newer mail is an accepted coverage
+limitation, not a user-export blocker or a waiver of source integrity.
 The prior A/B startup and recovery sequence is a closed-slice status record, not a
 standing prohibition on later explicitly authorized operations.
 Model unavailability or missing/mismatched persisted metadata is not a work
@@ -106,6 +112,7 @@ Primary method:
 ```text
 heterogeneous sources
   -> Observations
+  -> offline bounded LLM semantic reading + per-unit outcome ledger
   -> candidate mentions/entities/claims/relations/frames
   -> reviewed canonical KG + scoped ontology
   -> permission-filtered EffectiveGraphView
@@ -133,6 +140,17 @@ The KG research track owns:
 - strong RAG baselines, ablations, datasets, metrics, anti-fitting controls,
   error analysis, and reproducibility artifacts;
 - graph-derived answer/wiki/report semantics and provenance.
+
+The 2026-10-18 product contract in SPEC §3.1.1/§6.2.1/§15.6 is **待實作／待測**.
+Full ontology-aware acceptance requires reading the declared source scope,
+including all authorized attachments, source-linked typed/time/update assertions,
+reviewed overlays, actual ontology-guided source selection and original-evidence
+validation. Zero candidates is a processed outcome, not a skipped document.
+The direct evidence baseline/fallback may operate without annotations and return
+supported facts with limits; it cannot prove ontology completion. Preserve
+§7.3.1 ALL-fields eligibility, fixed budgets and ordinary chat. Product acceptance
+requires actual webpage answers on mail and an independent non-mail case;
+frozen-method authority and independent review remain separate and unchanged.
 
 Non-negotiable boundaries:
 

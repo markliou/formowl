@@ -14,7 +14,7 @@ Reviewer composition:
 
 ## Current Issue #56 Worker/UAT Model — user override
 
-- The latest 2026-10-06 authorization permits up to two ordinary `gpt-6.1-sol`
+- The latest 2026-10-06 worker authorization permits up to two ordinary `gpt-6.1-sol`
   worker slots requesting `reasoning_effort=high`, superseding earlier worker tiers.
   This is the requested tier; current-turn metadata is recorded when available
   but is not a gate. Safe B recovery proof and Master-inspected A proof are in the handoff.
@@ -47,8 +47,14 @@ Reviewer composition:
   allowed even when worker metadata is unavailable. This changes neither the independent
   three-reviewer acceptance gate nor the safety, provenance, permission, and
   incomplete-is-not-absence rules.
-- The UAT provider runtime remains pinned to `gpt-5.5` with
-  `reasoning_effort=high`.
+- The 2026-10-15 requested UAT model is `gpt-6-luna` with
+  `reasoning_effort=high`. Runtime/provider support, observed model binding, and
+  browser acceptance remain pending. Review must distinguish the requested
+  policy from actual runtime evidence; a documentation change proves no rollout.
+  Worker requests remain sol/high. Preserve dated earlier model evidence with
+  its original identity. Missing July/newer mail is an accepted coverage
+  limitation, not a user-export blocker; source integrity and the acceptance
+  gates still apply.
 - The independent release gate remains three effective read-only Codex/GPT
   reviewers across engineering, governance/safety, and research methodology.
 - `agy` is not available or authorized for the current run; do not invoke,
@@ -74,6 +80,24 @@ not old citation-count or any-one-field triggers:
   regression, UAT and independent review remain 待測, four gates blocked.
 
 ## Issue #56 Diagnostic Comparability/Observability — 待測
+
+### Ontology-aware product acceptance clarification — 2026-10-18 / 待實作／待測
+
+Apply SPEC §3.1.1/§6.2.1/§7.2.1/§15.6: distinguish the direct evidence baseline
+from actual LLM semantic ingestion and annotation-guided source selection.
+Check processed/zero-candidate versus unread/failed/truncated units, including
+attachments; validate target/item/date roles and evidence-backed supersession.
+Ledger counts, parser/index completion and MCP calls cannot establish ontology
+correctness. Require actual webpage questions and visible answers/citations
+matching independently read originals on mail/attachments and a non-mail
+project/document case, with ordinary chat preserved. Internal traces must show
+annotation use but cannot rescue an incorrect visible answer. Safe abstention on
+an answerable positive case fails. Missing coverage allows honest supported
+answers; it never proves absence or bypasses §7.3.1 ALL-fields recheck eligibility.
+This adds no reviewer slots, machine-authority gate, completed checkbox or frozen
+experiment change; historical limited passes retain their original scope.
+
+### Existing diagnostic comparability contract
 
 - **Positive check:** bind the loaded deployment to frozen code/build/source
   fingerprints and retain top-level and per-attempt canonical request-shape,

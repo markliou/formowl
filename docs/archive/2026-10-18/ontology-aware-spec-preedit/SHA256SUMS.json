@@ -1,0 +1,54 @@
+{
+  "utc": "2026-10-18T03:04:44.548503+00:00",
+  "archive_status": "immutable pre-edit active-doc snapshots; not current instructions",
+  "files": {
+    "AGENTS.md": {
+      "sha256": "sha256:d09d68dce44031640d7cb8fc91ec9ca707cdb2f2413f33437b7ccc31ccc1f879",
+      "bytes": 16634
+    },
+    "SPEC.md": {
+      "sha256": "sha256:45a49c176ebecabc60a6d4fce80593f440a8da69b1bebf21e30f069f99b5f825",
+      "bytes": 161414
+    },
+    "RESOURCE_EXTRACTION_SPEC.md": {
+      "sha256": "sha256:a6748a33ff38b93460f30cd70e542dd272d0543bfcc69436d63dfd9793f40910",
+      "bytes": 39629
+    },
+    "README.md": {
+      "sha256": "sha256:3c77e494ae12dc9215bec5856db6746ca3e0249033b7fff5202b97932c9d6464",
+      "bytes": 58688
+    },
+    "docs/architecture.md": {
+      "sha256": "sha256:217679656072bd20cac826d8e0fe03f86a526bd047a8b4e1580bd95137212401",
+      "bytes": 20327
+    },
+    "docs/workflows.md": {
+      "sha256": "sha256:2845fa712b204979c82707d50ffec8b568807868d13019bc81a04c762a6309d4",
+      "bytes": 22807
+    },
+    "docs/provenance.md": {
+      "sha256": "sha256:fe1ef882bafd8a753b380415f2317d5fdbed7606ccb565410e2dd23483343d4b",
+      "bytes": 14245
+    },
+    "docs/kg-research-method.md": {
+      "sha256": "sha256:c141693791511bc06dc8126a471a0c458a0001c01a4e4b9ff2cbb3cb3e765d97",
+      "bytes": 16118
+    },
+    "docs/kg-ontology-v2-rd-boundary.md": {
+      "sha256": "sha256:0117289eb75c11483080431605c18b3556f75414a27636cd49313dea78522f20",
+      "bytes": 12246
+    },
+    "docs/kg-ontology-v2-runtime-evaluation-plan.md": {
+      "sha256": "sha256:27d3a295ceeb0e839356991cebe216be7cacf1e6a6a643c058c5e6ec85b007fa",
+      "bytes": 15699
+    },
+    "docs/agent-goals/kg-research-agent.md": {
+      "sha256": "sha256:b3ba0105d5e8aa150ebbdbe49c206f1e589019791799a08e36d58703d34f6386",
+      "bytes": 12149
+    },
+    "docs/agent-goals/handoff-log.md": {
+      "sha256": "sha256:3343d190d9068796a42b4a3ca73cd69b9c49f574de238b110b3727b080b9488f",
+      "bytes": 13711
+    }
+  }
+}

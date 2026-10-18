@@ -1,0 +1,8 @@
+{
+  "purpose": "Lossless preimages before user-authorized GitHub issue reconciliation bookkeeping; historical, not current instructions",
+  "files": {
+    "docs/implementation-task-breakdown.md": "b372303e38c23cca210f3a60c5e1c6fdf873324de28dced60c6f2913dc1c9952",
+    "docs/agent-goals/kg-research-agent.md": "a2f1b08064e1b55e0c39c3054a809803708d93a1b3f3702d1b8fca06a58b39c6",
+    "docs/agent-goals/handoff-log.md": "f6e156b97f43d792b52029da9242371945fd7e522a72fb2d54417ab579e043d7"
+  }
+}

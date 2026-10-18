@@ -1,0 +1,46 @@
+{
+  "status": "Immutable historical preimages, not current instructions",
+  "publication_base": "8dc9fc5ad09f8e1329182672faf87215cf964890",
+  "files": {
+    "remote-main/docs/implementation-task-breakdown.md": {
+      "sha256": "4b1cbb8322605450d41e0cb737be1ef704bc638862da41eed066baec78b5978f",
+      "bytes": 28793
+    },
+    "remote-main/docs/agent-goals/kg-research-agent.md": {
+      "sha256": "829558ed31552a15898973c48cd10bba79597a326e4da31508365d0eeaae6fb8",
+      "bytes": 10958
+    },
+    "remote-main/docs/agent-goals/handoff-log.md": {
+      "sha256": "ef085fffaf5885d216a4882e951ef9291bc1ecd3ab032dc6ccd31da7bddd3e26",
+      "bytes": 24966
+    },
+    "remote-main/docs/workflows.md": {
+      "sha256": "36b195e423ca7b2d5e71ef106326dc05fc3250d749010179e55bb51e20eb6b45",
+      "bytes": 33489
+    },
+    "local-progress/docs/implementation-task-breakdown.md": {
+      "sha256": "47cfb607c7571bb7a7c89c5099092e1e4e021dc8433b661f70a99bc200d9531d",
+      "bytes": 20783
+    },
+    "local-progress/docs/agent-goals/kg-research-agent.md": {
+      "sha256": "8b076c383dede3874b1c369f91af9a889de9b7514536f1111efe9d919bcb2337",
+      "bytes": 14572
+    },
+    "local-progress/docs/agent-goals/handoff-log.md": {
+      "sha256": "7a9dce2951e437e35d48dbe7c96508325a9fd9ec92a47b312e598da602ff7344",
+      "bytes": 19383
+    },
+    "local-progress/docs/workflows.md": {
+      "sha256": "6ec24a8c7a949c89c93ea9b33af201b9dcab2d2e078d3e17d173ee7680279457",
+      "bytes": 24067
+    },
+    "local-progress/SPEC.md": {
+      "sha256": "63b8d7fbd81375ddc51f4314606d0553d07e446bc3d84952ca20dbaec15fe8a7",
+      "bytes": 177195
+    },
+    "local-progress/README.md": {
+      "sha256": "dfc31db50ace53d99bf6892e37ef7204a9addd55312b16cebc0b5239365b7891",
+      "bytes": 60825
+    }
+  }
+}

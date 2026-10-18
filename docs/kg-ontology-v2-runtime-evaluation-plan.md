@@ -35,6 +35,9 @@ acceptance.
 6. Never infer complete sets or counts from top-k retrieval.
 7. Preserve permission and provenance at candidate creation and every graph hop.
 8. Keep PostgreSQL/pgvector as the canonical storage baseline.
+9. Do not relabel baseline retrieval or optional annotation diagnostics as complete
+   ontology-aware product behavior. SPEC §3.1.1/§6.2.1/§15.6 define the pending
+   product contract, not a new factor or change to the frozen arms/gates here.
 
 Under the 2026-10-06 rule in `SPEC.md` §7.3.1, validated `evidence_lookup`
 with a nonempty validated requested-field set and **all** fields lacking
@@ -137,6 +140,16 @@ Produce a source-completeness result that binds the raw/source-system oracle,
 Observation manifest, loss taxonomy, and execution fingerprint. Unexplained
 loss is a blocking result.
 
+For the pending ontology-aware product contract, also produce a semantic-annotation coverage ledger
+for every authorized source unit and attachment occurrence. It must record
+`annotated`, `pending`, `unsupported`, or `failed`, candidate count (including
+zero), thread/attachment lineage, native locators, review status, and the
+ontology/profile/model/prompt/permission/projection fingerprints. A complete
+ledger is required for full ontology-aware acceptance; incomplete coverage is
+disclosed independently of governance (`pending_review`) and provider errors.
+Supported facts and eligible source fallback remain available; gaps never prove
+`not_found` or grant an extra retry beyond §7.3.1 ALL-fields eligibility.
+
 Candidate extraction and entity resolution must preserve source occurrences.
 Uncertain merges remain candidates. Matching cannot widen permissions.
 
@@ -154,6 +167,12 @@ versioned ontology revision
 
 Required behavior:
 
+- for the pending product contract, use offline resumable LLM reading to
+  semantically annotate the complete declared source scope, including
+  all authorized attachments and native structured records; a zero-candidate
+  unit is still recorded as `annotated`;
+- preserve entity, claim, event, state-transition, relation, temporal,
+  thread/attachment, correction, and supersession links to source evidence;
 - hard fail-closed validation only for permission, schema/arity, lineage,
   revision pins, canonical-write preconditions, and exact-set coverage;
 - inferred type/frame/alias/relation compatibility is soft;
@@ -298,7 +317,7 @@ Any difference is declared as an experimental factor.
 
 ## 9. Required Artifacts and Fingerprints
 
-Each accepted report binds:
+Each accepted frozen-method report binds:
 
 ```text
 authority id and state fingerprint
@@ -318,6 +337,13 @@ result artifact hashes by arm
 
 A report missing any required binding is diagnostic and cannot satisfy an
 authority gate.
+
+Product-contract diagnostics additionally bind the semantic annotation ledger,
+coverage fingerprint, LLM profile and actual annotation-to-source usage; use
+explicit not-applicable for a baseline without that stage. This is not a new
+machine-authority gate or retrospective requirement for archived reports.
+Controlled comparisons isolating ontology scoring must share annotation artifacts;
+changes to extraction or LLM budget cannot be silently credited as scoring gains.
 
 ## 10. Metrics
 
@@ -339,6 +365,13 @@ paired transitions and confidence intervals
 ```
 
 Do not promote retrieval score alone as final-answer quality.
+
+Product acceptance under SPEC §15.6 additionally inspects semantic-read coverage,
+annotation precision/recall, per-item temporal roles and update relationships.
+Require actual browser questions/visible answers on mail+attachments and an
+independent non-mail project/document case. Safe abstention on a source-answerable
+positive fails; known user questions are regressions, not fresh holdout. A ledger,
+index, test suite or MCP trace cannot substitute for visible answer correctness.
 
 ## 11. Pre-Registered Decision Rules
 

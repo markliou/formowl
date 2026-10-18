@@ -3,7 +3,10 @@
 ## 1. Purpose and Authority
 
 The Resource Extraction Layer converts registered heterogeneous sources into
-source-preserving, citeable Observations and optional reviewable semantic candidates.
+source-preserving, citeable Observations and, when the run declares
+`ontology_aware_uat`, a complete reviewable semantic-annotation ledger. The
+`direct_evidence_baseline` may stop at Observations for authorized retrieval,
+but that path is not ontology-aware functionality.
 
 It is the evidence boundary beneath graph governance, strong RAG, graph-guided
 retrieval, deterministic execution, and projections. It does not decide
@@ -31,6 +34,12 @@ ExtractionWarning
 ExtractionError
 source-completeness evidence
 ```
+
+The **2026-10-15** requested UAT answer model is `gpt-6-luna` with
+`reasoning_effort=high`; runtime/provider verification and browser acceptance
+remain pending. This does not change extractor, embedding, or worker model roles
+or authorize re-extraction. See [SPEC §8.1.1](SPEC.md#811-development-worker-tier-and-metadata-recording)
+for the separate development worker policy and recovery authorization.
 
 It must not directly write:
 
@@ -83,7 +92,8 @@ Observations retain text, structured values, or governed references to native
 binary regions/intervals. OCR/transcripts/descriptions have separate provenance,
 accuracy, and coverage limits; they cannot alone verify visual, acoustic,
 musical, or motion-dependent claims. Native evidence remains usable without
-ontology annotation or graph match.
+ontology annotation or graph match in the explicitly declared baseline or
+fallback path; this does not satisfy an ontology-aware UAT claim.
 
 Deduplication may reuse bytes or normalized content, but it must not erase
 source occurrences. The same message, file, attachment, row, or event appearing
@@ -115,7 +125,54 @@ ambiguous time or identity interpretation
 ```
 
 A deterministic output may default to no review when its parser contract is
-satisfied. A semantic output normally requires review.
+satisfied. A semantic output normally requires review. In `ontology_aware_uat`,
+semantic processing is mandatory for every authorized unit in the declared
+scope, even when the result contains zero candidate assertions.
+
+### 2.3.1 Ontology-aware semantic-ingestion ledger
+
+An ontology-aware extraction job must first seal a source inventory and then
+process every authorized mail, attachment, document, table, or native-media
+unit through the applicable semantic reader. The reader receives complete
+source-preserving Observations and native locators, not a regex-only token list
+or an answer-specific snippet.
+
+Each unit and the aggregate run records:
+
+```text
+source_unit_id and occurrence lineage
+observation/extractor-run ids
+semantic profile, ontology revision, model/prompt/schema fingerprints
+annotation_status: annotated | pending | unsupported | failed
+candidate_count (including zero)
+attachment/thread/parent-child lineage
+native locator and coverage limits
+permission scope and review state
+```
+
+`annotated` means the unit was actually read by the LLM semantic reader and the
+candidate result was
+persisted, including an explicit zero-candidate result. `pending`, `unsupported`,
+and `failed` are coverage states, not evidence of absence. The aggregate ledger
+also records inventory, extraction, annotation, review, and projection
+fingerprints. Incomplete annotation/extraction is a coverage gap, while
+`pending_review` is a governance state and errors retain their root cause.
+Do not promote gaps to a complete ontology overlay or `not_found`. Supported
+source facts may still be answered; recovery is only when eligible under
+SPEC §7.3.1, never an extra automatic retry caused by a ledger gap.
+
+This is a **待實作／待測** product contract, not evidence of runtime fields.
+Use existing job/run/Observation/candidate owners and bounded offline batches
+with parent/header/row context and document/thread-level reconciliation. Keep
+LLM interpretations separate from deterministic parsing and validate citations
+and schema before persisting candidates. A truncated/unread unit is not a
+zero-candidate success. Checkpoint per immutable source/configuration binding;
+reuse unchanged results and process changed units plus affected links in new
+revisions. No per-question annotation or inline rebuild is permitted. See
+[SPEC §3.1.1](SPEC.md#311-explicit-execution-modes-and-ontology-aware-uat-contract)
+and [§6.2.1](SPEC.md#621-required-semantic-annotation-content) for the authoritative
+coverage, typed assertion and temporal contract. Source instructions are data,
+not authority to execute commands or alter the worker's task.
 
 ### 2.4 Candidate before canonical
 
@@ -241,7 +298,9 @@ An Observation may contain text, structured values, or a safe reference to
 native binary content. Native content references preserve regions, cell ranges,
 or time spans and any transformation metadata. It is evidence, not a canonical
 fact. Source-native observations support authorized retrieval and structured
-execution independently of semantic annotation or graph admission.
+execution independently of semantic annotation or graph admission only in the
+explicit direct-evidence baseline or bounded fallback; this does not satisfy an
+ontology-aware UAT claim.
 
 ### 3.4 SemanticMetadata and candidate knowledge
 
@@ -268,17 +327,17 @@ Candidate output may be accepted, corrected, split, merged, rejected, deferred,
 or superseded only through the graph-governance workflow.
 
 Cardinality is zero-to-many: each source document and each Observation may
-produce no semantic annotation, or any number of source-addressed
+produce no candidate assertion, or any number of source-addressed
 `SemanticMetadata`, candidate atoms, candidate entities/business objects,
-relations, and frames. A candidate may bind multiple Observations, but it
-retains every contributing Observation ID and source occurrence. Neither an
-adapter nor an ontology may impose one annotation per document or Observation.
-Ontology may constrain and compress relation vocabulary, arity, and allowed
-edge shapes; it does not cap source-addressed candidate cardinality or erase
-distinct occurrences to reduce graph complexity.
-No annotation, type mapping, or graph entry is required to admit otherwise
-authorized evidence. Missing annotations or unmatched graph nodes never prove
-source absence; reviewed KG identity/relation overlays keep evidence links.
+relations, and frames. In `ontology_aware_uat`, every unit is still processed
+and receives a ledger outcome; zero candidates is represented as
+`annotation_status=annotated, candidate_count=0`. A candidate spanning multiple
+Observations retains every contributing occurrence/locator. Neither an adapter nor an
+ontology may impose one annotation per document or Observation.
+Ontology may constrain relation vocabulary, arity, and allowed edge shapes; it
+does not cap candidate cardinality or erase distinct occurrences. In the
+explicit baseline/fallback, no annotation or graph entry is required to admit
+authorized evidence. Missing or failed annotations never prove source absence.
 
 ### 3.5 Source-completeness artifact
 
@@ -327,7 +386,8 @@ infrastructure controls.
 ```text
 ExtractorRun
 Observation records
-optional SemanticMetadata and candidate records
+SemanticMetadata and candidate records when ontology-aware mode is declared;
+explicit semantic-ledger status when the baseline/fallback does not run them
 warnings and errors
 output manifest and completeness counters
 no canonical write side effects
@@ -461,6 +521,7 @@ UploadSession or governed source capture
   -> mail ExtractorRun
   -> source-preserving mail Observations
   -> normalized MailEvidenceBundle or equivalent evidence view
+  -> complete attachment-aware semantic annotation in ontology-aware mode
   -> downstream indexes and candidate extraction
 ```
 
@@ -667,8 +728,10 @@ Safe per-phase and per-iteration timing/outcome traces are retained with the
 request fingerprint without exposing raw source or infrastructure details.
 
 Authorized direct retrieval and native structured execution need no matching
-graph node/edge or ontology annotation. Optional graph/ontology signals retain
-source evidence for every contributing hop. Bounded source context may include
+graph node/edge or ontology annotation in the explicit baseline/fallback.
+Ontology-aware mode uses its complete, pinned semantic ledger to select source
+evidence, while every contributing hop remains source-linked and values are
+validated natively. Bounded source context may include
 adjacent paragraphs/headings, headers/cell ranges, image crops or media clips;
 revalidate source occurrence/hash/revision/lineage/permission/native locator and
 remaining budgets. Snippet grants do not grant whole assets. These reads reuse
@@ -870,6 +933,20 @@ never raw paths or exception text. Do not retry until a hash happens to pass,
 repin source expectations, or present later verification as the failed call's
 evidence. These guards do not by themselves explain historical inconsistent
 digests or certify whole-source completeness.
+
+Opt-in immutable object reuse in `scripts/issue56_attachment_backfill.py` remains **待測**.
+`--preserve-existing-objects` selects the existing `FileObjectStore` policy; defaults are unchanged.
+Reuse verifies the full byte hash/size and stored URI/backend/workspace identity,
+then reuses existing metadata/filename unchanged, without payload or metadata writes.
+Corrupt, incomplete or mismatched existing objects reject; normal verification/hash
+algorithms and source checks are unchanged. New objects may still be created.
+Cleanup uses only instance-created namespace receipts; valid reuse retains creation
+receipts, invalid reuse revokes them. No broad concurrency/transactionality guarantee is made.
+Opt-in binds to ledger inputs and extraction config/job identity; policy changes reject ledger reuse.
+Canonical storage ownership, IDs, permissions and lineage remain unchanged;
+no source/backend remap, alternate truth store or canonical KG writes are introduced.
+Review/integration acceptance remains pending: this is not live deployment, complete
+attachment coverage, source admission, launch readiness or browser acceptance.
 
 Graph and projection records reference stable FormOwl identifiers:
 

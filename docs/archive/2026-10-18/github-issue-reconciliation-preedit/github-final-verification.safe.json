@@ -1,0 +1,76 @@
+{
+  "verified_at": "2026-10-18T04:20:24.116115+00:00",
+  "repo": "markliou/formowl",
+  "new_issue": 63,
+  "updates": [
+    {
+      "number": 19,
+      "state": "open",
+      "state_reason": null,
+      "body_sha256": "a6b6d8c75f60876e15a350cbae88066f0883d8d84313dc75479521efa61c5f96"
+    },
+    {
+      "number": 20,
+      "state": "closed",
+      "state_reason": "not_planned",
+      "body_sha256": "38392558aad60da65543b315b9863478fa563e0aaef5a7f9135075d1d13207d5"
+    },
+    {
+      "number": 41,
+      "state": "open",
+      "state_reason": null,
+      "body_sha256": "37657bb6aee403935d0c4e4596f04b8782d1c4f0cd592b7dd41817bc0db2647a"
+    },
+    {
+      "number": 48,
+      "state": "closed",
+      "state_reason": "not_planned",
+      "body_sha256": "88c5bc84be80a898c17926ee8648bbfbcea6862314f798cb713318baf4de5e73"
+    },
+    {
+      "number": 51,
+      "state": "open",
+      "state_reason": null,
+      "body_sha256": "274fa2de5fe717bd1a12acf203172df793c08b17f7e312e048f5d3c3b8c59b96"
+    },
+    {
+      "number": 52,
+      "state": "open",
+      "state_reason": null,
+      "body_sha256": "aa885c05ec767bd31ca86a5856513e8ffd698674043aa3e229a39f9863c8744a"
+    },
+    {
+      "number": 53,
+      "state": "open",
+      "state_reason": null,
+      "body_sha256": "18b4ab2d579c14dc15fc6ecbb1f63eba5a998d8eb90a7e5ef631ea65b64a5df8"
+    },
+    {
+      "number": 54,
+      "state": "closed",
+      "state_reason": "not_planned",
+      "body_sha256": "b66140d758d9c007d23c27da28e62715406143251d9b9dbb96ce42465f67bbee"
+    },
+    {
+      "number": 56,
+      "state": "open",
+      "state_reason": "reopened",
+      "body_sha256": "0f0558aa3beb3c9f17757bac1d12918595ef747aea3ff0c5aa1d829f46b981bc"
+    }
+  ],
+  "open_issues": [
+    19,
+    41,
+    51,
+    52,
+    53,
+    56,
+    63
+  ],
+  "issue_count": 31,
+  "historical_bodies_preserved": true,
+  "fourteen_regressions_transferred": true,
+  "transfer_comments_verified": true,
+  "methodology_acceptance_promoted": false,
+  "runtime_actions": false
+}

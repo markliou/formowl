@@ -51,9 +51,14 @@ It turns source material into knowledge that is:
 
 Mail is the first diagnostic source fixture for the active research program.
 It does not define product scope or require other sources to become mail or
-plain text. Native evidence remains usable when it has no semantic annotation
-or graph match. Product requirements and currently verified adapter capability
-are distinct; §14 records the limited implemented slices.
+plain text. FormOwl has two explicit execution modes: `direct_evidence_baseline`
+allows authorized source/native retrieval without a semantic overlay, while
+`ontology_aware_uat` requires a complete semantic-ingestion pass over its
+_declared authorized scope_ before it may claim ontology-aware behavior. Native
+evidence remains usable without an annotation in the baseline or as a bounded
+fallback; that fact must not be mislabeled as ontology-aware UAT. Product
+requirements and currently verified adapter capability are distinct; §14 records
+the limited implemented slices.
 
 ---
 
@@ -67,18 +72,112 @@ FormOwl has a knowledge-construction path and a query-execution path.
 heterogeneous sources
   -> Asset / EvidenceSnapshot
   -> ExtractorRun
+  -> source-completeness reconciliation
   -> source-preserving Observation
-       -> authorized source evidence for retrieval and structured execution
-       -> optional candidate mentions, entities, claims, relations, and frames
-            -> review and governance
-            -> canonical KG + scoped ontology revisions
-            -> permission-filtered EffectiveGraphView
+       -> ontology-aware semantic ingestion for the declared scope
+          (LLM semantic candidates with deterministic parser support)
+       -> review and governance
+       -> canonical KG + scoped ontology revisions
+       -> permission-filtered EffectiveGraphView
 ```
+
+The `direct_evidence_baseline` may branch from the Observation snapshot to
+authorized retrieval/native structured execution without semantic annotations.
+That branch is required for recovery and comparison, but it is not an
+ontology-aware UAT completion path.
 
 Evidence preservation precedes semantic interpretation. The graph and ontology
 are governed reusable overlays linked to Observations; creating those overlays
-is not an admission prerequisite for direct evidence retrieval or source-native
-table execution. Candidate review remains mandatory before canonical commit.
+is not an admission prerequisite for the explicitly named direct-evidence
+baseline or its bounded fallback. It is required for an ontology-aware UAT
+claim. Candidate review remains mandatory before canonical commit.
+
+### 3.1.1 Explicit execution modes and ontology-aware UAT contract
+
+**2026-10-18 product requirement — 待實作／待測, not deployed capability.**
+These names describe required execution/claim boundaries, not flags already
+implemented in the UAT. They share existing owners and one source pipeline;
+they do not authorize a second answer service or a replacement ontology store.
+The frozen issue #56 method, tokenizer, experimental arms, budgets and executable
+authority remain unchanged. This product contract does not regrade old results
+or permit changing a frozen experiment while `--require-ready` is nonzero.
+
+Each run must record its intended mode and the actually exercised path:
+
+| Mode | Semantic ingestion requirement | Allowed claim |
+| --- | --- | --- |
+| `direct_evidence_baseline` | Annotation may be absent; validate source integrity/permission and disclose coverage | Direct source retrieval/native execution; never ontology-completion evidence |
+| `ontology_aware_uat` | Complete declared-scope inventory, extraction, semantic annotation, governance, and activated overlay are mandatory | Ontology-guided source selection, cross-source reasoning, and cited answers |
+
+`ontology_aware_uat` is not satisfied by a regex/substring/entity-token index,
+by a top-k RAG result, by a graph schema, or merely by recording ledger rows.
+The LLM semantic reader must process all authorized source units in the
+pinned scope, including mail bodies, threads, quoted/forwarded context where
+available, and every authorized attachment through its native parser or an
+explicitly recorded unsupported/failed result. A unit with no business fact is
+still marked `annotated` with zero candidate assertions; it is not omitted.
+
+Full reading is query-independent offline work, not the entire corpus in one
+prompt. Bounded document/paragraph/page/sheet/range batches preserve parent,
+header, row and conversation context; a document-level reconciliation then
+resolves source-backed cross-chunk, cross-message and attachment relationships.
+Truncated context or an unread attachment remains a coverage gap, not an
+annotated zero. Source content is data, never instructions to the worker.
+Parser/schema/regex extraction supports identifiers, coordinates and explicit
+values; it cannot replace LLM interpretation of natural-language meaning.
+
+Reuse a completed semantic read only when source hash, occurrence/permission
+lineage, parser output, model/prompt/schema/profile and ontology pins still
+match. Checkpoint bounded batches; interrupted/unvalidated output stays pending
+or failed, retries have lineage, and changes produce new immutable revisions.
+Do not regenerate annotations per question. New or revised source units are
+processed incrementally, including affected cross-source links, before claiming
+coverage for a new snapshot. Freeze scope before testing; do not exclude a
+difficult attachment after seeing a failed question.
+
+The required per-scope ledger distinguishes:
+
+```text
+source_inventory_status: complete | partial | pending | unsupported | failed
+extraction_status: complete | partial | pending | unsupported | failed
+annotation_status: annotated | pending | unsupported | failed
+review_status: published | pending_review | rejected | superseded
+projection_status: sealed | unsealed | missing | stale | failed
+```
+
+The ledger is required metadata owned by the existing IngestionJob/ExtractorRun,
+Observation, semantic-candidate and governance services, not a new truth store.
+The ledger binds the source inventory, Observation/ExtractorRun manifests,
+annotation profile and model/prompt fingerprints, `OntologyRevision`, graph
+revision, permission/effective-view revision, and a coverage fingerprint. Any
+`pending`, `unsupported`, `failed`, partial, stale, or unexplained item prevents
+a complete-coverage claim for the affected scope. `pending_review` describes
+governance, not a synonym for parser/provider failure. Keep source, extraction,
+annotation, review, projection, query coverage and answer support separate.
+These gaps never prove `not_found`. Supported source facts may still be returned
+with explicit coverage limits; unrelated pending units must not make the whole
+UAT unavailable. Eligible baseline/source fallback remains bounded by §7.3.1,
+including the ALL-requested-fields rule; a missing ledger is not a new retry
+trigger. No inline rebuilding or extra request budget is authorized.
+
+Ontology-aware query execution is therefore:
+
+```text
+validated natural-language intent
+  -> ontology classes/entities/events/claims/relations/time frames
+  -> source-linked candidate observations and bounded graph paths
+  -> native source retrieval or deterministic structured execution
+  -> temporal/conflict/supersession validation against original evidence
+  -> cited EvidenceBundle / deterministic result
+```
+
+The ontology is a semantic index and reasoning overlay, not the source of truth.
+Every returned value and every answer-relevant hop must be revalidated against
+source-native evidence with a locator, revision, hash/lineage, and permission
+binding. Trace actual selected annotation IDs, semantic-plan slots, source
+Observations and final citations; merely loading an ontology does not prove use.
+Mechanical pass completion does not prove semantic precision/recall; §15.6
+requires independent source-backed answer acceptance.
 
 ### 3.2 Query execution
 
@@ -101,8 +200,36 @@ The core Query Agent is the governed orchestrator of this path, not a license
 for an LLM to bypass deterministic contracts. It receives only the current
 prompt and an explicit, bounded, versioned conversation-state envelope.
 Coreference must be resolved before an MCP query is issued, or transmitted as
-validated explicit state when the tool contract supports it. An MCP tool must
-never infer hidden conversation history from an under-specified `query_text`.
+validated explicit state when the tool contract supports it.
+A new explicit target requiring workspace evidence needs its own governed lookup;
+unrelated prior citations cannot substitute for current-target support. A closed
+negative-source clause plus a fully supplied-text transformation remains ordinary
+chat; mixed instructions that also request source facts do not inherit that exemption.
+An MCP tool must never infer hidden conversation history from an under-specified
+`query_text`.
+
+**Closed supplied-input isolation — deployed since R39, retained in R55 / 待測, not release accepted.**
+A trusted closed task over current supplied input must neither offer unrelated
+retained evidence/citations nor accept them in its final answer. Only for that
+turn, omit latest evidence and prior-visible/reference capability metadata from
+current citation authority. The legacy/app-server path also omits bounded prior
+history from provider input. The configured Responses path introduced in R54 and inherited by R55 instead keeps
+its already-sent append-only journal and appends an explicit current supplied-input
+boundary: historical text is not current evidence or citation authority. That new
+path supersedes provider-history omission only, not deterministic isolation gates.
+Preserve the original current prompt and use existing membership validation and
+bounded finalization repair to reject hostile retained citations; do not append
+citations or silently erase global session state. Genuine prior-answer transforms,
+positive/mixed source requests, exact-capability paths and ordinary chat retain
+their own gates. Tools-none/MCP0 is necessary but is not isolation proof; no new
+provider allowance, source operation, public schema, permission relaxation or
+budget change is granted. Isolation requires explicit supplied-input authority;
+a bare prior-relative transformation recognizer is not sufficient. The corrected
+[r3 focused80PASS](.formowl/uat-weekend-20261016/worker-anscombe-supplied-scope-r29/r3/verification.safe.json) and
+[scoped peer AGREE](.formowl/uat-weekend-20261016/ops/reviewer-nash-supplied-scope-r29-r3-safe.json) are included in R39.
+[R29-r6 supplied-task observations](.formowl/uat-weekend-20261016/ops/browser-r29-r6-manual-review-safe.json) support only their finite rubric;
+r2's retained-context regression and failed R37/R38 integration remain preserved
+in the [handoff](docs/agent-goals/handoff-log.md), not retroactively accepted.
 
 Human office-agent surfaces present a server-authoritative conversation
 transcript rather than replacing one result panel on every turn. The visible
@@ -116,13 +243,74 @@ prior evidence, and visible transcript state, and invalidates the old session
 binding. A temporary UAT may retain this state only in memory and may lose it
 after expiry, capacity eviction, or restart when that limitation is displayed.
 The current issue #56 temporary LAN UAT profile retains at most `64` visible
-turns, supplies at most `8` messages to the answer model, and expires an idle
-browser session after `1` hour. These are diagnostic implementation bounds,
+turns, keeps at most `8` messages in its semantic-routing/legacy model-history
+envelope, and expires a browser session after its existing `1` hour lifetime.
+The configured Responses R54 provider journal below is separate from that smaller
+envelope: its sent prefix is not truncated to eight messages. These are diagnostic implementation bounds,
 not permanent product defaults or a cross-restart persistence guarantee.
 Its runtime defaults are `0.0.0.0:8088` for `--temporary-lan-diagnostic` and
 `127.0.0.1:8766` for normal UAT. Explicit `--host` and `--port` values
 override those defaults. A temporary access code is optional; the temporary
 LAN UAT remains usable when no access code is supplied.
+
+**R55 closed supplied-text routing correction — diagnostic deployed / 待測.**
+The shared recognizer may consume complete known negative-source clauses outside
+one quoted supplied input, including between the supplied-text instruction and
+input. The entire remaining exterior must be closed transformation instructions;
+source-looking quoted text is data, while unresolved/mixed fresh-source clauses
+retain governed routing. It does not rewrite the original request, change current
+citation authority, or exempt arbitrary no-lookup requests. The later
+[R55 actual-browser finite review](.formowl/uat-weekend-20261016/ops/provider-session-r55-manual-review.safe.json)
+supports the supplied-text correction within its nine-question limited-pass batch;
+original R54 C663 FAIL remains immutable. This is not arbitrary-language, full-UAT
+or release acceptance, and does not make the broader regression green.
+
+#### R54 configured Responses conversation contract
+
+**Current user contract; diagnostic deployed in R54, inherited byte-identically by R55 / 待測, not release accepted.** Applies only to
+Responses conversations explicitly configured by the trusted UAT runtime. Legacy
+bridge/app-server behavior and dated acceptance evidence are not reinterpreted.
+
+1. A server-owned UUID identifies one browser conversation. Every provider request
+   in that conversation, including tool continuations and bounded repairs, uses the
+   same UUID in the custom bridge header `X-Codex-Pool-Session` and `prompt_cache_key`.
+   This is the configured provider contract, not a claim of universal OpenAI header
+   support or guaranteed cache hits. Reload and failures retain the same journal;
+   a new conversation gets a new UUID. Reset/new/logout/expiry/eviction dispose the
+   old identity; an in-flight retired reply cannot dispatch MCP or resurrect it.
+   The finite nonblocking reset proof covers the temporary-LAN/provider barrier,
+   not nonblocking OAuth service reset; no cross-restart persistence is promised.
+2. Instructions and the complete initially available tool catalog stay byte/order
+   stable, including typed-field guidance. Include both mail and graph evidence
+   tools only when actually available. Per-turn selected-tool routing, capability
+   summary, original request/fields/terms and validation remain authoritative;
+   fixed catalog presence grants no additional tool or source authority.
+3. Input is append-only across turns, tool outputs and repairs, including failed
+   send prefixes. Put clock/current request/capabilities/evidence and other dynamic
+   data at the tail; do not reconstruct or trim the prefix from the eight-message
+   routing history. A server-local clarification before the first provider send is
+   not a missing-journal error. At the bounded journal limit, stop safely and ask
+   for a new conversation; never silently truncate, rotate the UUID or rebuild it.
+4. Ordinary chat, closed supplied tasks and no-tool finalization retain the stable
+   `tools` catalog but use `tool_choice="none"`; server dispatch also rejects any
+   forbidden call. Here “tools-none” means no executable tool permission, not an
+   empty catalog. Current citation/identifier/native/source gates still reject
+   unrelated historical evidence despite its text remaining in the journal.
+5. Use honest `User-Agent: uat-web-backend/0.1.0`, matching [application version](pyproject.toml). Preserve configured model,
+   reasoning, stream/store behavior and existing provider/tool/retry budgets. The
+   explicitly bounded append-only provider context is the only new context scope;
+   source500ms and all source/hash/revision/lineage/permission guards are unchanged.
+6. Optional `request_shape.conversation_contract` proves actual serialized requests
+   through hash-only UUID/header/cache-key, instructions/tools/input/settings hashes,
+   counts and prior-prefix equality, plus safe UA/flags. No raw UUID, header, prompt,
+   source text or credential is exposed. Local mocks are not actual browser proof.
+
+The separate hosted public-terminology lookup cannot silently receive a second
+UUID or private append-only context. For this configured path it is paused
+with a safe unavailable result and no external call; the longer-term exception
+decision is pending user approval. Its custom function may remain in the frozen
+catalog, but that presence does not authorize hosted web execution. No new source,
+provider or browser operation is authorized by this specification paragraph.
 
 The method remains intentionally hybrid:
 
@@ -315,11 +503,14 @@ The implementation may represent these through `CandidateMention`,
 
 Candidate cardinality is zero-to-many at both the source document and
 Observation boundaries. One document or Observation may therefore produce no
-semantic annotation, or any number of source-addressed annotations, candidate
-atoms, candidate entities/business objects, relations, and frames. A candidate
-may span multiple Observations, but every candidate keeps the contributing
-Observation IDs and source occurrences; no layer may impose a one-annotation-
-per-document or one-annotation-per-Observation rule.
+candidate assertion, or any number of source-addressed annotations, candidate
+atoms, candidate entities/business objects, relations, and frames. This is a
+cardinality rule, not permission to skip a scoped semantic read: in
+`ontology_aware_uat`, every unit receives an annotation-ledger outcome, and a
+legitimate zero-candidate unit is `annotation_status=annotated` with count zero.
+A candidate may span multiple Observations, but every candidate keeps the
+contributing Observation IDs and source occurrences; no layer may impose a
+one-annotation-per-document or one-annotation-per-Observation rule.
 
 ### 5.2 Candidate-before-canonical rule
 
@@ -461,14 +652,65 @@ calendar, ticket, document, spreadsheet, database, and media records retain
 their native evidence representations.
 
 Ontology governs the vocabulary, arity, and allowed shapes of candidate and
-canonical relation types. Applying that vocabulary produces optional
-zero-to-many source-addressed annotations: one Observation may have none or
-many, and an annotation may bind several Observations while retaining every
-source locator. Ontology is not an exhaustive evidence index or a mandatory
-one-annotation-per-evidence layer. It does not cap annotation cardinality or
-collapse source occurrences to reduce edge count. No annotation, type mapping,
-or compatible ontology path is required to admit otherwise authorized evidence,
-and their absence cannot establish that a requested fact is absent.
+canonical relation types. An annotation remains zero-to-many: one Observation
+may support no candidate assertion or many, and an assertion may bind several
+Observations while retaining every source locator. Zero-to-many describes the
+semantic result cardinality; it does not mean that an ontology-aware run may
+skip reading a source unit.
+
+For `direct_evidence_baseline`, no annotation, type mapping, or compatible
+ontology path is required to admit otherwise authorized evidence. For
+`ontology_aware_uat`, the declared scope must have a complete source inventory,
+attachment-aware extraction, semantic annotation ledger, review/governance
+status, and pinned overlay before an ontology-aware completion claim is valid.
+Missing, pending, unsupported, or failed overlay entries never establish source
+absence; disclose the relevant coverage/review state and preserve supported
+facts. Bounded fallback requires §7.3.1 eligibility, not the gap alone.
+
+#### 6.2.1 Required semantic annotation content
+
+The LLM semantic reader must interpret source meaning, not merely split
+strings. For each in-scope mail/attachment or other source unit, it may emit
+zero-to-many source-linked records for:
+
+```text
+entities and aliases
+claims and asserted values
+business events and state transitions
+relations and cross-source identity links
+temporal frames: asserted/effective/due/valid/superseded time
+thread, reply, quote, forward, and attachment lineage
+correction, contradiction, update, and supersession relations
+```
+
+Each record retains the source Observation IDs and native locators, raw span or
+cell/range/media reference, normalized interpretation, date meaning and
+precision, confidence, model/prompt/schema/profile revisions, permission scope,
+and candidate/review status. The LLM may propose these records, but cannot
+silently publish canonical types or graph truth.
+
+A mail delivery-style domain pack is one example, not a hard-coded feature. It
+can represent a requested/confirmed/updated delivery commitment, a shipment or
+invoice event, and a `supersedes` relation across messages and attachments.
+A materially different project/work-item pack can represent an owner,
+deadline, status transition, dependency, and attached decision record. Both use
+the same core `Actor`, `Artifact`, `Event`, `Claim`, `TimeInterval`, and
+`StateTransition` concepts and must be validated against their original source.
+
+Annotations are assertions about a target in context, not document tags alone.
+Bind scope, subject/entity, line item or part, quantity/unit when relevant,
+asserting actor, assertion/event type, time role, raw expression and supporting
+spans/cells. Distinguish a request, tentative forecast, commitment, correction,
+shipment, receipt and invoice. An invoice date is not a shipment/delivery date;
+message time is not event time; a later message does not supersede all earlier
+items. Supersession needs source-backed target/field/scope and update evidence;
+unresolved alternatives remain conflicting candidates. Do not collapse several
+order lines, lots, dates or organizations into one answer.
+
+Mapping documents to a shared type (for example `Event`) is not an entity join.
+Query plans combine target identity, requested semantic roles and time/scope
+with supported links, not every document with a broad tag. Unknown concepts
+remain source-local candidates for review; never force a wrong existing type.
 
 ### 6.3 Hard invariants and soft semantics
 
@@ -536,6 +778,32 @@ arguments. If a reference remains missing or ambiguous, it asks for
 clarification or fails closed; an MCP tool may not guess what an earlier turn
 meant.
 
+**Closed prior-relative evidence presentation — R33 diagnostic deployed / 待測.**
+Only when server-retained evidence is both present and citeable may a fully closed
+translation/rewrite/reformat/summary describe the prior retrieval in a relative clause.
+That clause is provenance, not a fresh lookup instruction; additional clauses must
+only preserve citations or prohibit a new search. Unknown/mixed operations fall through
+to existing routing. Protected targets, fresh source bindings/actions, explicit workspace
+markers or quoted labels do not gain this new exemption. Supplied-text controls remain
+separate; no citation grant, retained lifetime, permission, typed coverage, final validator,
+retry, source500ms or other budget is relaxed. This removes unnecessary forced planning,
+not a provider-incomplete cause/availability fix or proof of real retained translation.
+
+**Explicit prior-visible citation preservation — R35 diagnostic deployed / 待測.**
+For a fully closed prior-answer transformation with an explicit citation-preservation
+clause, the obligation is exactly the immediately preceding successful visible answer's
+citation IDs (`complete` or `partial`), not the retained-evidence union or an older turn.
+Require nonempty IDs within the existing response cap and current compacted governed
+retained membership before provider invocation. Failed/chat/reset/missing or compacted
+prior authority clarifies; it cannot recover authority from model prose or older history.
+Every non-clarification draft must include all required prior-visible IDs and pass the
+existing availability, typed coverage and public-safety validators. Omission uses only
+the existing one-shot no-tool repair (`tool_choice="none"` with a stable catalog
+on configured R54 Responses; legacy offering unchanged); repeated omission stops, without appending or
+fabricating citations. No new MCP, source read, provider allowance or budget. Ordinary
+no-preservation subset semantics and mixed fresh-source/supplied-text gates remain.
+Scoped synthetic review/integration is not real-browser no-drop or release acceptance.
+
 The bounded protected-business-identifier implementation may retain one unique
 server-owned identifier from an actually dispatched validated request with
 citations, admitted only after a cited final answer or partial result. A reference
@@ -565,7 +833,7 @@ Every query routes to one of four classes:
 
 | Query class | Required execution |
 | --- | --- |
-| `evidence_lookup` | modality-appropriate strong RAG over source-preserving Observations, with optional entity grouping and bounded source-context expansion |
+| `evidence_lookup` | strong RAG over source-preserving Observations; in `ontology_aware_uat`, ontology-linked entities/events/claims/relations must guide source selection before raw-evidence validation |
 | `relation_reasoning` | provenance-constrained typed traversal with source evidence for every hop |
 | `exact_set_or_inventory` | deterministic structured enumeration with an explicit coverage contract |
 | `global_summarization` | explicitly bounded, permission-filtered source/evidence set with incompleteness disclosure |
@@ -592,6 +860,7 @@ current capabilities available to the request:
 ```text
 authorized source schemas, modalities, native locators, and field capabilities
 current permission-filtered source occurrence providers
+current semantic-annotation ledger, coverage fingerprint, and overlay activation state when ontology-aware
 current EffectiveGraphView and scoped ontology revisions when used
 current MCP tools and their actual input/output schemas
 ```
@@ -636,6 +905,7 @@ query class and maximum claim strength
 actor, workspace, task, source, and permission scope
 source/provider and policy revisions
 effective-view, graph, and ontology revisions when used
+semantic_annotation_ledger_id and coverage fingerprint when ontology-aware
 entity, relation, temporal, and evidence slots
 allowed edge kinds and directions
 hop, fan-out, candidate, evidence, token, time, and repair budgets
@@ -704,7 +974,9 @@ observed HTTP `408`/`invalid_request_error` signature reporting a stream closed
 before `response.completed`, and only before any FormOwl/public tool execution.
 It retries the same request using explicit SSE within the original deadline
 and existing six-provider-request ceiling, sharing the single pre-tool recovery
-allowance with empty-body recovery. Ordinary chat still offers no tools.
+allowance with empty-body recovery. Ordinary chat has no executable tool permission:
+legacy requests offer no tools, while configured R54 Responses retain the fixed
+catalog with `tool_choice="none"` and server-side call rejection.
 Unrelated errors, repeated disconnections, missing terminal events and expired
 budgets remain failures; post-tool failures preserve governed partial evidence.
 Failed attempts remain in the bounded trace. This mechanism is **待測** for
@@ -762,6 +1034,42 @@ trace containing its phase/iteration identity, elapsed time, bounded outcome,
 and stop/error reason. The trace is bound to the run fingerprint and must not
 expose raw prompts, source content, credentials, SQL, filesystem paths, or
 worker internals.
+
+### 7.2.1 Ontology-guided query execution and fallback
+
+When the declared mode is `ontology_aware_uat`, the Query Agent must form a
+semantic plan that identifies the requested entities, event/state types,
+relations, temporal role, source family, and requested fields. It then uses the
+pinned ontology/effective graph to select source-linked Observations and native
+attachment/table records. The answer path must still validate the selected
+values against original evidence; an ontology assertion, graph property, or
+LLM summary alone is not evidence.
+Keep ordinary chat tool-free and preserve the existing typed identifier/field
+lookup ordering. Simple native exact lookups need no artificial graph detour;
+record their actual direct path. Ontology-assisted semantic queries must show
+real annotation use, without making a graph match an evidence-admission gate.
+
+The plan must inspect the annotation/source ledger before declaring a miss:
+
+```text
+complete deterministic source coverage + no eligible evidence -> scoped negative
+top-k miss or incomplete coverage/projection -> incomplete; eligible fallback or stop
+parser/model/provider error -> operational error with root cause
+permission denial/redaction -> denied/redacted, not no-data
+```
+
+A KG/ontology miss, empty projection, deferred attachment, or incomplete index
+is never a definitive `not_found`. The fallback may use the independently
+validated immutable source snapshot, strong RAG, native table execution, or a
+bounded materially different recheck under the existing budgets. It may not
+rebuild an index inline, widen permissions, or hardcode a user question.
+Missing annotations/projections do not independently trigger automatic recovery:
+§7.3.1 still requires validated `evidence_lookup` with a nonempty requested-field
+set whose fields ALL lack verified support. Partial misses are disclosed, not
+automatically rechecked; source-backed blanks count as covered. Normal planned
+ontology/native/strong-RAG retrieval is separate from this one recheck.
+Record the actual path, annotation IDs used, admitted evidence and stop reason;
+fallback success remains source-answer evidence, not ontology-function proof.
 
 ### 7.3 Strong RAG and bounded adaptive execution
 
@@ -862,6 +1170,34 @@ retention repair with canonical focused117/117 verified as described below.
 All three retention-only scoped reviews agree. No timeout, execution
 budget or retry allowance is increased.
 
+**Full-envelope admission and diagnostics — 待測.** A proved `group_byte_budget`
+rejection may reselect from at most `128` already-validated cached source units
+against the same full `16 KiB` envelope, including metadata. Preserve complete
+child/parent units, full text, provenance, dependencies and all coverage limits;
+no orphan context, source-text clipping or source rereads. Harmless regrouping
+is not evidence loss; exact inventory remains all-or-none.
+The existing `500 ms` source-read/recheck phase is unchanged. Cached presentation
+uses only the remaining existing scoped TURN deadline; without that scope it
+retains the old source-phase deadline. No deadline reset or cap increase.
+Native-family reservation uses existing item slots; cached backfill adds no reads.
+The eligible ordinary overflow/material-loss selection contract below is an explicit presentation-priority exception, not a source-ranking change.
+
+**Validated ordinary cache selection — design approved, candidate in progress / 待測; not deployed (2026-10-17).**
+For validated `evidence_lookup` with nonempty validated requested fields, retain only already-guarded/projected plain mail body+own-header or independent document units before the original source deadline, including eligible prefix byte/item-overflow rejects. Reuse the existing presentation cache; cache membership does not grant callback admission, `last_anchor` or dependent-neighbor eligibility.
+Only after normal reader/full-tail drain, and only for overflow or material full-envelope loss, may complete eligible staged+cached units be reselected using validated field strings, the frozen tokenizer and already-projected snippets: marginal field-token coverage/diversity; deterministic ties use staged units in existing order, then cached units in reservoir order, **not global source-arrival order**. These are soft relevance signals, never verified support, aliases or source absence.
+**This narrow path supersedes admitted-first presentation priority:** earlier provisional groups may be evicted whole. Other paths retain legacy behavior; existing deadline-stopped deferred backfill outside this new eligibility keeps admitted-first/source-arrival order. No eligible cache leaves original compaction unchanged.
+Keep one reservoir within `16 KiB` serialized groups and at most `128` combined distinct staged/deferred/cache units; deduplicate references. Preserve whole body/header units, caller item limits with header slots, and the actual final full-envelope `16 KiB` cap. Individually oversized groups are discarded, never clipped; bounded serialized size is not a measured heap bound.
+Every trial uses existing compose/fit/compaction and rebuilds consistent citation/lineage/coverage/recovery/bundle fingerprints. Commit only a whole fit completed within the original remaining same-turn presentation deadline; a late trial cannot replace the safe fallback. No source read/callback/reprojection/permission lookup, deadline reset, refill or extra model call.
+Source/helper/tail/permission/invalid-source failures remain fatal; existing structured-failure exclusions remain unchanged. Explicit exact, native/table, auto-exact and cross-unit same-source dependent-neighbor paths gain no new selection eligibility or dependency closure.
+Keep incomplete/context-limit disclosure and unknown support; no corpus completeness, recall, latency or guaranteed known-case repair claim. Source `500 ms`/`8192` and all other budgets stay unchanged; the user3s proposal is unanswered. Earlier cache-only deadline-backfill behavior does not authorize source work after expiry.
+
+Private compaction diagnostics contain only closed reason codes and aggregate
+byte/group/count metadata, never query or source values. Proposal attempts remain
+distinct from actual tool dispatches in stop labels. Provider `incomplete_status`
+is not evidence of parsing failure and must not be labelled as one without proof.
+These diagnostic contracts remain **待測**: no live business-answer acceptance,
+methodology authority, readiness or release approval is established.
+
 The source recheck uses sealed job/hash/permission/scope references outside
 the canary; valid out-of-index document observations need not be canary
 members. Each observation binds to its own authorized selector, source,
@@ -879,6 +1215,30 @@ Explicit structured projections still bind to the authorized source schema.
 Requested outputs are not conjunctive source-text predicates unless the original
 request explicitly requires that literal content/value. Neither this distinction
 nor fuller context changes first-valid-term freezing or automatic recheck eligibility.
+**Optional field-query hints — 待測.** Graph `query_effective_graph_view`
+accepts optional sibling `field_query_hints: [{field_index, text}]` only for
+`evidence_lookup` with nonempty validated required terms/current requested fields.
+At most 8 entries, exactly those keys: non-boolean integer current-field index,
+1–80-character text. Normalize/deduplicate; reject invalid shape/safety/binding.
+Fresh UNVERIFIED field-label/translation candidates affect only bounded soft
+candidate preferences. Single-token behavior is unchanged. Multi-token lookup
+first forms the same at-most-256 candidates through the existing hash-ordered
+merge, then may rerank only that set: token coverage first, field-token overlap
+second, original rank/hash for ties. Zero-overlap candidates remain eligible.
+Indexed scoring uses only the original remaining deadline; interruption keeps
+the complete original ordering, never partial scores. No extra source reads or
+changes to downstream literal required-AND matching are permitted.
+Exclude mail-tool, table/exact-inventory/exact-field and cursor requests. Drop whole
+mixed ID/literal/value/number/date/assignment/assertion/comparison/instruction/
+presentation candidates, never salvage substrings. Bare labels may be indistinguishable
+from answer values: semantic purity/synonym equivalence is not guaranteed. Hints
+prove no native binding, field support or canonical fact. Keep the five required contract keys (native extension below is optional),
+IDs, literal AND, authorized scope, first-valid fields/terms, ALL-fields recheck
+eligibility and all budgets unchanged. Retained-context rules stay unchanged:
+no hint persistence/inheritance. Fingerprint accepted hints; hint-only differences
+are neither progress nor requery permission. Scoped review is not deployment or
+recall proof; browser and full-release acceptance remain open.
+
 Repeated, reordered, or subset citations and rewritten prose are not new
 evidence. Additional contract-bound, validated field support may count as
 progress even when corpus coverage remains incomplete; operational errors or
@@ -1004,6 +1364,36 @@ completely examined and no matching evidence was found, may be projected as
 no-answer. A cited partial answer remains required to disclose its incomplete
 coverage.
 
+**Trusted provider-error presentation — 待測.**
+A validated provider error envelope/event classified by the existing transport as
+`reason_code=provider_error` is an upstream failure even when HTTP status is200.
+Use the existing `provider_unavailable` stop/presentation class, preserving safe
+reason, status and error-code diagnostics. Do not describe that event as local
+JSON parsing or final-decision validation failure, or as missing source evidence.
+Do not infer this class from raw error prose, answer text, or HTTP200 alone.
+Malformed event/JSON/shape errors and genuine decision-validation failures keep
+their original distinct handling; incomplete terminal responses keep their message.
+No retry, attempt/read/time budget, provider transport or source behavior changes.
+This is truthful classification/presentation only: upstream cause and availability
+remain unproved. Synthetic checks do not prove browser repair or authorize rollout.
+
+**Explicit indexed/source pairing — diagnostic integration / 待測 (2026-10-17).**
+The existing indexed-serving loader may accept paired operator-only original
+preparation directory and byte-SHA options. Load the indexed revision normally,
+then independently validate the original source preparation with existing seals,
+ordered job/store authorities, source/access bindings, exact/parent/exclusion and
+lookup guards. Require matching preparation fingerprint and full snapshot/bindings;
+never infer a neighboring preparation or substitute the indexed revision SHA.
+Retain both validated pins in execution identity. A scan-only independent reader
+serves the existing eligible recheck and later projection-reopen fallback; ordinary
+indexed keyed reads and graph/session objects remain unchanged. Initial indexed
+DB/load errors still fail closed; source-only startup remains a separately pinned
+route, not a blanket catch. No copied truth store, inline rebuild, ranking change,
+canonical write or expanded budget is introduced. Full-scale startup cost, actual
+indexed/source parity and browser acceptance remain unproved; synthetic verification
+cannot establish them. Both snapshots are independently validated before sharing
+retained references; peak startup memory/IO is not yet measured.
+
 The UI and answer contract must show whether the source was searched and must
 show governed citations when available; otherwise it must visibly report
 `retrieval_incomplete`/`pending_review` rather than imply that no data exists.
@@ -1039,6 +1429,79 @@ rejection remains mail-only, not graph/document. Without explicit grounded
 terms, legacy mail calls retain all-lexical-term matching; standalone document
 lookup retains protected-identifier checks plus lexical token intersection,
 not full-natural-language-query subset matching.
+
+**Private server-bound term placement — R47 diagnostic deployed / 待測, not general source-fix acceptance.**
+[Frozen impl-r3 peer](.formowl/uat-weekend-20261016/ops/reviewer-anscombe-term-placement-r41-r3-safe.json) and R47 integration bind this narrow exception to flat same-item AND.
+[Occurrence4 limited browser/source proof](.formowl/uat-weekend-20261016/ops/browser-occurrence-r47-manual-review-safe.json) does not prove general recall or completeness;
+strict legacy matching remains the default. Only the immutable original user prompt
+and authorized server scope may derive one closed positive mail qualifier plus at
+least one child-required term. No provider-expanded query, optional hint, alias,
+identifier shape or public wire parameter grants placement authority.
+All original grounded terms remain mandatory: **full AND over one guarded plain
+own-job body + outer-header pair**, never sibling union or parent-only target support.
+Child predicates stay on child body, not copied headers. Occurrence-context mode
+may match that body OR the separately cited outer subject/sent_at fields, each
+field independently; it is not semantic relatedness or full-thread coverage.
+Explicit subject-contains and subject-equals use only verified outer subject and
+remain distinct from context mode. Explicit body/literal intent overrides borrowing;
+ambiguous/mixed/negative qualifiers do not enable this exception.
+Derive the obligation before candidate terms, validate complete terms/roles/scope,
+then freeze them atomically on the first valid proposal. Missing/split qualifiers,
+mutation or omission after freeze cannot remove the obligation. Missing trusted
+roles retain legacy semantics; an invalid/mismatched active binding fails, not downgrades.
+Carry private immutable original-hash/contract/actor/workspace binding across the
+existing worker/TestClient path and clear request/callback scope in finally; no
+public schema/header, new planner/store, provider call or permission bypass.
+Only child terms accelerate the existing shortlist; this changes discovery order,
+not full-AND admission. Postvalidate all contextual predicates against the already
+read guarded full-key pair on initial, recheck and cached paths; no extra reads.
+Admit only the whole separately cited group within existing caps; unavailable,
+redacted, late or unbound required surfaces cannot establish success. Attachments,
+cross-run/custom/dependent paths, exact/native and documents are unsupported;
+unqualified graph/retained/no-tool evidence cannot bypass an active obligation.
+Source500ms/8192, shortlist256, presentation16KiB/128, deadlines, permissions,
+seals/lineage and full fatal drain stay unchanged. No recall/latency guarantee,
+known-target recovery claim, document-title inference or silent required-term removal.
+The implementation remains five existing owners/two existing tests; scoped frozen review,
+R47 integration and the finite occurrence4 proof do not establish full-source or release acceptance.
+
+**Optional native attachment-page obligation — deployed since R50, retained in R52 / 待測, not native-answer acceptance.**
+[Native r2 peer](.formowl/uat-weekend-20261016/ops/reviewer-anscombe-native-page-r43-r2-safe.json) is scoped code/test review; [R50 cutover](.formowl/uat-weekend-20261016/ops/cutover-code-r50-result-safe.json) establishes deployment, not source acceptance.
+Keep the original five required request-contract keys. The sixth allowed property is
+optional `native_locator`: exactly `{kind, page}`, `kind=attachment_page`, strict integer
+`page>=1` (not boolean), both required inside the object, no unknown keys.
+Only a grounded original current-request coordinate and existing source target with
+trusted server capability authorize it; literal “page N” content predicates remain AND,
+not removable locator noise. Freeze original terms/fields/locator together; no new planner,
+store, public source authority, implicit capability or relaxation of exact/legacy guards.
+The fresh obligation needs a current, qualified child for the requested page, including
+source-title-only requests without a protected ID. Wrong/missing page, parent-only,
+stale or unqualified retained evidence cannot satisfy it, including a no-tool final;
+outer headers supply metadata only. Keep original target and same-source/native guards.
+Ordinary chat and existing closed transforms of genuinely present/citeable prior evidence
+retain their original paths. Historical R48 integration failed2 obsolete schema assertions; the
+[16PASS schema2 correction](.formowl/uat-weekend-20261016/worker-anscombe-native-schema-fixtures-r49/handoff.safe.json) is test-only. [R50 362PASS integration](.formowl/uat-weekend-20261016/ops/integration-code-r50-safe.json) includes the reviewed native candidate.
+The historical first live native-page fields case failed before MCP with provider HTTP400.
+The [R51 descriptor repair](.formowl/uat-weekend-20261016/worker-nash-native-descriptor-r51/handoff.safe.json) is now live.
+Same-route synthetic schema-only preflight: [old HTTP400](.formowl/uat-weekend-20261016/worker-nash-native-descriptor-r51/master-preflight/old-safe.json) / [new completed](.formowl/uat-weekend-20261016/worker-nash-native-descriptor-r51/master-preflight/new-safe.json), two calls/no MCP/source/retry; strict mode and server guards unchanged.
+[R51 manual/source review](.formowl/uat-weekend-20261016/ops/browser-fields-r51-manual-review-safe.json) confirms C601 scalar/page recovery, but its original compound-price-unit rubric remains FAIL.
+Neither schema completion nor a correct scalar establishes native table/unit semantics or full native-answer acceptance; all limits unchanged.
+
+**Finite representative selection / per-selected-output scope — r4 deployed since R50, retained in R52 / 待測.**
+One explicit positive bounded source selection can bind compatible local per-selected-record
+metadata output; that output does not by itself request an all-source inventory.
+Fresh selection still requires governed evidence, not supplied-only chat or a
+no-tool permission state; a stable offered catalog alone does not satisfy it.
+Preserve original prompt/hash, targets, literal/source/date predicates, requested fields,
+first-valid binding and existing caps. Independent all/count/absence operations remain exact;
+negated, quoted, mixed-target or ambiguous selection/anaphora receives no exemption.
+Do not early-return ordinary lookup merely on an example word or number, infer sample size
+from dates/properties, add aliases/answer dictionaries, or claim representativeness/completeness
+from top-k. Missing requested examples/fields remain disclosed; no citation padding.
+[r1 synthetic61PASS](.formowl/uat-weekend-20261016/worker-nash-bounded-examples-r50/impl-r1/handoff.safe.json) never closed its original-class failure;
+[r1 B01 BLOCK](.formowl/uat-weekend-20261016/ops/reviewer-anscombe-bounded-examples-r50-r1-safe.json) and [r3 B02 BLOCK](.formowl/uat-weekend-20261016/ops/reviewer-anscombe-bounded-examples-r50-r3-safe.json) remain immutable.
+[r4 scoped AGREE](.formowl/uat-weekend-20261016/ops/reviewer-anscombe-bounded-examples-r50-r4-safe.json) / [exact r4 offline original-class PASS](.formowl/uat-weekend-20261016/ops/preflight-r50-r4-frozen-routing-safe.json) and R50 integration/cutover establish the deployed revision, not universal grammar or business correctness.
+The retained-two run records four IDs held on an MCP0 transform; [later manual/source review](.formowl/uat-weekend-20261016/ops/browser-retained-four-r50-manual-review-safe.json) is 2LIMITED_PASS with source bindings preserved, not whole-source or release acceptance.
 
 **Eligibility, limits, and outcome contract**
 
@@ -1076,6 +1539,50 @@ not full-natural-language-query subset matching.
   never provider/public arguments or headers. Shared-helper tests alone do
   not prove propagation; synthetic actual-TestClient coverage is separate.
   These phase checks are not a guaranteed total wall-clock timeout.
+  A trusted `evidence_lookup` source-start caller may opt into fixed, non-refilling
+  batches of at most three shortlist anchor hydrations through the existing
+  concrete file-backed Observation reader (**待測**). The default, exact/native,
+  small-cap and custom-store paths remain serial. The coordinator retains helper,
+  scope, parent and callback checks; rank order is unchanged except for the
+  ready-pair mail window below. Reserve up to two dependency reads per outstanding
+  mail anchor within the same read cap. Charge every submitted
+  anchor without refund, including a worker that declines an expired start.
+  Each worker checks the original absolute deadline immediately before its guarded
+  read. After stop/expiry/error, issue no further reads or callbacks and join all
+  started work before returning; inspect unused-tail failures and fail closed.
+  Draining an already-started blocking read may overrun the phase wall time and
+  leave later families incomplete. This is neither cancellation nor a hard elapsed-
+  time guarantee, serial error/read-count equivalence, a new budget, or proof of
+  retrieval improvement. No public/provider concurrency control is exposed.
+  **Ready-parent fixed-window scheduling — deployed since R36, retained in R52 / 待測, not accepted:**
+  R36 replaces only the all-anchor progress barrier below, not final settlement
+  or error draining; deployment does not establish business acceptance.
+  For the existing trusted evidence-lookup and concrete original read-only file-store
+  opt-in only, preserve the fixed three-anchor window, same max-three pool, original
+  absolute family deadline and >=9 remaining-read reservation. Within that window,
+  a completed eligible plain mail body may plan and submit its own authorized parent
+  before unrelated anchors settle; held serial-only siblings wait. Independent jobs
+  may share a window, never a parent authority. Use full job/run/asset/scope/
+  occurrence + parent ID/hash identity for guarded reuse/dedup. Submit at most three
+  parents, charge each submission without refund, and admit validated ready pairs on
+  the coordinator with own-parent-before-child. Original rank breaks ties only among
+  currently ready pairs: global ranked admission within a window is deliberately relaxed.
+  Before planning/submission and each callback, inspect completed anchor AND parent
+  errors and deadline/stop; reuse full-key pending parent reads without duplicate charges.
+  All submitted anchor/parent work must settle, inspect completed errors, and drain
+  fatally before returning or refilling the next window; no callback after stop,
+  expiry or error. Defer serial-only siblings until all anchors settle and eligible
+  dependencies finish; process them in original relative order. No next-window refill before this drain.
+  Attachment, explicit/crossrun-linked (including body-shaped linkage),
+  missing-helper, custom-store, exact/native, small-cap and nonshortlist routes retain
+  original guards/serial behavior; no source/ranking/hints/loader/budget change.
+  Unused-tail failures remain fatal even after staged callbacks; arbitrary external
+  callback rollback is not promised. Caps remain 500ms phase/8192 reads/16KiB,
+  with reservation 3+U+2*(3-E)<=9 for E eligible anchors and U<=E unique parents.
+  Slow anchors and mandatory draining can still exceed phase elapsed time or consume
+  later-family opportunity. No hard timeout/cancellation, real speedup, recall,
+  full-top-k, exact count, business acceptance, or release claim. This is a
+  diagnostically deployed ordering contract, not full-browser or release acceptance.
 - Missing reader, zero result limit, exhausted budget, or incomplete source
   coverage with no citations yields `pending_review`, not “the data does not
   exist”. Only a complete bounded scan AND complete sealed-source coverage may
@@ -1155,6 +1662,122 @@ HTTP and MCP error/timeout checks remain mandatory. Missing, malformed, truncate
 over-cap or latest-failed records remain incomparable. Local15/15 comparator
 verification and subsequent frozen integration are scoped evidence below.
 
+**Typed evidence notes — v2 candidate / 待測 (2026-10-17).** The bounded
+Responses UAT path explicitly opts into server-owned `typed_evidence_notes_v2`;
+the reusable model defaults off and the app-server path remains legacy. Bind the
+policy version and enabled state to execution/config identity, separately from
+requested model identity. After current or eligible retained governed evidence
+is presented, enabled decisions use the existing six keys plus `field_limitations`.
+Each of at most eight entries has exactly `{field_index, reason, scope}`: a unique
+strict integer (not boolean) index into the current frozen requested-field catalog,
+a closed `not_established`, `ambiguous`, or `conflicting` reason, and an explicit scope:
+
+- `presented_evidence`: model-assessed uncertainty within the presented evidence.
+  All three reasons remain valid regardless of retrieval completeness; render this
+  scope explicitly and preserve genuine ambiguity/conflict, not a coverage-only warning.
+- `unverified_requested_remainder`: only `not_established`, and only when current
+  presented governed metadata positively establishes incomplete coverage. Describe
+  the unresolved requested remainder without denying a supported cited subset or
+  asserting that additional records exist. Unknown coverage, missing structured
+  support, retained evidence alone, model prose and citation presence do not grant
+  this scope. Never infer a missing scope or reclassify a supplied discriminator.
+
+Reject missing/extra keys, invalid or stale indices, duplicates, unknown reasons
+and unsupported scope/reason combinations. The provider must leave `coverage_note`
+empty; activation remains strict through finalization and the existing single
+repair, with fail-closed exhaustion and no legacy downgrade or new allowance.
+The renderer consumes the typed field before public projection and fills the
+existing string note. Any field limitation requires an incomplete outcome.
+Retrieval disclosure uses validated presented coverage/truncation/stop metadata:
+authoritative incomplete/unknown envelope signals precede nested completeness.
+Include presented retained evidence in that disclosure only when the final answer
+cites it; unused prior evidence must not downgrade clean current evidence. Retained
+evidence never supplies the current field catalog. Retained-only evidence without a
+current validated catalog requires empty limitations and generic overall uncertainty;
+clarification and exact/empty-field catalogs also retain empty limitations.
+Missing structured support attestation is a metadata limitation, not absent facts;
+omitted field indices prove no support. Do not invent page/row/clip inventories from
+source text or treat incomplete retrieval alone as factual uncertainty. Ordinary
+uncited chat, source-backed blanks, citation/exact/source guards, ALL-fields recheck
+eligibility and every request/read/time cap stay unchanged. This constrains the note
+channel, not arbitrary `answer_text` grounding or whole-source completeness.
+Historical v1 evidence remains in immutable preimages; v2 candidate verification
+is not deployment, browser acceptance or methodology readiness.
+
+**Explicit unsupported exact-capability terminal — deployed since R39, retained in R55 / 待測.** Only after
+an existing validated `exact_set_or_inventory` request returns a clean citation-free
+governed result may trusted `query_contract.complete_inventory_supported is False`
+permit the existing guarded capability notice and stop before another plan or
+finalization. Incomplete coverage alone, missing/unknown/true/nonboolean capability,
+or zero citations alone cannot authorize this new terminal. Preserve original
+request/query hashes and authorized scope, no pending comparison, and all
+current-result/error exclusions. An unrelated retained citeable catalog does not
+veto this terminal for the newly validated current exact request when the trusted
+capability is explicitly False and the clean citation-free result/binding guards
+pass. Use the existing capability notice without retained citation IDs; do not
+clear or mutate retained conversation state. Current cited/native/exact results
+and prior-only transforms retain their original paths. Native exact success
+continues normal validation; a failed proposal is never reinterpreted as capability.
+Invalid arguments, permission/provider/schema errors, ambiguity, binding mismatch
+or missing-binding warnings retain precedence. Preserve any earlier rejection
+trace and charged attempt when a later valid call reaches this terminal. The
+operation-neutral notice cannot certify a complete authorized-scope set/count,
+estimate totals from top-k, or establish absence. Public shape, read/retry/time
+caps, ordinary-chat MCP0 and the existing nonterminal no-progress path stay intact.
+**Current R55 / ledger536 checkpoint** — 2026-10-17 UTC / 待測
+[R55 cutover](.formowl/uat-weekend-20261016/ops/cutover-code-r55-result-safe.json) EXIT0/2026-10-17 20:01:55Z, **live8088**, code `d580faeab634…`; **R54 retained rollback**, no cleanup. Deployment authority is the exact frozen [package-r55](.formowl/uat-weekend-20261016/package-r55.json)/code-r55/tests-r55 inventory, not dirty root product files; this docs slice does not synchronize root code. [Final read-only state](.formowl/uat-weekend-20261016/ops/provider-session-r55-final-state.safe.json) confirms exact252code/93tests, pinned image running and8088 HTTP200/statusok/query service connected; health is not release acceptance.
+[Canonical focused91PASS](.formowl/uat-weekend-20261016/ops/provider-session-r55-differential.safe.json) is bounded proof. [Broader integration](.formowl/uat-weekend-20261016/ops/integration-code-r55-safe.json) =**283 tests /22FAIL+1ERROR /13.005s, NON-GREEN**; all23 inherited assertion tails match R54, no new/resolved failures, Ruff0/compile0/exact252+93. Neither focused green nor inherited failure identity is whole-suite or release acceptance.
+[Dated R54 manual review](.formowl/uat-weekend-20261016/ops/provider-session-r54-manual-review.safe.json) =**7 functional LIMITED_PASS +1FAIL (C663)**, four lifecycle checks, source verifier EXIT0 and all9 sent provider requests wire-contract valid. [Formal ledger527](.formowl/uat-weekend-20261016/ops/provider-session-r54-ledger.safe.json) =519+8 submissions, not passes; C663's original pre-provider clarification failure remains immutable.
+[Final R55 manual review](.formowl/uat-weekend-20261016/ops/provider-session-r55-manual-review.safe.json) records **9 browser questions LIMITED_PASS +4 lifecycle PASS**, finite batch only. [Wire verifier](.formowl/uat-weekend-20261016/ops/provider-session-r55-wire.safe.json) EXIT0: all11 sent requests/9 cases contract-valid, `failure_findings=[]`. [Formal ledger536](.formowl/uat-weekend-20261016/ops/provider-session-r55-ledger.safe.json) =527+9 submissions, **not passes**, no automatic retries. Whole-UAT/release/methodology acceptance remains false; original R54 C663 FAIL is not regraded.
+[Fresh source verifier](.formowl/uat-weekend-20261016/ops/provider-session-r55-source.safe.json) EXIT0 plus the later manual/native review establish all5 citation occurrences/3 unique citations resolve and match. Four requested capacitor values and origin field have same-target/header support; manufacturing location remains unverified. This proves only the returned finite evidence, not full-source coverage, cache-hit rate or upstream routing effectiveness.
+[R55 frozen grammar correction](.formowl/uat-weekend-20261016/worker-anscombe-supplied-negative-r55/handoff.safe.json) changes only shared closed supplied-text recognition: whole exterior negative-source constraints plus explicit quoted input, not a no-source override for mixed lookup. Same final tests RED12 subcases→6PASS, related69PASS, [scoped peer AGREE](.formowl/uat-weekend-20261016/ops/reviewer-nash-supplied-negative-r55-safe.json); original/earlier failures remain preserved. C600 FAIL/unrerun and C601 compound-price-unit FAIL remain open; R52 C628/C651 observations prove only the exact-capability boundary, not full-source absence.
+[Six provider-request requirements](SPEC.md) §3.2 are inherited byte-identically from R54: stable server conversation UUID/header/cache key, fixed instructions/tool order, append-only provider input with dynamic tail, honest UA `uat-web-backend/0.1.0` matching application version, unchanged model/stream/store and current authority guards. Smaller eight-message routing history is separate. Cap/expiry stop safely without silent ID rotation; no cross-restart durability or nonblocking OAuth-reset claim. Public hosted terminology stays paused pending an explicit exception.
+PDF/parser/topology work remains **paused**; [native-PDF review](.formowl/uat-weekend-20261016/ops/native-pdf-r53-master-review-safe.json) is not a proven compound-unit fix. [Last lineage receipt](.formowl/uat-weekend-20261016/ops/hybrid-current-r1/lineage-progress-safe.json) is not full index/embedding/activation; no new source/index operation or completion forecast here.
+[Fresh canonical authority](.formowl/uat-weekend-20261016/ops/authority-r55-final-tmpfs-container.json) EXIT0 with existing tmpfs config: valid=true/ready=false/errors=[], CJKtrue, execution `0eaba758e881…`. [Initial read-only/no-tmpfs probe](.formowl/uat-weekend-20261016/ops/authority-r55-final-container.json) EXIT2 remains preserved; no product change or gate promotion. Four methodology gates and independent three-reviewer release gate remain open; feature待測/step4 in-progress. Source500ms/caps/guards and requested models unchanged; actual model/effort unverified, 3s unanswered.
+[New lossless five-file preimages](docs/archive/2026-10-18/weekend-r55-provider-status-preedit/SHA256SUMS.json) preserve every replaced checkpoint, prior failure and archive link. No prior archive edit, checkbox promotion, root product edit or mirror update.
+
+**Private actual-browser source-phase trace — R33 native aggregates diagnostic deployed / 待測, not accepted (2026-10-17).**
+Only paired `--behavior-log` + `--record-raw-uat-interactions` enable this private diagnostic;
+no new provider/public control. Four existing owners: `python/formowl_retrieval/gateway.py`,
+`python/formowl_gateway/issue56_uat_runtime.py`, `python/formowl_mail/issue56_sealed_source.py`,
+and `python/formowl_gateway/issue56_sealed_source_loader.py`; no new module/logger/store owner.
+The request/call/query/source/code-bound scope crosses the original Thread/TestClient handoff.
+Coordinator allocation is capped at **256 combined detail cells, including at most the first64 read attempts**,
+plus at most **256 shortlist hashes TOTAL per MCP**; fixed-key counters survive detail exhaustion.
+Dropped/truncated/unobserved data stays explicit UNKNOWN; a prefix fingerprint is not full-order proof.
+Workers update only their own coordinator-allocated cell; role is assigned at dispatch, not inferred from helper name.
+Observe existing lookup/helper/barrier/parent-wait/serial-sibling/project/admit/defer/envelope decisions without repeating predicates.
+Read attempts, callbacks, projection, admission and publication are distinct; callback true does not mean admission.
+Native/exact/context-neighbor per-read timing remains **UNKNOWN**, with aggregate boundaries only.
+Native evidence-fallback planning adds only to the existing engine cell in
+`python/formowl_gateway/issue56_sealed_source_loader.py`: the fixed12 numeric fields
+`native_{terms,values,rows}_{attempted,completed,wall_ms,cpu_ms}`. Terms covers existing
+term/tokenizer/hash-set planning; values/rows accumulate the original shard-reader calls.
+Candidate filtering, hydration/callback and other residual work are outside these timings.
+Completed means normal call return, including absent shards or bounded overflow, NOT a
+match, physical read, admission or completeness proof; opened shards retain full seals.
+Attempted minus completed distinguishes interruption; timing finalizes even on deadline stop.
+Optional `native_phase_failed=1` invalidates stage measurements after an observer fault.
+The request-local dictionary exists only with an allocated engine cell; default-None exact
+callers and disabled tracing collect nothing. No new detail cells, per-line/per-file events,
+reads/hashes, logger, locks or upward imports; underlying shard-reader behavior is unchanged.
+Fatal paths without original engine finalization remain UNKNOWN. Source500ms/8192, family
+allocation, guards, scheduling, error/drain and timeout-without-snapshot semantics stay intact.
+After the original full drain, only the request worker creates the immutable queued snapshot;
+**runtime timeout publishes incomplete metadata without reading mutable cells**. Late work cannot mutate a logged or later turn.
+Bounded identity hashes/serialization use existing metadata after drain, never source-body rehash/read or SQL/Path/store wrapping;
+no hot-path logging I/O/locks. Diagnostic-only faults cannot swallow original errors or replace original results.
+Disabled tracing allocates no collector/cells or diagnostic clocks. Private behavior output only, no public/provider/MCP payload change.
+Private numeric count names (`required_term_count`, `preferred_term_count` in frozen R31) and every emitted trace field
+MUST pass the existing recursive whole-record writer guard; numeric values do not exempt unsafe field names.
+Verify source-start → `_call` → real `_append_behavior_log`, including unsafe prompt/key fallback and timeout/fault markers;
+snapshot JSON or public-safe projection alone is insufficient. No guard/logger bypass, allowlist exception or safety weakening.
+R24's three redacted business records lost their calls/phase cells; later synthetic success cannot restore them or prove historical timing.
+Guards, eligibility, scheduling/order, ranking/hints, charged reads, budgets and fatal-tail draining remain unchanged.
+Observer overhead is **unmeasured** and may perturb deadlines; intervals overlap and trace completion is not source completeness.
+Future actual-browser evidence requires separate frozen deployment/authorization and explains only that call, not historical failures.
+No warmup/replay, semantic repair, recall/performance/business/release claim. [Frozen proposal](.formowl/uat-weekend-20261016/worker-anscombe-phase-trace-r24/SPEC-proposal.md) records the original contract; R33 activation does not establish business, performance or whole-browser acceptance.
+
 **Opt-in private UAT interaction recorder — diagnostic-only / 待測 (2026-10-13)**
 
 Explicitly authorized temporary LAN UAT may pair `--behavior-log` with
@@ -1175,6 +1798,14 @@ request contract and query when available, verified field-support hashes and
 existing source-recheck/scan-stop metadata. Missing plans or coverage are not
 inferred. Runtime exceptions retain a failure fingerprint and available result;
 the later HTTP error envelope is not reconstructed by this recorder.
+Private per-call diagnostics may also retain the accepted normalized optional
+field-query hints as at most eight field-index/text-hash pairs, their count,
+fingerprint, and validated MCP-argument presence. Original omitted, empty, and
+wholly dropped proposals collapse in the typed request and remain indistinguishable;
+no request or legacy missing diagnostic means unavailable, never zero. These
+records prove neither actual transport completion nor downstream hint use, field
+support, or recall improvement. Raw hint values stay excluded and public safe
+trace schemas are unchanged. This observability extension remains 待測.
 Private raw-governed, compacted-presented, final-model and final-answer citation
 sets preserve hash IDs and hash non-hash identifiers, with count/fingerprint,
 encoding and explicit truncation above 100 IDs per set. Stage capture is bounded
@@ -1342,6 +1973,27 @@ context budgets; partial support and source-backed blanks do not trigger recheck
 Native date/display/formula/merged-header limitations remain explicit. A bounded
 exact shortlist never certifies complete inventory or source absence.
 
+Projection-independent mail-occurrence execution (2026-10-16, **待測**) is a
+primary exact route, not an exception to the automatic recheck exclusion. A
+validated mail-only exact request with one unambiguous native protected identifier
+may reuse the authorized source reader and existing direct-identifier occurrence
+provider/executor without a retrieval projection. Keep all validated required
+terms as AND constraints; no prefix stripping, numeric substring identity,
+class downgrade, new index, or inline rebuild. The same inherited 500ms/8192-read,
+request evidence cap (at most128), and16KiB evidence budget apply. Query-local
+provider scope is always explicitly unresolved: found occurrences do not establish
+a complete timeline, total, latest state, or negative. This inventory establishes
+which admitted native message occurrences contain the exact identifier, not which
+authors made new business assertions or events. Quoted history may establish
+textual presence, never a new update or commitment at the enclosing message date.
+Evidence labels and retained context explicitly mark authorship and event timing
+unverified; requested authored-event fields remain unsupported without their own
+source proof. Native outer headers retain separate citations; they describe the
+containing message, not the date of an embedded statement. Neighbor-only text
+cannot become an identifier hit. Independent documents/attachments are not mail members;
+unsupported or ambiguous exact requests remain pending rather than guessed.
+Synthetic/focused checks do not establish webpage or release acceptance.
+
 Ranked top-k retrieval cannot prove a complete set, total count, inventory, or
 definitive negative.
 
@@ -1464,8 +2116,21 @@ historical evidence, not future work bans. No descendants, duplication, or
 additional workers are authorized. No substitution means no silent relabelling
 of the observed model, effort, or worker identity; it does not prohibit
 continuing explicitly bounded work through an available execution path.
-UAT remains `gpt-5.5`/`high`, and the methodology authority and independent
-three-reviewer gate remain unchanged.
+The methodology authority and independent three-reviewer gate remain unchanged.
+
+Under the **2026-10-15 user authorization**, the requested UAT model is
+`gpt-6-luna` with `reasoning_effort=high`. Runtime/provider support, the observed
+model/effort binding, and browser acceptance remain pending. Record requested
+and observed identities separately; this policy change does not prove support
+or rollout. Dated earlier model evidence retains its original identity and
+claim boundary. Development worker policy remains `gpt-6.1-sol`/`high`.
+
+The same authorization permits downtime repair within Master's bounded recovery
+assignment. Master records a time-based recovery plan with milestones, time
+budgets, evidence checkpoints, and stop conditions in the work board and
+handoff. Missing July/newer snapshot mail is an accepted coverage limitation,
+not a user-export blocker. Disclose the available time range and unsupported
+answers; source/hash/lineage/permission checks and methodology gates still apply.
 
 The requested worker configuration is `gpt-6.1-sol` with `reasoning_effort=high`.
 Dispatch should request that configuration and record the actual configuration
@@ -1534,6 +2199,12 @@ Candidate admission, graph topology, ontology contribution, and deterministic
 execution are separate factors. Gains from better tokenization or source
 coverage are not ontology gains.
 
+For future product-contract diagnostics, additionally bind the semantic ledger
+and annotation profile/coverage; use explicit not-applicable for the control arm.
+Graph/ontology arms isolating scoring must share the same annotation artifacts;
+do not credit different extraction quality or an extra LLM call to ontology.
+These diagnostics do not change frozen arms or permit retroactive comparison.
+
 ---
 
 ## 9. Provenance, Time, Confidence, and Contradiction
@@ -1547,6 +2218,7 @@ source retrieval and source-native structured execution use:
 Source / Asset / EvidenceSnapshot
   -> ExtractorRun
   -> Observation
+  -> semantic-annotation ledger when ontology-aware
   -> SemanticQueryPlan and execution
   -> EvidenceBundle or deterministic result
   -> cited answer or projection
@@ -1576,6 +2248,8 @@ as applicable to the source and execution, include:
 asset_id
 source_ref and source occurrence
 evidence_snapshot_id
+semantic_annotation_ledger_id
+coverage_fingerprint
 extractor_run_id
 observation_id
 candidate_id
@@ -1754,6 +2428,15 @@ or indexing per request. Source, policy, or extractor changes require an explici
 offline job and new version at the applicable extraction/index boundary; user
 prompts, KG misses, and retries never trigger ingestion or rebuild.
 
+Offline `index_prepared_references` hydration opt-in (2026-10-17, **待測 / unactivated**): `allow_parallel_file_reads=false` by default.
+Only exact-original `CompletedIngestionJobAuthority` and concrete `ObservationStore`/`_JsonRecordStore` read-only getter paths qualify; injected/subclassed/overridden owners remain serial.
+Fixed two-reference windows join/drain all submitted futures and inspect every error, including submission/read failures, before metadata handoff or return.
+Source order is retained; only the coordinator performs metadata work, writes and checkpoints.
+Hydration/metadata errors prevent current-batch writes; earlier commits and existing put-before-checkpoint failure semantics remain unchanged.
+Each pair creates its own pool, not one lazy shared pool; cost/benefit is unproved and needs separately authorized measurement before build use.
+The original offline callsite is **not yet wired** to opt in; online caps/guards, parent traversal and storage ownership are unchanged.
+Independent review is pending; no activation, performance, acceptance or completion claim is made.
+
 With an admitted keyed artifact, eligible mail and independent PlainText/Markdown
 lookup uses bounded keyed hydration and at most four context references per side,
 not a sealed-reference tail scan or `list.index`. Revalidate selected source/hash,
@@ -1805,6 +2488,20 @@ by themselves establish activated lexical+dense coverage or live UAT acceptance.
 Missing fields on any matching source row keep exact projection coverage
 incomplete; a source-backed explicit blank is distinct from an absent cell.
 See extraction §7 for the failure boundary. Status remains **待測**.
+
+Opt-in immutable object reuse in `scripts/issue56_attachment_backfill.py` remains **待測**.
+`--preserve-existing-objects` selects the existing `FileObjectStore` policy; defaults are unchanged.
+Reuse verifies the full byte hash/size and stored URI/backend/workspace identity,
+then reuses existing metadata/filename unchanged, without payload or metadata writes.
+Corrupt, incomplete or mismatched existing objects reject; normal verification/hash
+algorithms and source checks are unchanged. New objects may still be created.
+Cleanup uses only instance-created namespace receipts; valid reuse retains creation
+receipts, invalid reuse revokes them. No broad concurrency/transactionality guarantee is made.
+Opt-in binds to ledger inputs and extraction config/job identity; policy changes reject ledger reuse.
+Canonical storage ownership, IDs, permissions and lineage remain unchanged;
+no source/backend remap, alternate truth store or canonical KG writes are introduced.
+Review/integration acceptance remains pending: this is not live deployment, complete
+attachment coverage, source admission, launch readiness or browser acceptance.
 
 Interruption recovery may use explicitly configured fixed source-order parent
 windows in the existing offline sidecar batch owner (2026-10-12, **待測**).
@@ -1976,64 +2673,18 @@ connected FormOwl MCP Gateway and Google-backed FormOwl OAuth
 
 Current tested compatibility paths do not prove source-complete heterogeneous
 integration, automatic canonical commits, universal parser coverage,
-enterprise-scale readiness, or KG + ontology superiority.
+enterprise-scale readiness, or KG + ontology superiority. As of 2026-10-18,
+the `ontology_aware_uat` contract in §3.1.1/§6.2.1 is a required target whose
+end-to-end implementation and acceptance have not been established. Existing
+R55 browser diagnostics prove only their recorded retrieval/transport scopes,
+not complete semantic ingestion, and remain **待測**. The new mode/ledger names
+are not evidence that corresponding runtime fields already exist.
 
-At the historical 2026-10-12 checkpoint, r12 was the serving manifest on live8089,
-all252 product files/zero drift. Candidate8096 was deployed/proved, then removed
-at19:35:25Z; old r5 remains stopped/preserved for rollback. Its historical128-parent source-window000-r3
-had4,996,943 Observations/1,044,332 references/399,548 mail helpers/
-10,421,821 postings/zero independent-document helpers, completeness=false.
-Old unbound responses remain incomparable; later binding does not repair them.
-
-R11 (`ac409901…`) exact252 code/34 tests passed canonical focused
-**108/108,170.274s,EXIT0**, zero failures/errors/skips, exact pre/post inventories.
-It includes the generic span-consumer/version0.6.2 and mock citation-order repairs;
-Hypatia/Archimedes/Lagrange scoped **AGREE3/3**, not whole-suite acceptance.
-Fixture-r11 EXIT0 verifies synthetic native PDF/independent-document late cue,
-native citation and chat/lifecycle. All six responses remain incomparable:
-deployment/code/build absent; four-attempt business turns retained only three.
-The prior r12 (`b2f4fa44…`) added retention from unchanged cap6, exact252+34:
-focused **117/117,174.049s,EXIT0**, zero failures/errors/skips, verified pre/post
-and current inventories, three retention-only scoped agreements. Freeze-helper
-TypeError/empty unpublished tree remains preserved; no product/test bytes were
-copied by that failure. The later readonly-template chmod deployment failure was
-fixed only in the operator helper's private tmpfs-copy handling, not product/secrets.
-
-Fixed2048 r2/prep-r3 completed but pin `7c11bec0…` stayed unactivated; a successful
-PDF run's three paragraphs were erased by redaction, not absent from source.
-Corrected same2048/all-formats r3/version0.6.2 replay completed18:57:38Z/EXIT0,
-622,631 Observations/7,211 runs; prep-r4 completed19:18:55Z/EXIT0.
-New pin `5e222fc…` has1,100,143 references/407,401 helpers/10,671,080 postings,
-zero independent-document helpers and **partial** coverage. Admission verified a
-successful native PDF run and three preserved indexed paragraphs. Old jobs/pins
-and the separate unexplained remainder metadata_unreadable failure are retained.
-
-Candidate Chromium EXIT0: delivery20.597s and unrelated attachment19.580s, each
-MCP1/provider2, ordinary/reload/reset/postreset MCP0; all four responses comparable.
-At19:26Z both citations reopened/hash/run/parent checked; Master viewed candidate
-screenshot and original PDF page1. The proved field is
-`purchase_order_requested_delivery`, not PO/approval dates, shipment or latest
-supplier schedule. The unrelated actual attachment's paragraph/native input hash
-was verified, not an independently registered document. Canonical dev rendering
-was unavailable; host visual inspection is separate, not a test skip.
-
-Live Chromium LAN EXIT0 (~19:28Z): all four responses comparable, ordinary3.112s/
-MCP0, delivery22.829s and unrelated attachment17.833s, each MCP1/provider2/citation1;
-reload/reset/postreset pass. Both evidence turns retain partial coverage.
-The first live citation reopen failed
-`ContractValidationError: ingestion revision completed job changed`.
-Once-only operator instrumentation then passed the original loader unchanged,
-with all three job digests agreeing across independent engines and both LIVE
-citations reopened/hash/run/parent checked. Master verified the native meaning.
-Archimedes scoped **AGREE** supports **this observed source-correct answer in the
-real LAN webpage**, not stability/reproducibility: the first failure's cause
-remains unresolved, with no source-mutation, corruption or root-fix claim.
-This is not full-UAT/source-complete/methodology/docs acceptance.
-Canonical authority-resume4 remains valid=true/ready=false/errors=[]/EXIT0.
-Broad source/independent-document/spreadsheet/dense/feature/stability acceptance
-is unproved; feature **待測**, step4 in-progress, four methodology gates blocked.
-No user-only blocker or completion promotion. Safe records, pins and preserved
-failures: [handoff](docs/agent-goals/handoff-log.md).
+The current live R55 / R54 rollback checkpoint and finite R55 browser/source/wire evidence are recorded in §7.3.1 above. Earlier r12/r16 deployments,
+focused checks, partial-source proof, failed reopens and reviewer limits are
+[losslessly archived](docs/archive/2026-10-17/weekend-r37-contract-correction-preedit/root/SPEC.md); they do not prove current availability,
+whole-source completeness or stability. In particular, the dated r12 native answer
+proof did not resolve its first reopen failure. Old receipts and archives are unchanged.
 
 Current source support must be read at the following granularity:
 
@@ -2082,8 +2733,10 @@ python3 scripts/methodology_authority_check.py --require-ready
 A nonzero result blocks the claim. Diagnostic implementation may continue only
 with an explicit blocked boundary.
 
-Issue #20 remains open until its external PostgreSQL, container lifecycle, MCP
-Inspector, live ChatGPT/Google, reviewer, and completion-audit evidence passes.
+GitHub issue #20 is a scoped closed/deferred external-activation record, not
+proof of live acceptance. Its external PostgreSQL, container lifecycle, MCP
+Inspector, live ChatGPT/Google, reviewer, and completion-audit obligations remain
+unaccepted; current risk/dependency tracking is in issue #63.
 Issue #41 remains the authority for generic Asset tenant, owner, storage,
 occurrence, retention, purge, transfer, and authorization semantics.
 
@@ -2107,8 +2760,15 @@ occurrence, retention, purge, transfer, and authorization semantics.
 
 - canonical commits are scoped, reviewed, revisioned, and source-backed;
 - every answer-relevant graph hop resolves to authorized Observations;
-- zero-to-many source-addressed annotations are optional; unannotated evidence
-  remains retrievable, and missing graph/ontology entries never prove absence;
+- `direct_evidence_baseline` permits unannotated evidence retrieval, but
+  `ontology_aware_uat` requires a complete declared-scope semantic annotation
+  ledger and reviewed/pinned overlay before claiming ontology behavior;
+- semantic records are zero-to-many per Observation and must capture entities,
+  claims, events, relations, temporal meaning, attachment/thread lineage, and
+  supersession where present; a zero-candidate unit is still processed and
+  recorded;
+- incomplete annotation, extraction, projection, or source coverage remains
+  `partial`/`pending_review` and never proves source absence;
 - the stable ontology core transfers across at least two materially different
   source/domain families;
 - inferred ontology mismatch does not remove admitted evidence;
@@ -2196,6 +2856,42 @@ occurrence, retention, purge, transfer, and authorization semantics.
 - external writes are proposal-first and audited;
 - canonical container verification passes for the claimed slice.
 
+### 15.6 Ontology-aware webpage acceptance — 待實作／待測
+
+Declare the source snapshot, coverage scope, implementation/version pins and
+expected source-backed results before a diagnostic run. Missing newer mail is
+an explicit snapshot limit, never an excuse for missing in-snapshot evidence.
+Do not narrow the scope after observing failures. Final product acceptance is
+**a question entered through the UAT webpage and its visible answer/citations**;
+API output, worker completion, index activation, HTTP 200, MCP calls and logs
+are debugging evidence, not substitutes for the visible answer.
+
+The same generic pipeline must pass at least:
+
+| Scenario | Required visible result |
+| --- | --- |
+| Mail + attachment event/update chain | Correct per-item facts and date roles, distinguishing request/commitment/update/shipment; no automatic newest-message-wins rule |
+| Independent project/work-item + document history | Correct owner/deadline/status/decision update with citations; no mail/session dependency or new answer service |
+| Identity ambiguity, quoted old content and conflicting revisions | Correct distinction or explicit ambiguity/conflict, not a plausible invented join |
+| Unannotated/failed attachment or missing projection | Supported facts where available and an honest coverage limit; never false absence or a fabricated date |
+| Native rows/cells and independently checkable negative case | Same-row/item binding and native citation; a definitive negative only with deterministic complete coverage |
+| Chat, multi-turn target change, reload and new conversation | Ordinary chat preserved; current-target MCP evidence when needed; no stale citations or session-contract regression |
+
+Authorized reviewers independently read original mail/attachments/documents,
+including relevant surrounding text and headers, to establish expected values,
+date meaning, item association and citations. Inspect visible answers against
+that oracle; safe abstention on an answerable positive case is still a failure.
+Reported cases and known PO questions are development regressions, not unseen
+holdout. Add independently selected, source-backed questions with different
+identifiers, wording and source families; never tune runtime to expected answers.
+
+Internal traces must corroborate that annotations actually selected the cited
+source and supported temporal/relationship reasoning. A browser pass via direct
+RAG alone does not establish ontology use, and a valid internal trace cannot
+rescue a wrong visible answer. Keep the feature **待測** until this end-to-end
+evidence and required review pass; whole-method/release claims still require
+the existing authority and independent three-reviewer gates.
+
 ---
 
 ## 16. Non-Goals and Final Statement
@@ -2226,21 +2922,29 @@ The center of FormOwl is reusable source evidence with governed overlays:
 ```text
 Any Source
   -> Governed Asset / EvidenceSnapshot
+  -> Source-completeness reconciliation
   -> Source-Preserving Observation (text, structured, or native media reference)
-       -> Authorized Modality-Appropriate Retrieval / Native Structured Execution
-       -> Optional Evidence-Backed Candidate Knowledge
-            -> Review -> Canonical KG + Scoped Ontology -> EffectiveGraphView
+
+`direct_evidence_baseline`:
+  -> Authorized Modality-Appropriate Retrieval / Native Structured Execution
+
+`ontology_aware_uat`:
+  -> Complete semantic read/annotation ledger for the declared scope
+  -> Review -> Canonical KG + Scoped Ontology -> EffectiveGraphView
+  -> Ontology-linked source selection
+  -> Raw/native evidence validation
 
 Core Query Agent + Validated Plan
-  -> Authorized Source Execution with Governed Graph/Ontology Signals When Used
   -> Bounded Verified EvidenceBundle / Deterministic Result
   -> Cited Answer, Projection, or Reviewed Action Proposal
 ```
 
 Direct authorized retrieval and exact table execution do not require a graph
-match or ontology annotation. Graph-required relation reasoning retains the
-source-backed governed path. The frozen issue #56 program still evaluates
-graph-guided hybrid execution against its strong RAG control under the same
-authority and acceptance gates; this schematic makes no methodology-change,
-readiness, or superiority claim. The graph earns its place through measured
-integration benefits with source evidence, permission, and provenance intact.
+match or ontology annotation **when the run is explicitly the baseline or a
+bounded fallback**. They cannot be used to claim that ontology-aware UAT has
+completed. In ontology-aware mode, graph/ontology selection is useful only when
+it is linked to source evidence and coverage status; a KG miss falls through to
+bounded source retrieval and cannot become a false absence. The frozen issue
+#56 program still evaluates graph-guided hybrid execution against its strong RAG
+control under the same authority and acceptance gates; this schematic makes no
+methodology-readiness or superiority claim.

@@ -1,0 +1,31 @@
+{
+  "utc": "2026-10-17T20:03:14.308304+00:00",
+  "archive_status": "lossless_immutable_preimages_not_current_instructions",
+  "files": {
+    "SPEC.md": {
+      "preimage": "root/SPEC.md",
+      "sha256": "sha256:140d5ef73862d7909b00520a6c2e35fbb78979530443eab37962fdc3fa23133a",
+      "bytes": 158969
+    },
+    "README.md": {
+      "preimage": "root/README.md",
+      "sha256": "sha256:b9e2ac00de138712d2550819dc253bdb3fba78d14767a3a8ec79cb4241b8380e",
+      "bytes": 57479
+    },
+    "docs/implementation-task-breakdown.md": {
+      "preimage": "root/docs/implementation-task-breakdown.md",
+      "sha256": "sha256:ccab42ecdd6acb4a6acd75bd9b1caf21aa9050e663b99c6110ded28baeae0adc",
+      "bytes": 17221
+    },
+    "docs/agent-goals/kg-research-agent.md": {
+      "preimage": "root/docs/agent-goals/kg-research-agent.md",
+      "sha256": "sha256:657efac3a86f18483fed14dfc18abf580d483a53d6419c8cb735a5305f0d457f",
+      "bytes": 11069
+    },
+    "docs/agent-goals/handoff-log.md": {
+      "preimage": "root/docs/agent-goals/handoff-log.md",
+      "sha256": "sha256:e19af27dc755047545efa4f8cff974ea67059b3ad4885f9f777f65973b63ee39",
+      "bytes": 12133
+    }
+  }
+}
