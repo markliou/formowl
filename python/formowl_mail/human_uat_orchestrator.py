@@ -206,7 +206,7 @@ _CODEX_CUSTOM_PROVIDER_LOGIN_METHOD = "custom_provider"
 _CODEX_CUSTOM_PROVIDER_ID = "formowl_uat_custom"
 _CODEX_CUSTOM_PROVIDER_NAME = "FormOwl UAT custom provider"
 _CODEX_CUSTOM_PROVIDER_WIRE_API = "responses"
-_DEFAULT_CODEX_MODEL = "gpt-5.5"
+_DEFAULT_CODEX_MODEL = "gpt-6-luna"
 _CODEX_SYSTEM_SKILL_NAMES = (
     "imagegen",
     "openai-docs",
