@@ -23,6 +23,10 @@ from formowl_gateway import (
     create_mail_upload_semantic_jsonrpc_gateway,
 )
 from formowl_gateway.remote import build_remote_tool_descriptors
+from formowl_gateway.jsonrpc import (
+    EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE,
+    SOURCE_EVIDENCE_RECHECK_PLANNING_GUIDANCE,
+)
 from formowl_ingestion.storage import UploadSessionStore
 from formowl_mail.exact import (
     AuthorizedSourceOccurrence,
@@ -34,6 +38,41 @@ from formowl_mail.semantic_plan import SemanticQueryPlan
 
 
 class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
+    def test_shared_mail_and_document_descriptions_separate_predicates_and_projections(self):
+        listed = SemanticMcpJsonRpcGateway(session=SemanticGatewaySession(
+            session_id="synthetic-planning-schema", actor_user_id="synthetic-planner",
+            workspace_id="workspace_main",
+        )).handle_json_rpc({
+            "jsonrpc": "2.0", "id": "planning-schema", "method": "tools/list",
+        })
+        local = {tool["name"]: tool for tool in listed["result"]["tools"]}
+        connected = {
+            tool.name: tool.model_dump(by_alias=True, exclude_none=True)
+            for tool in build_remote_tool_descriptors(
+                required_scope="formowl.use",
+                enabled_tool_names={"whoami", "query_mail_evidence", "query_effective_graph_view"},
+            )
+        }
+        for name in ("query_mail_evidence", "query_effective_graph_view"):
+            with self.subTest(tool=name):
+                for descriptor in (local[name], connected[name]):
+                    description = descriptor["description"]
+                    self.assertIn(EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE, description)
+                    self.assertIn(SOURCE_EVIDENCE_RECHECK_PLANNING_GUIDANCE, description)
+                    self.assertNotIn("initial retrieval with zero verified citations", description)
+                    self.assertIn("ALL lacking verified support requires one", description)
+                    self.assertIn("Partial misses MUST be disclosed and MUST NOT trigger", description)
+                    self.assertIn("projection failure alone neither triggers", description)
+                    terms = descriptor["inputSchema"]["properties"]["required_terms"]
+                    self.assertIn("same-item AND filters, not output projections", terms["description"])
+                    self.assertIn("even when it also names a requested field", terms["description"])
+                    self.assertIn("asking for an entity's category projects category", terms["description"])
+                    self.assertEqual(terms["minItems"], 1)
+                    self.assertEqual(terms["maxItems"], 8)
+                    self.assertEqual(terms["items"], {"type": "string", "minLength": 1, "maxLength": 80})
+                    self.assertFalse(descriptor["inputSchema"]["additionalProperties"])
+                    self.assertNotIn("requested_fields", descriptor["inputSchema"]["properties"])
+
     def test_tools_list_exposes_canonical_and_deprecated_alias_policy(self) -> None:
         gateway = SemanticMcpJsonRpcGateway(
             session=SemanticGatewaySession(
@@ -237,7 +276,7 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
                         "request contract determine source-family/scope; source-family and "
                         "operation/action words are not content terms unless the user explicitly "
                         "requests those literal words. These terms do not grant or widen "
-                        "authorization."
+                        "authorization. " + EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE
                     ),
                 },
             },

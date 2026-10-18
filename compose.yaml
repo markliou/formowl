@@ -1,5 +1,137 @@
+x-connected-environment: &connected-environment
+  FORMOWL_AUTH_MODE: oauth_google
+  FORMOWL_OAUTH_ISSUER: ${FORMOWL_OAUTH_ISSUER:?set the canonical public HTTPS origin}
+  FORMOWL_MCP_RESOURCE: ${FORMOWL_MCP_RESOURCE:?set the canonical public HTTPS /mcp URL}
+  # Discovery and production require the same operator-chosen predefined
+  # ChatGPT client id; only the redirect uses a discovery sentinel.
+  FORMOWL_CHATGPT_CLIENT_ID: ${FORMOWL_CHATGPT_CLIENT_ID:?set the exact operator-chosen predefined ChatGPT client id}
+  # Production: https://chatgpt.com/connector/oauth/<one RFC-unreserved segment>.
+  # The only placeholder is https://invalid.example.invalid/formowl-discovery-only.
+  FORMOWL_CHATGPT_REDIRECT_URI: ${FORMOWL_CHATGPT_REDIRECT_URI:?set the exact ChatGPT callback or reserved discovery-only sentinel}
+  FORMOWL_GOOGLE_CLIENT_ID: ${FORMOWL_GOOGLE_CLIENT_ID:?set the Google OAuth client id}
+  FORMOWL_GOOGLE_REDIRECT_URI: ${FORMOWL_GOOGLE_REDIRECT_URI:?set the exact FormOwl Google callback}
+  FORMOWL_OWNER_BOOTSTRAP_OPERATOR_SERVICE_ID: ${FORMOWL_OWNER_BOOTSTRAP_OPERATOR_SERVICE_ID:?set the deployment operator id}
+  FORMOWL_DATABASE_DSN_FILE: /run/secrets/formowl_database_dsn
+  FORMOWL_GOOGLE_CLIENT_SECRET_FILE: /run/secrets/formowl_google_client_secret
+  FORMOWL_OAUTH_STATE_ENCRYPTION_KEY_FILE: /run/secrets/formowl_state_encryption_key
+  FORMOWL_OAUTH_SIGNING_KEY_SET_FILE: /run/secrets/formowl_signing_key_set
+  FORMOWL_DATA_DIR: /data
+  FORMOWL_UPLOAD_SESSION_LIFETIME_SECONDS: ${FORMOWL_UPLOAD_SESSION_LIFETIME_SECONDS:-3600}
+  FORMOWL_CONNECTED_HOST: 0.0.0.0
+  FORMOWL_CONNECTED_PORT: 8000
+  FORMOWL_LOG_LEVEL: ${FORMOWL_LOG_LEVEL:-info}
+
+x-connected-secrets: &connected-secrets
+  - formowl_database_dsn
+  - formowl_google_client_secret
+  - formowl_state_encryption_key
+  - formowl_signing_key_set
+  - formowl_signing_key_current
+  - formowl_signing_key_previous
+
+x-connected-service: &connected-service
+  image: ${FORMOWL_RUNTIME_IMAGE:-formowl-runtime:local}
+  build:
+    context: .
+    dockerfile: containers/runtime/Dockerfile
+  environment: *connected-environment
+  secrets: *connected-secrets
+  volumes:
+    - formowl-data:/data
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+    - /run/formowl-secrets:size=1m,mode=0700
+  cap_drop:
+    - ALL
+  cap_add:
+    - CHOWN
+    - DAC_READ_SEARCH
+    - SETPCAP
+    - SETGID
+    - SETUID
+  security_opt:
+    - no-new-privileges:true
+
 services:
+  postgres:
+    image: ${FORMOWL_POSTGRES_IMAGE:-pgvector/pgvector@sha256:131dcf7ff6a900545df8e7e092c270aa8c6db2f2c818e408cb45ec21316b74e6}
+    environment:
+      POSTGRES_DB: formowl
+      POSTGRES_USER: formowl
+      POSTGRES_PASSWORD_FILE: /run/secrets/formowl_postgres_password
+    secrets:
+      - formowl_postgres_password
+    volumes:
+      - formowl-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U formowl -d formowl"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  connected-migrate:
+    <<: *connected-service
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  connected-mcp:
+    <<: *connected-service
+    command: ["serve"]
+    depends_on:
+      connected-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${FORMOWL_CONNECTED_PUBLISH_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "formowl-container-entrypoint",
+          "python",
+          "-c",
+          "import os, urllib.request; discovery = os.environ.get('FORMOWL_CHATGPT_REDIRECT_URI') == 'https://invalid.example.invalid/formowl-discovery-only'; path = '/healthz' if discovery else '/readyz'; urllib.request.urlopen('http://127.0.0.1:8000' + path, timeout=5).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  public-tls:
+    image: ${FORMOWL_TLS_PROXY_IMAGE:-formowl-public-tls-image-must-be-pinned}
+    profiles:
+      - public-tls
+    environment:
+      FORMOWL_PUBLIC_HOST: ${FORMOWL_PUBLIC_HOST:-invalid.invalid}
+      FORMOWL_ACME_EMAIL: ${FORMOWL_ACME_EMAIL:-operator@example.invalid}
+      FORMOWL_CONNECTED_PUBLISH_PORT: ${FORMOWL_CONNECTED_PUBLISH_PORT:-8000}
+    network_mode: host
+    volumes:
+      - ${FORMOWL_CADDYFILE:?set the ignored operator Caddyfile path}:/etc/caddy/Caddyfile:ro
+      - formowl-caddy-data:/data
+      - formowl-caddy-config:/config
+    depends_on:
+      connected-mcp:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
   project-mcp:
+    image: ${FORMOWL_RUNTIME_IMAGE:-formowl-runtime:local}
     build:
       context: .
       dockerfile: containers/runtime/Dockerfile
@@ -8,8 +140,10 @@ services:
       FORMOWL_DATA_DIR: /data
     volumes:
       - formowl-data:/data
+    stdin_open: true
 
   wiki-mcp:
+    image: ${FORMOWL_RUNTIME_IMAGE:-formowl-runtime:local}
     build:
       context: .
       dockerfile: containers/runtime/Dockerfile
@@ -18,6 +152,26 @@ services:
       FORMOWL_DATA_DIR: /data
     volumes:
       - formowl-data:/data
+    stdin_open: true
+
+secrets:
+  formowl_postgres_password:
+    file: ${FORMOWL_POSTGRES_PASSWORD_FILE:-./deploy/connected/secrets/postgres-password}
+  formowl_database_dsn:
+    file: ${FORMOWL_DATABASE_DSN_FILE:-./deploy/connected/secrets/database-dsn}
+  formowl_google_client_secret:
+    file: ${FORMOWL_GOOGLE_CLIENT_SECRET_FILE:-./deploy/connected/secrets/google-client-secret}
+  formowl_state_encryption_key:
+    file: ${FORMOWL_STATE_ENCRYPTION_KEY_FILE:-./deploy/connected/secrets/state-encryption-key}
+  formowl_signing_key_set:
+    file: ${FORMOWL_SIGNING_KEY_SET_FILE:-./deploy/connected/secrets/signing-key-set.json}
+  formowl_signing_key_current:
+    file: ${FORMOWL_SIGNING_KEY_CURRENT_FILE:-./deploy/connected/secrets/signing-current.pem}
+  formowl_signing_key_previous:
+    file: ${FORMOWL_SIGNING_KEY_PREVIOUS_FILE:-./deploy/connected/secrets/signing-previous.pem}
 
 volumes:
   formowl-data:
+  formowl-postgres:
+  formowl-caddy-data:
+  formowl-caddy-config:

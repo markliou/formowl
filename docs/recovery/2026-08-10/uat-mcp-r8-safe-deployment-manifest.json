@@ -1,8 +1,13 @@
 {
-  "artifact_id": "formowl_uat_mcp_r8_safe_deployment_manifest_v1",
+  "artifact_id": "formowl_uat_mcp_r8_safe_deployment_manifest_v5",
   "scope": "internal_diagnostic_uat_only",
   "action_boundary": {
-    "allowed_runtime_mutation": ["formowl-mcp-uat only"],
+    "allowed_runtime_mutation": [
+      "formowl-mcp-uat only",
+      "reversible start/stop state restoration of the unchanged formowl-codex-uat-sidecar and formowl-mail-diagnostic-uat only",
+      "safe diagnostic report files under docs/recovery/2026-08-10 only",
+      "deployment-owned staged candidate binding under docs/recovery/2026-08-10 only"
+    ],
     "must_not_build_deploy_restart_or_reconfigure": [
       "formowl-mail-diagnostic-uat",
       "formowl-codex-uat-sidecar",
@@ -16,10 +21,12 @@
   "read_only_inputs": {
     "container_inspect_snapshot_sha256": "sha256:614227fe991d3f9361f4f00a639aff51da87dc8dfdfbbc3e45c7ac3cff75797d",
     "reviewed_image_metadata_sha256": "sha256:845a37c9322e162b0d79f61e6b8834a50402d6180e35c1250f4a5d8bbc7b2f3f",
-    "direct_mcp_canary_sha256": "sha256:da29d474561d451c6c6e06fb812f3acf251c1dce19e962f6ba5dbbab3ebf6716",
+    "direct_mcp_canary_tracked_path": "docs/recovery/2026-08-10/direct-mcp-canary-r8.py",
+    "direct_mcp_canary_sha256": "sha256:fc10f8af7de9d71a039d109faeabbeefc75703a9045ba183b824f00e362ffa03",
     "build_context_source_manifest_sha256": "sha256:5eb9959ee3be1cfea292b6d1b2b329ed29dd1176ef82c139d04eefa9cda5bfa8",
     "build_context_dockerfile_sha256": "sha256:5dfd9e618eb1d94e2af25a3eda8fb89260c37cac8a3a145bb6f5a2482de1da05",
-    "root_compose_sha256": "sha256:34d374eb565b9a6d83b93c57d5f6ca6f21872b2b903985e77cac91968924b553"
+    "offline_acceptance_runner_tracked_path": "docs/recovery/2026-08-10/run-offline-semantic-acceptance-r8.py",
+    "offline_acceptance_runner_sha256": "sha256:464ff0386e6baf8cd276b916c73179bfa3776b5b9dce19d06d5b875b6df426a0"
   },
   "baseline": {
     "mcp_container": {
@@ -30,7 +37,10 @@
       "image_tag": "formowl-may-uat:candidate-kg-semantic-structured-native-aggregate-v4-20260807-r6",
       "network": "formowl-diagnostic-uat",
       "port_binding": "127.0.0.1:8091->8090/tcp",
-      "volume_roles": ["bridge:read_only", "private_directory:read_only"],
+      "volume_roles": [
+        "bridge:read_only",
+        "private_directory:read_only"
+      ],
       "environment_key_names": [
         "FORMOWL_MAIL_TOKENIZER_MODE",
         "GPG_KEY",
@@ -48,7 +58,11 @@
         "image_digest": "sha256:64d4c5775242442956243ae107c81217b74bb9c3ccc68dae59eff5c2a76f1fdc",
         "network": "formowl-diagnostic-uat",
         "port_binding": "8088/tcp",
-        "volume_roles": ["tokenizer_model", "run_state", "uat_state"],
+        "volume_roles": [
+          "tokenizer_model",
+          "run_state",
+          "uat_state"
+        ],
         "environment_key_names": [
           "FORMOWL_MAIL_TOKENIZER_MODE",
           "FORMOWL_UAT_CODEX_MODEL",
@@ -67,7 +81,11 @@
         "image_digest": "sha256:64d4c5775242442956243ae107c81217b74bb9c3ccc68dae59eff5c2a76f1fdc",
         "network": "formowl-diagnostic-uat",
         "port_binding": "8787/tcp",
-        "volume_roles": ["tokenizer_model", "codex_state", "run_state"],
+        "volume_roles": [
+          "tokenizer_model",
+          "codex_state",
+          "run_state"
+        ],
         "environment_key_names": [
           "FORMOWL_MAIL_TOKENIZER_MODE",
           "GPG_KEY",
@@ -95,10 +113,18 @@
     "volume_roles": [
       "bridge:read_only:preserved_from_baseline",
       "private_directory:read_only:preserved_from_baseline",
-      "reviewed_structural_bindings_file:read_only:overlay_from_explicit_placeholder"
+      "reviewed_structural_bindings_file:read_only:deployment_owned_staged_copy_after_hash_verification",
+      "candidate_union_admission_file:read_only:deployment_owned_staged_copy_after_hash_verification",
+      "candidate_union_plan_file:read_only:deployment_owned_staged_copy_after_hash_verification",
+      "candidate_union_execution_handoff_file:read_only:deployment_owned_staged_copy_after_hash_verification"
     ],
-    "environment_key_names": ["FORMOWL_MAIL_TOKENIZER_MODE"],
-    "container_runtime_identity": {"user": "65532:65532", "working_directory": "/opt/formowl"}
+    "environment_key_names": [
+      "FORMOWL_MAIL_TOKENIZER_MODE"
+    ],
+    "container_runtime_identity": {
+      "user": "65532:65532",
+      "working_directory": "/opt/formowl"
+    }
   },
   "acceptance_contract": {
     "query_class": "attribute_filter",
@@ -111,12 +137,243 @@
     "distinct_projection_count": 77,
     "fingerprint": "sha256:d791cfcd424910ed766f4092b51c6a9c1f1b756943935544134e626301e7c705",
     "single_mcp_query_call": 1,
-    "wall_timeout_seconds_strictly_less_than": 360
+    "wall_timeout_seconds_strictly_less_than": 360,
+    "preflight_artifact_type": "formowl_r8_semantic_deployment_preflight_v1",
+    "oracle_intersection_count": 77,
+    "oracle_missing_count": 0,
+    "oracle_unexpected_count": 0,
+    "candidate_exact_report_artifact_type": "formowl_candidate_union_exact_oracle_acceptance_report_v1",
+    "candidate_exact_release_decision": "CANDIDATE_EXACT_AGREE",
+    "candidate_exact_required_commitments": [
+      "runtime_module_sha256",
+      "source_python_tree_sha256",
+      "base_bridge_sha256",
+      "base_profile_sha256",
+      "base_authority_sha256",
+      "semantic_profile_file_sha256",
+      "semantic_profile_aliases_expected_commitment",
+      "current_export_snapshot_sha256",
+      "current_export_max_message_file_bytes_sha256",
+      "current_export_scope_manifest_sha256",
+      "current_export_selection_checkpoint_sha256",
+      "snapshot_xlsx_augmentation_sha256",
+      "augmentation_bridge_sha256",
+      "augmentation_profile_sha256",
+      "augmentation_authority_sha256",
+      "reviewed_structural_binding_sha256",
+      "candidate_union_runtime_admission_sha256",
+      "candidate_union_plan_sha256",
+      "candidate_union_execution_handoff_sha256",
+      "candidate_union_ledger_module_sha256",
+      "candidate_union_materializer_module_sha256",
+      "candidate_union_structural_projection_module_sha256",
+      "candidate_union_reviewed_structural_bindings_module_sha256",
+      "candidate_union_current_export_table_snapshot_module_sha256",
+      "candidate_union_xlsx_attachment_augmentation_module_sha256",
+      "private_oracle_sha256"
+    ],
+    "candidate_exact_validation_keys": [
+      "candidate_union_admission_bound",
+      "candidate_union_plan_valid",
+      "candidate_union_execution_handoff_valid",
+      "candidate_union_retained_lineage_valid",
+      "candidate_only_claim_contract_valid",
+      "deterministic_repeat_match",
+      "runtime_projection_matches_handoff",
+      "oracle_loaded_after_package_runtime_freeze",
+      "oracle_exact_match",
+      "expected_constants_match"
+    ],
+    "candidate_exact_execution_binding_keys": [
+      "candidate_union_execution_handoff_sha256",
+      "frozen_projection_fingerprint",
+      "runtime_projection_fingerprint",
+      "oracle_file_sha256",
+      "semantic_request_sha256"
+    ],
+    "candidate_disclaimed_semantics": {
+      "source_complete": false,
+      "current_state": false,
+      "source_precedence": false,
+      "occurrence_equivalence": false
+    },
+    "deterministic_repeat_match": true,
+    "runtime_projection_matches_handoff": true,
+    "oracle_loaded_after_package_runtime_freeze": true,
+    "candidate_exact_semantic_request_sha256": "sha256:20f30eb32c7525b9bedaf68b358fa0140c43cc6a77f2af03cec124a5e1dc012b",
+    "candidate_exact_semantic_request_grounding": {
+      "object_type": {
+        "mention": "表格",
+        "canonical": "html_table"
+      },
+      "predicate": {
+        "mention": "COO",
+        "canonical": "coo"
+      },
+      "value": {
+        "mention": "日本",
+        "canonical": "japan"
+      },
+      "projection": {
+        "mention": "料號",
+        "canonical": "p/n"
+      }
+    }
+  },
+  "current_release_gate": {
+    "status": "blocked",
+    "reason": "exact_oracle_mismatch_after_candidate_runtime_freeze",
+    "oracle_loaded_after_candidate_and_runtime_freeze": true,
+    "deterministic_repeat_match": true,
+    "frozen_candidate_distinct_projection_count": 3,
+    "oracle_distinct_projection_count": 77,
+    "oracle_intersection_count": 1,
+    "oracle_missing_count": 76,
+    "oracle_unexpected_count": 2,
+    "deployment_allowed": false,
+    "runner_sha256_finalized": false
+  },
+  "browser_contract_gate": {
+    "verifier_tracked_path": "docs/recovery/2026-08-10/verify-browser-contract-r8.py",
+    "verifier_sha256": "sha256:8650c0a7fd613efc52fb0da59a4d18ba706fc0dd9b445ed2d2a4f08f938b543c",
+    "base_url": "http://127.0.0.1:8088",
+    "artifact_type": "formowl_browser_diagnostic_contract_v2",
+    "report_path": "docs/recovery/2026-08-10/browser-contract-r8.safe.json",
+    "report_path_requirements": [
+      "fixed plan-local path",
+      "missing or regular non-symlink report target"
+    ],
+    "preserved_uat_lifecycle": {
+      "record_prior_running_or_stopped_state_before_candidate_mutation": true,
+      "start_order_after_accepted_candidate": [
+        "formowl-codex-uat-sidecar",
+        "formowl-mail-diagnostic-uat"
+      ],
+      "required_local_ports": {
+        "formowl-codex-uat-sidecar": "127.0.0.1:8787",
+        "formowl-mail-diagnostic-uat": "127.0.0.1:8088"
+      },
+      "config_contract": "exact pre-start safe configuration fingerprints and declared port bindings must remain unchanged",
+      "failure_action": "restore both preserved containers to their exact recorded running/stopped states before terminal rollback reporting"
+    },
+    "immutable_health_contract": {
+      "status": "ready",
+      "conversation_engine": "codex_app_server",
+      "formowl_mcp_required": true,
+      "configured_mcp_server_count": 1,
+      "configured_mcp_tool_count": 1
+    },
+    "immutable_trace_contract": {
+      "model_backed": true,
+      "mcp_call_count": 1,
+      "mcp_server": "formowl",
+      "mcp_tool": "query_effective_graph_view",
+      "retrieval_path": "mail_authorized_structured_set",
+      "canonical_kg": false,
+      "source_count": 0
+    },
+    "claim_and_direct_metadata_binding": "claim_state, canonical_kg, derived zero citation/source counts, and canonical semantic request hash are validated from the immediately preceding direct-MCP canary report; the zero counts are derived only after the raw MCP payload has exactly empty citation_handles and no other source/citation-bearing fields or handles, and the browser response is not required to duplicate them"
+  },
+  "direct_canary_contract": {
+    "tracked_path": "docs/recovery/2026-08-10/direct-mcp-canary-r8.py",
+    "canonical_semantic_request_sha256": "sha256:20f30eb32c7525b9bedaf68b358fa0140c43cc6a77f2af03cec124a5e1dc012b",
+    "canonical_semantic_request_grounding": {
+      "object_type": {
+        "mention": "表格",
+        "canonical": "html_table"
+      },
+      "predicate": {
+        "mention": "COO",
+        "canonical": "coo"
+      },
+      "value": {
+        "mention": "日本",
+        "canonical": "japan"
+      },
+      "projection": {
+        "mention": "料號",
+        "canonical": "p/n"
+      }
+    },
+    "mcp_server": "formowl",
+    "mcp_tool": "query_effective_graph_view",
+    "tools_call_count": 1,
+    "raw_mcp_evidence_contract": {
+      "required_empty_field": "citation_handles",
+      "forbidden_fields": "all other source/citation-bearing payload fields or handles, including nested fields",
+      "raw_source_count_field_required": false,
+      "raw_citation_count_field_required": false
+    },
+    "derived_safe_counts": {
+      "citation_count": 0,
+      "source_count": 0,
+      "derivation_gate": "only after the raw MCP evidence contract passes"
+    },
+    "safe_report_contract": "status, canonical semantic request hash, direct MCP metadata, exact structured-set result metadata, derived zero source/citation counts, count, and fingerprint",
+    "invalid_result_action": "rollback before preserved UAT lifecycle and browser contract gate"
   },
   "rollback": {
     "strategy": "rename_preserved_stopped_baseline_back_after_removing_candidate",
     "baseline_state_preserved": "stopped",
-    "warning": "The observed baseline had exit code 137 and was not healthy; rollback restores its configuration and stopped state, not a known-good service."
+    "warning": "The observed baseline had exit code 137 and was not healthy; rollback restores its configuration and stopped state, not a known-good service.",
+    "terminal_state_contract": [
+      "atomically replace stale prior result with in_progress at attempt start",
+      "record failed only after verified candidate removal, baseline restoration, and exact preserved UAT state restoration",
+      "record rollback_failed when verification cannot complete"
+    ]
   },
-  "claim_boundary": "Diagnostic UAT only. This manifest does not change methodology authority, deploy anything, or assert production readiness."
+  "claim_boundary": "Diagnostic UAT only. This manifest does not change methodology authority, deploy anything, or assert production readiness.",
+  "candidate_binding_staging": {
+    "source_contract": "verified regular non-symlink binding with exact SHA-256",
+    "staged_file": "deployment-owned fixed plan-local regular file mode 0600",
+    "docker_mount_contract": "Docker inspect must report that exact staged source and matching SHA-256"
+  },
+  "candidate_union_runtime_build_context": {
+    "status": "blocked_by_exact_oracle_mismatch_and_unstable_runner",
+    "must_fail_closed_until_materialized": true,
+    "required_hash_bound_inputs": [
+      "candidate_union_runtime_adapter",
+      "candidate_union_ledger_module",
+      "candidate_union_materializer_module",
+      "candidate_union_structural_projection_module",
+      "candidate_union_reviewed_structural_bindings_module",
+      "candidate_union_current_export_table_snapshot_module",
+      "candidate_union_xlsx_attachment_augmentation_module",
+      "candidate_union_admission",
+      "candidate_union_plan",
+      "candidate_union_execution_handoff",
+      "candidate_union_snapshot_input_manifest"
+    ],
+    "staging_contract": "after the final runner and source-only artifacts are supplied, generate a deployment-owned build context from verified bytes, copy the exact runtime adapter and all six hash-bound runtime companions into the candidate image, and mount the exact reviewed binding, admission, plan, and handoff files readonly while retaining the existing private snapshot inputs.",
+    "current_deployability": "blocked; the post-freeze exact oracle gate found 3 candidate projections against 77 oracle projections (intersection 1, missing 76, unexpected 2), and the final no-oracle runner SHA-256 is not stabilized",
+    "generated_overlay_contract": {
+      "runtime_target": "/opt/formowl/scripts/formowl_diagnostic_mcp_sharded.py",
+      "copied_modules": [
+        "formowl_diagnostic_mcp_sharded.py",
+        "r8_source_only_ledgers.py",
+        "formowl_materialize_reviewed_bindings_private.py",
+        "diagnostic_structural_projection.py",
+        "reviewed_structural_bindings.py",
+        "diagnostic_current_export_table_snapshot.py",
+        "diagnostic_xlsx_attachment_augmentation.py"
+      ],
+      "mounted_candidate_artifacts": [
+        "reviewed_structural_binding",
+        "candidate_union_admission",
+        "candidate_union_plan",
+        "candidate_union_execution_handoff"
+      ],
+      "runtime_selector": "candidate_union_admission_hash_profile_aliases_plan_handoff",
+      "candidate_union_plan_container_path": "/formowl/private/reviews/candidate-union-plan.private.json",
+      "required_runtime_arguments": [
+        "--candidate-union-runtime-admission",
+        "--candidate-union-runtime-admission-sha256",
+        "--candidate-union-semantic-profile-aliases-commitment",
+        "--candidate-union-plan",
+        "--candidate-union-execution-handoff"
+      ],
+      "retain_full_base_runtime_arguments": true,
+      "docker_inspect_requires_exact_cmd_mounts_and_context_hash": true
+    }
+  }
 }

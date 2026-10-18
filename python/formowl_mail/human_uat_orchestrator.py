@@ -188,7 +188,7 @@ _CODEX_CUSTOM_PROVIDER_LOGIN_METHOD = "custom_provider"
 _CODEX_CUSTOM_PROVIDER_ID = "formowl_uat_custom"
 _CODEX_CUSTOM_PROVIDER_NAME = "FormOwl UAT custom provider"
 _CODEX_CUSTOM_PROVIDER_WIRE_API = "responses"
-_DEFAULT_CODEX_MODEL = "gpt-5.5"
+_DEFAULT_CODEX_MODEL = "gpt-6-luna"
 _CODEX_SYSTEM_SKILL_NAMES = (
     "imagegen",
     "openai-docs",
@@ -3827,7 +3827,7 @@ def diagnostic_deployment_settings(
         "host": host, "port": port, "temporary_lan_diagnostic": True,
         "record_raw_uat_interactions": record_raw_uat_interactions,
         "temporary_access_enabled": temporary_access_enabled,
-        "provider_transport": "codex_responses", "model": "gpt-5.5",
+        "provider_transport": "codex_responses", "model": _DEFAULT_CODEX_MODEL,
         "reasoning_effort": "high", "stream_initial_requests": True,
         "provider_endpoint_fingerprint": sha256_json(provider_base_url.rstrip("/")),
     }

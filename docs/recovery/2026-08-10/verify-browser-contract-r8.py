@@ -48,6 +48,19 @@ _SOURCE_OR_CITATION_DUMP_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_SOURCE_OR_CITATION_PROSE_RE = re.compile(
+    r"(?:"
+    r"(?:^|\s)(?:sources?|citations?|references?|evidence)(?:[\s_-]+)"
+    r"(?:id|ids|ref|refs|url|urls|uri|uris|handle|handles|locator|locators|"
+    r"redacted|omitted|withheld|hidden|unavailable|not\s+(?:available|included))\b"
+    r"|(?:^|\s)(?:(?:the|a|an)\s+)?(?:sources?|citations?|references?|evidence)"
+    r"\s+(?:(?:is|are|was|were|remain|remains)|(?:has|have)\s+been)\s+"
+    r"(?:redacted|omitted|withheld|hidden|unavailable|not\s+(?:available|included))\b"
+    r"|(?:來源|參考來源|引用|證據來源|證據)(?:已|已被|被)?"
+    r"(?:隱藏|隱去|遮蔽|省略|刪除|未提供|不可用|無法取得)"
+    r")",
+    re.IGNORECASE,
+)
 _RAW_DUMP_RE = re.compile(
     r"(?:structuredContent|complete_projection|citation_handles|"
     r"source_observation_id|email_message_id|retrieval_trace|"
@@ -81,7 +94,6 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--health-path", default="/api/health")
-    parser.add_argument("--summary-path", default="/api/session-summary")
     parser.add_argument("--query-path", default="/api/chat")
     parser.add_argument("--query", default=DEFAULT_QUERY)
     parser.add_argument("--expected-fingerprint", default=EXPECTED_FINGERPRINT)
@@ -139,43 +151,25 @@ def _mappings(value: Any) -> Iterator[Mapping[str, Any]]:
             yield from _mappings(nested)
 
 
-def _find_metadata(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+def _find_trace(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     trace = payload.get("trace")
-    orchestration = payload.get("orchestration")
     if (
-        not isinstance(trace, Mapping)
+        payload.get("status") != "ok"
+        or not isinstance(trace, Mapping)
+        or trace.get("model_backed") is not True
         or trace.get("retrieval_path") != EXPECTED_RETRIEVAL_PATH
         or type(trace.get("mcp_call_count")) is not int
         or trace.get("mcp_call_count") != 1
-        or payload.get("claim_state") != "CANDIDATE_MATCHES"
-        or payload.get("canonical_kg") is not False
+        or trace.get("mcp_server") != "formowl"
+        or trace.get("mcp_tool") != "query_effective_graph_view"
+        or not isinstance(trace.get("retrieval_layer"), str)
+        or not trace["retrieval_layer"].strip()
+        or trace.get("canonical_kg") is not False
         or type(payload.get("source_count")) is not int
         or payload.get("source_count") != 0
-        or type(payload.get("citation_count")) is not int
-        or payload.get("citation_count") != 0
-        or not isinstance(orchestration, Mapping)
-        or orchestration.get("action") != "call_formowl_tool"
-        or orchestration.get("response_kind") != "answer"
-        or orchestration.get("formowl_tool_called") is not True
-        or not isinstance(orchestration.get("model"), str)
-        or not orchestration["model"].strip()
     ):
         raise VerificationFailure("browser response lacks the required diagnostic metadata")
     return trace
-
-
-def _summary_counts(payload: Mapping[str, Any]) -> tuple[int, int]:
-    chat_count = payload.get("chat_count")
-    tool_count = payload.get("formowl_tool_call_count")
-    if (
-        payload.get("status") != "ready"
-        or type(chat_count) is not int
-        or chat_count < 0
-        or type(tool_count) is not int
-        or tool_count < 0
-    ):
-        raise VerificationFailure("browser session summary is invalid")
-    return chat_count, tool_count
 
 
 def _answer_text(payload: Mapping[str, Any]) -> str:
@@ -242,6 +236,8 @@ def _validate_answer_surface(answer: str) -> None:
     if any(_SOURCE_HEADING_RE.match(line) for line in lines):
         raise VerificationFailure("browser answer contains sources or citations")
     if any(_SOURCE_OR_CITATION_DUMP_RE.search(line) for line in lines):
+        raise VerificationFailure("browser answer contains sources or citations")
+    if any(_SOURCE_OR_CITATION_PROSE_RE.search(line) for line in lines):
         raise VerificationFailure("browser answer contains sources or citations")
     if any(_RAW_DUMP_RE.search(line) for line in lines):
         raise VerificationFailure("browser answer contains a raw diagnostic dump")
@@ -344,7 +340,6 @@ def verify_browser_contract(
     *,
     base_url: str,
     health_path: str,
-    summary_path: str,
     query_path: str,
     query: str,
     expected_fingerprint: str,
@@ -356,18 +351,16 @@ def verify_browser_contract(
         raise VerificationFailure("expected fingerprint is invalid")
 
     health = _request_json(_safe_url(base_url, health_path), timeout_seconds=10)
-    conversation_model = health.get("conversation_model")
     if (
         health.get("status") != "ready"
-        or health.get("surface") != "mail_human_uat"
-        or health.get("conversation_orchestrator_enabled") is not True
-        or not isinstance(conversation_model, str)
-        or not conversation_model.strip()
+        or health.get("conversation_engine") != "codex_app_server"
+        or health.get("formowl_mcp_required") is not True
+        or type(health.get("configured_mcp_server_count")) is not int
+        or health.get("configured_mcp_server_count") != 1
+        or type(health.get("configured_mcp_tool_count")) is not int
+        or health.get("configured_mcp_tool_count") != 1
     ):
         raise VerificationFailure("browser health endpoint is not ready")
-    before_chat_count, before_tool_count = _summary_counts(
-        _request_json(_safe_url(base_url, summary_path), timeout_seconds=10)
-    )
 
     response = _request_json(
         _safe_url(base_url, query_path),
@@ -378,37 +371,28 @@ def verify_browser_contract(
         },
         timeout_seconds=390,
     )
-    metadata = _find_metadata(response)
-    orchestration = response["orchestration"]
-    if orchestration["model"] != conversation_model:
-        raise VerificationFailure("browser response is not bound to the ready sidecar model")
-    after_chat_count, after_tool_count = _summary_counts(
-        _request_json(_safe_url(base_url, summary_path), timeout_seconds=10)
-    )
-    if (
-        after_chat_count - before_chat_count != 1
-        or after_tool_count - before_tool_count != 1
-    ):
-        raise VerificationFailure("browser route did not perform exactly one sidecar tool turn")
+    trace = _find_trace(response)
     bullets = _distinct_bullets(_answer_text(response), expected_count=expected_count)
     observed_fingerprint = _projection_fingerprint(bullets)
     if observed_fingerprint != expected_fingerprint:
         raise VerificationFailure("browser answer fingerprint does not match")
     return {
-        "artifact_type": "formowl_browser_diagnostic_contract_v1",
+        "artifact_type": "formowl_browser_diagnostic_contract_v2",
         "status": "passed",
         "query_route": "browser_to_sidecar_to_one_mcp",
-        "conversation_model_sha256": "sha256:"
-        + hashlib.sha256(conversation_model.encode("utf-8")).hexdigest(),
         "query_sha256": "sha256:" + hashlib.sha256(query.encode("utf-8")).hexdigest(),
-        "retrieval_path": metadata["retrieval_path"],
-        "mcp_call_count": metadata["mcp_call_count"],
-        "chat_count_delta": after_chat_count - before_chat_count,
-        "formowl_tool_call_count_delta": after_tool_count - before_tool_count,
-        "claim_state": response["claim_state"],
-        "canonical_kg": response["canonical_kg"],
+        "conversation_engine": health["conversation_engine"],
+        "formowl_mcp_required": True,
+        "configured_mcp_server_count": 1,
+        "configured_mcp_tool_count": 1,
+        "mcp_server": trace["mcp_server"],
+        "mcp_tool": trace["mcp_tool"],
+        "retrieval_path": trace["retrieval_path"],
+        "retrieval_layer": trace["retrieval_layer"],
+        "mcp_call_count": trace["mcp_call_count"],
+        "model_backed": True,
+        "canonical_kg": trace["canonical_kg"],
         "source_count": response["source_count"],
-        "citation_count": response["citation_count"],
         "fingerprint": observed_fingerprint,
         "distinct_projection_count": len(bullets),
         "distinct_bullet_count": len(bullets),
@@ -428,7 +412,6 @@ def main() -> int:
         report = verify_browser_contract(
             base_url=args.base_url,
             health_path=args.health_path,
-            summary_path=args.summary_path,
             query_path=args.query_path,
             query=args.query,
             expected_fingerprint=args.expected_fingerprint,
@@ -438,7 +421,7 @@ def main() -> int:
         _write_report(
             args.report,
             {
-                "artifact_type": "formowl_browser_diagnostic_contract_v1",
+                "artifact_type": "formowl_browser_diagnostic_contract_v2",
                 "status": "failed",
                 "reason": str(error),
             },

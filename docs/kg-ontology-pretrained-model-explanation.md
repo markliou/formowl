@@ -2,7 +2,7 @@
 
 **現行方向：GitHub issue #56**
 
-**狀態（2026-08-18）：方法目標已固定，但 runtime authority 仍是 `blocked`**
+**狀態（2026-10-18）：產品語意標註規格已釐清，功能待實作／待測；方法論仍 blocked**
 
 ## 一句話結論
 
@@ -11,16 +11,18 @@ FormOwl 背後不是只靠一個「KG LLM」。正確設計是把模型角色拆
 
 ```text
 BM25 + dense retrieval 找原始證據
+LLM 離線分批讀取郵件、文件及所有範圍內附件，產生可回溯來源的語意候選
 KG 做跨來源實體整合、join、時間與 provenance
-ontology 做 scoped、可審核、有限度的 soft scoring
+ontology 提供實體／事件／主張／關係／時間語意及文件標註；scoring 只是其中一環
 exact set / count 交給 deterministic executor
-LLM 只根據授權證據規劃或產生有 citation 的答案
+查詢 LLM 解讀問題、透過標註選來源，再讀原文生成有 citation 的答案
 ```
 
-目前不能宣稱 KG + ontology 已經比 RAG 好。現行 runtime 還是
-`ascii_identifier_regex_v1`，而目標是
-`jieba_sentencepiece_frozen_profile_candidate_admission_v1`；可執行 authority
-gate 尚未通過。
+目前不能宣稱 KG + ontology 已比 RAG 好。`ascii_identifier_regex_v1` 是
+2026-08-18 的歷史紀錄，不是現行 runtime 宣告。authority manifest 與
+2026-10-02 dev-container 紀錄已對齊 frozen tokenizer，但不等於 source completeness
+或方法論驗收通過。現在狀態須由 executable authority 決定；host 缺少相依套件
+不能取代 canonical container 證據。
 
 ## 1. 背後要用哪一個 LLM？
 
@@ -28,7 +30,7 @@ gate 尚未通過。
 
 ```text
 query planner model（若有）
-candidate extraction / entity-linking model（若有）
+semantic-reading model（ontology-aware 必須記錄）及 entity-linking model（若有）
 embedding model
 reranker model（若有）
 final answer model
@@ -119,6 +121,26 @@ TimeInterval、StateTransition、Location。
 Email message、calendar event、ticket、drive document 都保留原本 source type，
 再映射到 shared core；不把 mail-specific schema 當成整個企業 ontology。
 
+### 文件標註不是「字串切開就算完成」
+
+依 [SPEC §3.1.1](../SPEC.md#311-explicit-execution-modes-and-ontology-aware-uat-contract)，
+先保存原文與原生座標，再以 LLM 分批讀完整宣告範圍並整合跨段落／信件／附件
+脈絡。規則、regex、embedding 可輔助找識別碼或候選，不能代替語意閱讀。
+每個單位記錄 annotated / pending / unsupported / failed；讀完沒有主張可以是
+零候選，但沒讀到、被截斷、附件解析失敗不能記成零候選成功。
+
+標註要連到特定實體、項次、事件／主張、時間角色、原文位置及更新關係，而非
+只掛一個「交期」標籤。交期承諾、出貨日、發票日不是同一欄；較新的信件也不
+代表整張訂單被取代。跨文件關係及 supersedes 都要有來源支持，canonical
+發布仍經審核或已授權治理政策。
+
+產品要求分成 direct_evidence_baseline 與 ontology_aware_uat 兩種證明範圍，
+不是另開兩套服務，也不是已部署的旗標。後者全量驗收要有完整語意處理及實際
+標註使用證據；前者仍能查原文。缺標註不能證明沒有資料，也不能讓有證據的
+回答全部停擺；補查仍受 SPEC §7.3.1 所有要求欄位皆缺少的條件及預算約束。
+以既有 owners 保留批次 checkpoint，來源或 profile 改變才增量處理及新增 revision，
+不因使用者每問一題就重新標註。
+
 ## 5. Hard gate 與 soft ontology
 
 可以 hard fail closed 的項目：
@@ -195,9 +217,8 @@ evaluator 與硬體環境。
 python3 scripts/methodology_authority_check.py --require-ready
 ```
 
-目前會 exit 1，因為：
+現行 manifest 的四項方法論 gate 仍 blocked：
 
-- runtime 還沒使用 frozen Hybrid-v2 tokenizer/profile；
 - raw source 到 Observation 的 completeness 未與 oracle 對齊；
 - reports 未綁定同一 execution fingerprint；
 - 缺少 same-pipeline real-source ablation；
@@ -205,6 +226,12 @@ python3 scripts/methodology_authority_check.py --require-ready
 
 因此現在可以做 implementation 與 diagnostic POC，但不能做 methodology-quality
 UAT、不能宣稱 KG/ontology superiority，也不能把 issue #56 關閉。
+命令實際 exit code 依當次環境決定；host 缺 tokenizer 相依時可能是 invalid/exit 2，
+不可說成 canonical runtime 已退回 regex。這次文件修改沒有變更 frozen 實驗。
+
+產品驗收依 SPEC §15.6：從網頁輸入、以網頁答案及引用核對原始資料；至少 mail+
+附件及獨立專案／文件兩類案例，保留一般聊天。背景完成、MCP 有呼叫、API 測試
+通過都不算；有來源可答卻只說查不到仍是失敗，不可算「安全回答通過」。
 
 ## 9. 最後整理
 

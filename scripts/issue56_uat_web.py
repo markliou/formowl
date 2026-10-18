@@ -41,7 +41,7 @@ from formowl_mail.human_uat_orchestrator import (  # noqa: E402
     validate_codex_runtime_state,
 )
 
-_MODEL = "gpt-5.5"
+_MODEL = "gpt-6-luna"
 _MAX_PROVIDER_API_KEY_BYTES = 16 * 1024
 _MAX_REFERENCE_REPAIR_MANIFEST_BYTES = 1024 * 1024
 
@@ -108,6 +108,7 @@ def _finish_prepared_ingestion_revision(
     pause_before_graph_file: Path | None = None,
     projection_connection: object | None = None,
     max_candidates: int | None = None,
+    seed_dense_cache_from: Path | None = None,
 ) -> dict:
     """Build or resume from the durable source-pass checkpoint."""
     from formowl_contract import (
@@ -135,6 +136,8 @@ def _finish_prepared_ingestion_revision(
         build_issue56_ingestion_revision,
     )
 
+    if seed_dense_cache_from is not None and projection_connection is None:
+        raise ValueError("dense cache seeding requires the indexed offline preparation finish route")
     resumed_from_preparation = prepared_observations is None
     preparation_path = preparation_directory / "preparation.json"
     snapshot_path = preparation_directory / "observations.json"
@@ -198,6 +201,7 @@ def _finish_prepared_ingestion_revision(
             pause_before_embedding_file=pause_before_embedding_file,
             pause_before_graph_file=pause_before_graph_file,
             max_candidates=max_candidates,
+            seed_dense_cache_from=seed_dense_cache_from,
         )
     if pause_before_graph_file is not None:
         raise ValueError("pre-graph operator wait requires the indexed preparation route")
@@ -463,7 +467,8 @@ def _authorized_ingestion_root_source_kinds(authority) -> set[str]:
 
     asset = authority.asset
     root_runs = [
-        run for run in authority.runs
+        run
+        for run in authority.runs
         if run.asset_id == asset.asset_id and run.status == "succeeded"
     ]
     if not root_runs or any(run.input_hash != asset.content_hash for run in root_runs):
@@ -511,7 +516,8 @@ def _accepted_governed_mail_root_source_ref(source_ref: Any) -> dict[str, str]:
         )
 
     if system == "formowl_upload_session" and source_type in {
-        "mail_archive_upload", "mail_archive",
+        "mail_archive_upload",
+        "mail_archive",
     }:
         if not safe_identifier(source_id):
             raise ValueError("registered mail upload provenance is unavailable")
@@ -519,7 +525,10 @@ def _accepted_governed_mail_root_source_ref(source_ref: Any) -> dict[str, str]:
         if not safe_identifier(source_id) or not safe_identifier(source_key):
             raise ValueError("registered local mail provenance is unavailable")
     elif system == "local_folder_inbox" and source_type == "file_content":
-        if not isinstance(source_id, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", source_id) is None:
+        if (
+            not isinstance(source_id, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", source_id) is None
+        ):
             raise ValueError("registered inbox mail provenance is unavailable")
     else:
         raise ValueError("registered mail source provenance is unsupported")
@@ -549,6 +558,7 @@ def _finish_indexed_ingestion_revision(
     pause_before_embedding_file: Path | None,
     pause_before_graph_file: Path | None = None,
     max_candidates: int | None = None,
+    seed_dense_cache_from: Path | None = None,
 ) -> dict:
     """Existing checkpoint -> paged owner records -> stored session/graph seal."""
     from formowl_contract import PermissionScope, sha256_json
@@ -610,7 +620,8 @@ def _finish_indexed_ingestion_revision(
         raise ValueError("indexed source root authority is unavailable")
     source = validated_authorized_semantic_source(
         source_kind=(
-            next(iter(source_kinds)) if len(source_kinds) == 1
+            next(iter(source_kinds))
+            if len(source_kinds) == 1
             else AUTHORIZED_MULTISOURCE_OBSERVATION_SOURCE_KIND
         ),
         workspace_id=WORKSPACE_ID,
@@ -660,6 +671,9 @@ def _finish_indexed_ingestion_revision(
             flush=True,
         )
 
+    dense_vector_cache = DenseEvidenceVectorCache(directory / "dense-cache")
+    if seed_dense_cache_from is not None:
+        progress(dense_vector_cache.seed_from(seed_dense_cache_from))
     progress({"phase": "indexing_prepared_source_references"})
     indexed_references = references[:max_candidates] if max_candidates is not None else references
     records.index_prepared_references(
@@ -687,7 +701,7 @@ def _finish_indexed_ingestion_revision(
         runtime_store=store,
         source_binding=source_binding,
         source_authority_fingerprint=source_binding["source_authority_fingerprint"],
-        dense_vector_cache=DenseEvidenceVectorCache(directory / "dense-cache"),
+        dense_vector_cache=dense_vector_cache,
         dense_build_progress=progress,
         streaming_candidate_limit=max_candidates,
     )
@@ -830,13 +844,17 @@ def _open_ingestion_projection_connection(path: Path):
 
 
 def _compose_independent_root_preparation(
-    directory: Path, *, base_preparation_directory: Path,
+    directory: Path,
+    *,
+    base_preparation_directory: Path,
     document_preparation_directory: Path,
 ) -> dict:
     """Append one prepared PlainText root; never hydrate the base Observations."""
     from formowl_contract import sha256_json
     from formowl_mail.issue56_sealed_source import (
-        APPROVER_ACTOR, WORKSPACE_ID, _MAX_INGESTION_REVISION_SOURCE_BYTES,
+        APPROVER_ACTOR,
+        WORKSPACE_ID,
+        _MAX_INGESTION_REVISION_SOURCE_BYTES,
         open_ingestion_revision_job_authorities,
     )
     from formowl_mail.semantic_plan import AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND
@@ -862,28 +880,36 @@ def _compose_independent_root_preparation(
             preparation.get("artifact_id") != "formowl_issue56_ingestion_revision_preparation_v1"
             or fingerprint != sha256_json(preparation)
             or preparation.get("snapshot_size_bytes") != len(snapshot_bytes)
-            or preparation.get("snapshot_sha256") != "sha256:" + hashlib.sha256(snapshot_bytes).hexdigest()
+            or preparation.get("snapshot_sha256")
+            != "sha256:" + hashlib.sha256(snapshot_bytes).hexdigest()
             or preparation.get("exact_lookup_manifest_sha256")
             != "sha256:" + hashlib.sha256(exact_bytes).hexdigest()
             or source.get("exact_lookup_manifest_sha256")
             != preparation["exact_lookup_manifest_sha256"]
             or exact.get("artifact_id") != "formowl_issue56_ingestion_exact_cell_lookup_v1"
             or exact_fingerprint != sha256_json(exact)
-            or snapshot.get("bundles") != [] or snapshot.get("observations") is not None
+            or snapshot.get("bundles") != []
+            or snapshot.get("observations") is not None
             or not isinstance(snapshot.get("observation_references"), list)
-            or source.get("source_authority_fingerprint") != sha256_json({
-                "artifact_id": "formowl_completed_ingestion_job_authority_v1",
-                "requester_user_id": APPROVER_ACTOR, "workspace_id": WORKSPACE_ID,
-                "jobs": source["jobs"],
-            })
+            or source.get("source_authority_fingerprint")
+            != sha256_json(
+                {
+                    "artifact_id": "formowl_completed_ingestion_job_authority_v1",
+                    "requester_user_id": APPROVER_ACTOR,
+                    "workspace_id": WORKSPACE_ID,
+                    "jobs": source["jobs"],
+                }
+            )
             or exact.get("source_authority_fingerprint") != source["source_authority_fingerprint"]
         ):
             raise ValueError("independent-root preparation seal is invalid")
         exclusions = None
         for name, expected in (
             ("sidecar-parent-binding.json", preparation.get("sidecar_parent_binding_sha256")),
-            ("bound-child-failure-exclusions.json",
-             (preparation.get("bound_child_failure_binding") or {}).get("manifest_byte_sha256")),
+            (
+                "bound-child-failure-exclusions.json",
+                (preparation.get("bound_child_failure_binding") or {}).get("manifest_byte_sha256"),
+            ),
         ):
             if expected is not None:
                 raw = (path / name).read_bytes()
@@ -892,7 +918,8 @@ def _compose_independent_root_preparation(
                 if name == "bound-child-failure-exclusions.json":
                     exclusions = json.loads(raw)
         authorities = open_ingestion_revision_job_authorities(
-            snapshot["job_store_bindings"], exclusions,
+            snapshot["job_store_bindings"],
+            exclusions,
         )
         # Source jobs keep nested supplements; store bindings remain a flat index.
         pending = list(source["jobs"])
@@ -907,7 +934,8 @@ def _compose_independent_root_preparation(
             set(jobs) != {a.job_fingerprint for a in authorities}
             or preparation["job_count"] != len(source["jobs"])
             or exact["job_count"] != len(authorities)
-            or preparation["source_observation_count"] != sum(a.observation_count for a in authorities)
+            or preparation["source_observation_count"]
+            != sum(a.observation_count for a in authorities)
         ):
             raise ValueError("independent-root job/count binding changed")
         for authority in authorities:
@@ -923,15 +951,19 @@ def _compose_independent_root_preparation(
     base, snapshot, exact, authorities = load(base_preparation_directory)
     delta, document, delta_exact, added = load(document_preparation_directory)
     if (
-        len(added) != 1 or delta["job_count"] != 1
+        len(added) != 1
+        or delta["job_count"] != 1
         or document["source_binding"]["jobs"][0].get("supplements")
         or _authorized_ingestion_root_source_kinds(added[0])
         != {AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND}
         or any(a.asset.asset_id == added[0].asset.asset_id for a in authorities)
         or any(a.ingestion_job_id == added[0].ingestion_job_id for a in authorities)
-        or delta_exact["shards"] or delta_exact["columns"] or any(delta_exact["counts"].values())
+        or delta_exact["shards"]
+        or delta_exact["columns"]
+        or any(delta_exact["counts"].values())
         or delta_exact["tokenizer_profile_fingerprint"] != exact["tokenizer_profile_fingerprint"]
-        or delta.get("sidecar_parent_binding_sha256") or delta.get("bound_child_failure_binding")
+        or delta.get("sidecar_parent_binding_sha256")
+        or delta.get("bound_child_failure_binding")
     ):
         raise ValueError("independent-root document authority is invalid")
     scopes = {}
@@ -947,8 +979,10 @@ def _compose_independent_root_preparation(
     ):
         for reference in references:
             if (
-                not isinstance(reference, list) or len(reference) != 3
-                or type(reference[0]) is not int or not 0 <= reference[0] < job_count
+                not isinstance(reference, list)
+                or len(reference) != 3
+                or type(reference[0]) is not int
+                or not 0 <= reference[0] < job_count
                 or not all(isinstance(v, str) and v for v in reference[1:])
                 or reference[1] in ids
             ):
@@ -956,39 +990,59 @@ def _compose_independent_root_preparation(
             ids.add(reference[1])
     for _, observation_id, observation_hash in document["observation_references"]:
         observation = added[0].load_indexed_observation(
-            observation_id, expected_observation_hash=observation_hash,
+            observation_id,
+            expected_observation_hash=observation_hash,
             expected_job_fingerprint=added[0].job_fingerprint,
         )
         if (
-            observation.asset_id != added[0].asset.asset_id or observation.modality != "text"
+            observation.asset_id != added[0].asset.asset_id
+            or observation.modality != "text"
             or observation.observation_type not in {"heading", "paragraph"}
         ):
             raise ValueError("independent-root document reference is invalid")
     source = dict(snapshot["source_binding"])
     source["jobs"] = [*source["jobs"], document["source_binding"]["jobs"][0]]
-    source["source_authority_fingerprint"] = sha256_json({
-        "artifact_id": "formowl_completed_ingestion_job_authority_v1",
-        "requester_user_id": APPROVER_ACTOR, "workspace_id": WORKSPACE_ID, "jobs": source["jobs"],
-    })
+    source["source_authority_fingerprint"] = sha256_json(
+        {
+            "artifact_id": "formowl_completed_ingestion_job_authority_v1",
+            "requester_user_id": APPROVER_ACTOR,
+            "workspace_id": WORKSPACE_ID,
+            "jobs": source["jobs"],
+        }
+    )
     coverage = dict(source["extraction_coverage"])
     warnings = dict(coverage["warning_code_counts"])
-    for code, count in document["source_binding"]["extraction_coverage"]["warning_code_counts"].items():
+    for code, count in document["source_binding"]["extraction_coverage"][
+        "warning_code_counts"
+    ].items():
         warnings[code] = warnings.get(code, 0) + count
     source["extraction_coverage"] = {
-        **coverage, "root_count": len(source["jobs"]), "source_completeness_certified": False,
-        "warning_code_counts": warnings, "warning_count": sum(warnings.values()),
+        **coverage,
+        "root_count": len(source["jobs"]),
+        "source_completeness_certified": False,
+        "warning_code_counts": warnings,
+        "warning_count": sum(warnings.values()),
     }
-    bindings = [*snapshot["job_store_bindings"],
-                {**document["job_store_bindings"][0], "job_index": len(authorities)}]
-    exact = {**exact, "source_authority_fingerprint": source["source_authority_fingerprint"],
-             "job_count": len(bindings)}
+    bindings = [
+        *snapshot["job_store_bindings"],
+        {**document["job_store_bindings"][0], "job_index": len(authorities)},
+    ]
+    exact = {
+        **exact,
+        "source_authority_fingerprint": source["source_authority_fingerprint"],
+        "job_count": len(bindings),
+    }
     exact_bytes = json.dumps(
         {**exact, "manifest_fingerprint": sha256_json(exact)},
-        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
     ).encode()
     source["exact_lookup_manifest_sha256"] = "sha256:" + hashlib.sha256(exact_bytes).hexdigest()
     snapshot = {
-        **snapshot, "source_binding": source, "job_store_bindings": bindings,
+        **snapshot,
+        "source_binding": source,
+        "job_store_bindings": bindings,
         "observation_references": [
             *snapshot["observation_references"],
             *([len(authorities), *ref[1:]] for ref in document["observation_references"]),
@@ -997,7 +1051,9 @@ def _compose_independent_root_preparation(
     counts = dict(base["observation_type_counts"])
     for kind, count in delta["observation_type_counts"].items():
         counts[kind] = counts.get(kind, 0) + count
-    temporary = Path(tempfile.mkdtemp(prefix=f".{directory.name}.preembedding.", dir=directory.parent))
+    temporary = Path(
+        tempfile.mkdtemp(prefix=f".{directory.name}.preembedding.", dir=directory.parent)
+    )
     try:
         exact_directory = temporary / "exact-cells"
         # The manifest must NOT be hardlinked: its authority/hash changes.
@@ -1020,7 +1076,9 @@ def _compose_independent_root_preparation(
         digest, size = hashlib.sha256(), 0
         with (temporary / "observations.json").open("xb") as stream:
             for chunk in json.JSONEncoder(
-                ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
             ).iterencode(snapshot):
                 raw = chunk.encode()
                 size += len(raw)
@@ -1029,23 +1087,35 @@ def _compose_independent_root_preparation(
                 digest.update(raw)
                 stream.write(raw)
         preparation = {
-            **base, "requested_jobs": [*base["requested_jobs"], *delta["requested_jobs"]],
-            "job_count": len(source["jobs"]), "job_authority_count": len(bindings),
-            "source_observation_count": base["source_observation_count"] + delta["source_observation_count"],
-            "observation_type_counts": counts, "snapshot_size_bytes": size,
+            **base,
+            "requested_jobs": [*base["requested_jobs"], *delta["requested_jobs"]],
+            "job_count": len(source["jobs"]),
+            "job_authority_count": len(bindings),
+            "source_observation_count": base["source_observation_count"]
+            + delta["source_observation_count"],
+            "observation_type_counts": counts,
+            "snapshot_size_bytes": size,
             "snapshot_sha256": "sha256:" + digest.hexdigest(),
             "exact_lookup_manifest_sha256": source["exact_lookup_manifest_sha256"],
         }
-        (temporary / "preparation.json").write_text(json.dumps(
-            {**preparation, "preparation_fingerprint": sha256_json(preparation)},
-            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-        ))
+        (temporary / "preparation.json").write_text(
+            json.dumps(
+                {**preparation, "preparation_fingerprint": sha256_json(preparation)},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
         os.replace(temporary, output)
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)
-    return {"phase": "source_preparation_checkpoint_ready", "preparation_directory": str(output),
-            "embedding_status": "not_started", "source_observation_count": preparation["source_observation_count"]}
+    return {
+        "phase": "source_preparation_checkpoint_ready",
+        "preparation_directory": str(output),
+        "embedding_status": "not_started",
+        "source_observation_count": preparation["source_observation_count"],
+    }
 
 
 def _compose_sidecar_supplement_preparation(
@@ -2758,6 +2828,15 @@ def main() -> int:
     parser.add_argument("--ingestion-revision-sha256")
     parser.add_argument("--ingestion-projection-postgres-config", type=Path)
     parser.add_argument(
+        "--seed-dense-cache-from",
+        type=Path,
+        help=(
+            "OFFLINE indexed preparation finish only: seed a NEW revision-local dense-cache "
+            "from an inactive committed cache; reuse numerical rows, never source/permission bindings. "
+            "Supply once, omit on resume."
+        ),
+    )
+    parser.add_argument(
         "--max-candidates",
         type=int,
         help="required for indexed bounded continuation; positive candidate bound",
@@ -2773,6 +2852,14 @@ def main() -> int:
         or args.build_ingestion_revision is not None
     ):
         parser.error("diagnostic binding requires all three options and a serving ingestion revision")
+    if args.seed_dense_cache_from is not None and (
+        args.build_ingestion_revision is None
+        or args.ingestion_projection_postgres_config is None
+        or args.prepare_ingestion_revision_only
+        or args.ingestion_revision is not None
+        or args.ingestion_job
+    ):
+        parser.error("--seed-dense-cache-from requires the indexed offline preparation finish route")
     if args.host is None:
         args.host = "0.0.0.0" if args.temporary_lan_diagnostic else "127.0.0.1"
     if args.port is None:
@@ -2807,6 +2894,7 @@ def main() -> int:
             pause_before_embedding_file=args.pause_before_embedding_file,
             pause_before_graph_file=args.pause_before_graph_file,
             max_candidates=args.max_candidates,
+            seed_dense_cache_from=args.seed_dense_cache_from,
         )
         print(json.dumps(report, sort_keys=True))
         return 0
@@ -2819,13 +2907,12 @@ def main() -> int:
             if (
                 len(args.ingestion_job) != 1
                 or args.supplement_prior_job is None
-                or args.ingestion_child_failure_manifest is None
                 or args.sidecar_parent_job is not None
                 or args.ingestion_reference_repair_manifest is not None
             ):
                 parser.error(
-                    "supplement build requires one delta job, its bound "
-                    "child-failure manifest, and the prior root job"
+                    "supplement build requires one delta job and the prior root job; "
+                    "a child-failure manifest is required only when failed children exist"
                 )
             preparation_directory = (
                 args.build_ingestion_revision.parent

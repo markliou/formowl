@@ -219,7 +219,7 @@ class ExactCellStreamingLookupTests(unittest.TestCase):
                     matching_keys={matching_key},
                 )
         self.assertEqual(selected, (list(records[0]),))
-        self.assertEqual(len(decoded), len(records))
+        self.assertEqual(len(decoded), len(selected))
 
     def test_request_candidates_only_scan_protected_identifiers_or_table_filters(self):
         class Profile:

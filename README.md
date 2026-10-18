@@ -16,12 +16,17 @@ Knowledge construction:
 heterogeneous sources
   -> Asset / EvidenceSnapshot
   -> ExtractorRun
+  -> source-completeness ledger
   -> source-preserving Observation
-       -> authorized source retrieval / native structured execution
-       -> optional zero-to-many semantic annotations and candidate knowledge
-            -> review -> canonical KG + scoped ontology mappings
-            -> permission-filtered EffectiveGraphView
+       -> ontology-aware semantic read/annotation for the declared scope
+          (zero-to-many source-linked candidates per unit)
+       -> review -> canonical KG + scoped ontology mappings
+       -> permission-filtered EffectiveGraphView
 ```
+
+The explicitly named `direct_evidence_baseline` may retrieve authorized
+Observations without this overlay; it is a fallback/control, not ontology-aware
+UAT.
 
 Query execution:
 
@@ -46,8 +51,11 @@ The layers have different jobs:
 - **The KG** contributes reviewed identity, cross-source joins, bounded paths,
   temporal/current-state structure, contradiction, provenance, and reusable
   integration semantics.
-- **The ontology** is small-core, scoped, data-first, versioned, and a capped
-  additive signal. An inferred mismatch does not remove admitted evidence.
+- **The ontology** is small-core, scoped, data-first and versioned; it is not
+  merely a ranking bonus. LLM reading of the source models
+  entities, claims, events, temporal meaning, relations, attachment/thread
+  lineage and supersession. Its ranking contribution is capped/additive;
+  inferred mismatch does not remove evidence.
 - **Deterministic execution** handles exact sets, counts, inventories,
   native table lookups/calculations, aggregation, completeness, and
   definitive-negative claims over validated source records and coverage.
@@ -58,13 +66,14 @@ Sources and model output are not canonical truth. Extractors and LLMs may
 create reviewable candidates, but they may not silently mutate canonical graph
 or type state, user graph revisions, wiki revisions, or external systems.
 
-Ontology supplies vocabulary and optional zero-to-many source-addressed
-annotations; the reviewed KG supplies an identity/relation overlay linked to
-Observations. Direct authorized lookup and structured execution require no
-graph match or annotation. Missing annotations, nodes, or edges cannot prove
-absence in the source. Native image regions, audio/music intervals, and video
-frames/clips remain evidence; OCR, transcripts, and descriptions have their own
-accuracy and coverage limits.
+Ontology supplies a semantic overlay, not a regex index: the semantic reader
+links zero-to-many entities, claims, events, temporal frames, relations,
+thread/attachment lineage, and supersession records to source Observations.
+Direct authorized lookup and structured execution require no graph match only
+in the explicit baseline/fallback. In ontology-aware UAT, incomplete annotation
+or projection is `partial`/`pending_review`, never source absence. Native image
+regions, audio/music intervals, and video frames/clips remain evidence; OCR,
+transcripts, and descriptions have their own accuracy and coverage limits.
 
 Answers receive bounded verified source context with native citations, such as
 an adjacent paragraph, table header/cell range, image crop, or media clip.
@@ -74,6 +83,30 @@ access. Spreadsheet operations preserve raw values, formulas, cached results,
 displayed values, types/precision/units, blanks/nulls, merged headers,
 coordinates, and same-row association. Exact claims need source coverage;
 graph properties and top-k chunks cannot substitute for native values.
+
+## Ontology-aware UAT contract
+
+For complete `ontology_aware_uat` acceptance, the system must read the declared
+authorized scope with an LLM in offline, resumable batches. Mail means message/thread content and
+all authorized attachments; a spreadsheet, PDF, document, ticket, or project
+record is a source unit in its own right under the generic Asset/Observation
+boundary. Each unit receives an annotation-ledger status and source-linked
+semantic candidates, even when candidate count is zero. The query then uses the
+ontology to find relevant evidence and validates the answer against the original
+source and citation locator. Missing KG/index entries never prove absence.
+Incomplete processing allows supported answers with coverage limits and eligible
+bounded fallback; it must not make the whole UAT wait for ingestion. Automatic
+recheck still obeys SPEC §7.3.1 ALL-fields eligibility, not a new ledger-gap rule.
+
+This contract is generic. A delivery/update case and a project-work-item
+deadline/status case are two transfer examples using the same core concepts;
+question-specific literals and hard-coded answers are forbidden. Current
+implementation and methodology authority remain blocked/待測; this README is a
+contract clarification, not acceptance evidence. [SPEC §3.1.1](SPEC.md#311-explicit-execution-modes-and-ontology-aware-uat-contract)
+and [§15.6](SPEC.md#156-ontology-aware-webpage-acceptance--待實作待測) own the
+contract: actual webpage questions and visible source-correct answers across
+mail/attachments and independent non-mail sources, not index/MCP/log success.
+The new mode names are requirements, not existing deployed flags.
 
 ## Active KG Research Program
 
@@ -117,6 +150,16 @@ may claim that KG + ontology already beats strong RAG.
 
 ## Model Policy
 
+The **2026-10-15 user authorization** requests `gpt-6-luna` with
+`reasoning_effort=high` for UAT. Runtime/provider support, observed model binding,
+and browser acceptance remain pending; this is not rollout evidence.
+Development workers continue to request `gpt-6.1-sol`/`high`, recording actual
+configuration as unverified when it is not observed. Dated model evidence keeps
+its original identity. See [SPEC §8.1.1](SPEC.md#811-development-worker-tier-and-metadata-recording).
+Downtime repair is permitted under Master's bounded, time-based recovery plan.
+Missing July/newer snapshot mail is an accepted coverage limitation, not a
+user-export blocker; source integrity and incomplete-answer disclosures remain required.
+
 There is no single “FormOwl KG LLM.” Every run records model roles separately:
 
 ```text
@@ -143,6 +186,18 @@ sets. The independent holdout must not influence tokenizer artifacts, aliases,
 ontology mappings, thresholds, routing, traversal budgets, prompts, models, or
 grading policy. A change motivated by holdout failure requires a new version
 and a new holdout.
+
+## Current R55 / ledger536 recovery checkpoint — 2026-10-17 UTC / 待測
+[R55 cutover](.formowl/uat-weekend-20261016/ops/cutover-code-r55-result-safe.json) EXIT0/2026-10-17 20:01:55Z, **live8088**, code `d580faeab634…`; **R54 retained rollback**, no cleanup. Deployment authority is the exact frozen [package-r55](.formowl/uat-weekend-20261016/package-r55.json)/code-r55/tests-r55 inventory, not dirty root product files; this docs slice does not synchronize root code. [Final read-only state](.formowl/uat-weekend-20261016/ops/provider-session-r55-final-state.safe.json) confirms exact252code/93tests, pinned image running and8088 HTTP200/statusok/query service connected; health is not release acceptance.
+[Canonical focused91PASS](.formowl/uat-weekend-20261016/ops/provider-session-r55-differential.safe.json) is bounded proof. [Broader integration](.formowl/uat-weekend-20261016/ops/integration-code-r55-safe.json) =**283 tests /22FAIL+1ERROR /13.005s, NON-GREEN**; all23 inherited assertion tails match R54, no new/resolved failures, Ruff0/compile0/exact252+93. Neither focused green nor inherited failure identity is whole-suite or release acceptance.
+[Dated R54 manual review](.formowl/uat-weekend-20261016/ops/provider-session-r54-manual-review.safe.json) =**7 functional LIMITED_PASS +1FAIL (C663)**, four lifecycle checks, source verifier EXIT0 and all9 sent provider requests wire-contract valid. [Formal ledger527](.formowl/uat-weekend-20261016/ops/provider-session-r54-ledger.safe.json) =519+8 submissions, not passes; C663's original pre-provider clarification failure remains immutable.
+[Final R55 manual review](.formowl/uat-weekend-20261016/ops/provider-session-r55-manual-review.safe.json) records **9 browser questions LIMITED_PASS +4 lifecycle PASS**, finite batch only. [Wire verifier](.formowl/uat-weekend-20261016/ops/provider-session-r55-wire.safe.json) EXIT0: all11 sent requests/9 cases contract-valid, `failure_findings=[]`. [Formal ledger536](.formowl/uat-weekend-20261016/ops/provider-session-r55-ledger.safe.json) =527+9 submissions, **not passes**, no automatic retries. Whole-UAT/release/methodology acceptance remains false; original R54 C663 FAIL is not regraded.
+[Fresh source verifier](.formowl/uat-weekend-20261016/ops/provider-session-r55-source.safe.json) EXIT0 plus the later manual/native review establish all5 citation occurrences/3 unique citations resolve and match. Four requested capacitor values and origin field have same-target/header support; manufacturing location remains unverified. This proves only the returned finite evidence, not full-source coverage, cache-hit rate or upstream routing effectiveness.
+[R55 frozen grammar correction](.formowl/uat-weekend-20261016/worker-anscombe-supplied-negative-r55/handoff.safe.json) changes only shared closed supplied-text recognition: whole exterior negative-source constraints plus explicit quoted input, not a no-source override for mixed lookup. Same final tests RED12 subcases→6PASS, related69PASS, [scoped peer AGREE](.formowl/uat-weekend-20261016/ops/reviewer-nash-supplied-negative-r55-safe.json); original/earlier failures remain preserved. C600 FAIL/unrerun and C601 compound-price-unit FAIL remain open; R52 C628/C651 observations prove only the exact-capability boundary, not full-source absence.
+[Six provider-request requirements](SPEC.md) §3.2 are inherited byte-identically from R54: stable server conversation UUID/header/cache key, fixed instructions/tool order, append-only provider input with dynamic tail, honest UA `uat-web-backend/0.1.0` matching application version, unchanged model/stream/store and current authority guards. Smaller eight-message routing history is separate. Cap/expiry stop safely without silent ID rotation; no cross-restart durability or nonblocking OAuth-reset claim. Public hosted terminology stays paused pending an explicit exception.
+PDF/parser/topology work remains **paused**; [native-PDF review](.formowl/uat-weekend-20261016/ops/native-pdf-r53-master-review-safe.json) is not a proven compound-unit fix. [Last lineage receipt](.formowl/uat-weekend-20261016/ops/hybrid-current-r1/lineage-progress-safe.json) is not full index/embedding/activation; no new source/index operation or completion forecast here.
+[Fresh canonical authority](.formowl/uat-weekend-20261016/ops/authority-r55-final-tmpfs-container.json) EXIT0 with existing tmpfs config: valid=true/ready=false/errors=[], CJKtrue, execution `0eaba758e881…`. [Initial read-only/no-tmpfs probe](.formowl/uat-weekend-20261016/ops/authority-r55-final-container.json) EXIT2 remains preserved; no product change or gate promotion. Four methodology gates and independent three-reviewer release gate remain open; feature待測/step4 in-progress. Source500ms/caps/guards and requested models unchanged; actual model/effort unverified, 3s unanswered.
+[New lossless five-file preimages](docs/archive/2026-10-18/weekend-r55-provider-status-preedit/SHA256SUMS.json) preserve every replaced checkpoint, prior failure and archive link. No prior archive edit, checkbox promotion, root product edit or mirror update.
 
 ## Current Product Boundary
 
@@ -173,6 +228,8 @@ attachment content retains its mail parent, while standalone documents retain
 independent source bindings. The bounded integration target is exact
 UnitPrice/Quantity retrieval, DOCX attachment content and a standalone clause.
 It does not establish aggregation, currency math or latest-revision completeness.
+
+### Dated UAT evidence — not current deployment or dispatch
 
 At the historical 2026-10-12 checkpoint, serving manifest r12 (`b2f4fa44…`) ran on
 live8089, full252 product files/drift0; candidate8096 was deployed/proved, then
@@ -243,7 +300,8 @@ stop metadata. Recording errors retain the business result and emit a safe
 failure event. Operator persistence must survive container replacement; the
 file is not an HTTP/MCP download or a general logging exemption.
 
-This logging slice is **diagnostic-only / 待測**. Its frozen package is
+Historical **2026-10-13 logging activation evidence**, diagnostic-only / 待測:
+its frozen package is
 [package-r1.json](.formowl/uat-observability-20261013/package-r1.json). Canonical36/36
 and observed candidate/live browser/log capture passed; three scoped reviewers
 Chandrasekhar/Gibbs/Harvey AGREE for logging activation only. At that activation,8088 served
@@ -260,7 +318,8 @@ inconsistency is still unresolved, and all four methodology
 gates remain blocked. Contract and limitations: [SPEC](SPEC.md#731-source-neutral-evidence-double-check--待測)
 and [handoff](docs/agent-goals/handoff-log.md).
 
-The later authorized **UAT consistency repair is IN-PROGRESS / 待測**.
+Historical **2026-10-13 UAT consistency repair checkpoint / 待測**
+(not current deployment or a standing next-action assignment).
 [Baseline](.formowl/uat-stability-20261013/baseline-safe.json): ten actual browser
 turns/file=HTTP=DOM, five cited partial answers, one chat, two unexpected
 clarifications, one honest incomplete lookup and one provider error; eight
@@ -595,8 +654,9 @@ security boundary is access to the controlled deployment shell, Docker daemon,
 Compose configuration, and mounted secret files. The full migrate, bootstrap,
 lookup, invite, restart, revocation, signing-key rotation, MCP Inspector, and
 live ChatGPT/Google sequence is in `docs/closed-beta-runbook.md`. Those external
-journeys are not yet accepted completion evidence, so issue #20 remains open
-and no production-readiness claim is made.
+journeys are not yet accepted completion evidence. GitHub #20 retains its
+scoped offline-work/external-activation closure; the unresolved obligations
+remain tracked through #63, without a production-readiness claim.
 
 Issue #20 establishes connected identity and fresh `ActorContext` only. Issue
 #41 separately owns generic Asset tenant/owner binding, byte storage,

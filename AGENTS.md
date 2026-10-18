@@ -55,7 +55,7 @@ System Backbone Agent unless the user explicitly assigns it here.
 
 ## Master and Subagent Execution Mode
 
-**Latest 2026-10-06 user authorization:** up to two ordinary implementation
+**Latest 2026-10-06 worker authorization:** up to two ordinary implementation
 worker slots may request `gpt-6.1-sol` with `reasoning_effort=high`. This supersedes earlier
 sol/xhigh and luna/max tiers and conflicting “no recreation” work orders.
 The 2026-10-06 SPEC clarification was a closed documentation slice: A's
@@ -96,7 +96,16 @@ IDs when present, model/effort when observed, UTC timestamp, and verification
 status; exclude inherited contexts, raw rollout paths/content, prompts, and
 secrets. An unpinned resume is permitted when explicit pinning is unavailable,
 provided its actual configuration is marked unverified and the work remains
-within the bounded assignment. UAT remains `gpt-5.5`/`high`.
+within the bounded assignment.
+
+**2026-10-15 UAT authorization:** the requested UAT model is `gpt-6-luna`
+with `reasoning_effort=high`. Runtime/provider support, observed model identity,
+and browser acceptance remain pending; this policy is not rollout evidence.
+Development workers still request `gpt-6.1-sol`/`high`. Preserve dated earlier
+model evidence with its original identity. Downtime repair is permitted within
+Master's bounded recovery assignment and time-based plan. Missing July/newer
+snapshot mail is an accepted coverage limitation, not a user-export blocker;
+source integrity and honest incomplete answers remain mandatory.
 
 Dated diagnostic results and unique verification records remain in
 `docs/agent-goals/handoff-log.md`. Its later cap-fixture repair supersedes the
@@ -149,12 +158,18 @@ GitHub issue #56 is the current KG research program:
 
 ```text
 heterogeneous sources
-  -> source-preserving Observation
-       -> authorized source retrieval / native structured execution
-       -> optional zero-to-many candidate annotations/entities/claims/relations/frames
-            -> review -> canonical KG + scoped ontology
-            -> permission-filtered EffectiveGraphView
+  -> source-preserving Observation and source-completeness ledger
+       -> ontology-aware semantic ingestion for the declared scope
+          (complete read/annotation pass; zero-to-many candidates per unit)
+       -> review/governance -> canonical KG + scoped ontology
+       -> permission-filtered EffectiveGraphView
+```
 
+The separate `direct_evidence_baseline` may execute authorized source retrieval
+or native structured execution without semantic annotations. That fallback is a
+retrieval baseline and must never be presented as ontology-aware UAT.
+
+```text
 query
   -> typed router and validated SemanticQueryPlan
   -> agent-expanded, schema-validated tool queries
@@ -201,10 +216,34 @@ Therefore:
 - Sources retain text, structured values, images, speech, non-speech audio/music,
   and video evidence with native locators. OCR/transcripts/descriptions are derived
   representations; text proxies or fixture labels do not prove native media support.
-- Ontology annotations are optional and zero-to-many per document/Observation;
-  reviewed KG identity/relation overlays link back to source evidence. Direct
-  authorized lookup and native structured execution need no graph match or annotation;
-  missing overlay entries never establish source absence.
+- Ontology has two explicit modes. In `direct_evidence_baseline`, semantic
+  annotations may be absent and authorized source/native retrieval remains valid;
+  this is not ontology-aware functionality. In `ontology_aware_uat`, every
+  authorized source unit in the declared scope must be inventoried, extracted,
+  semantically read, and assigned an annotation-ledger status before the mode can
+  claim readiness. A unit may yield zero candidates, but it may not silently skip
+  annotation.
+- `SPEC.md` §3.1.1, §6.2.1, §7.2.1 and §15.6 define the 2026-10-18
+  product clarification, **待實作／待測**, not new runtime flags or a change to
+  the frozen experiment. Read mail/documents and all scoped attachments with an
+  LLM in resumable offline bounded batches; regex/schema extraction is support,
+  not a substitute for semantic understanding. Bind interpreted assertions to
+  targets, item/row, event/time roles, native citations and source updates.
+  A ledger row or model-call count is not proof of annotation correctness.
+- Ontology-aware semantic records are source-linked and zero-to-many: entities,
+  claims, events, state transitions, relations, temporal frames, thread/attachment
+  lineage, and supersession may bind one or many Observations. LLMs produce
+  candidates only; review/governance publishes the scoped overlay. Direct fallback
+  remains allowed when the ledger is incomplete, but missing annotations, overlay
+  entries, or graph matches never prove source absence.
+- Missing semantic coverage must not stop otherwise valid bounded source
+  answers or ordinary chat. It blocks the affected completeness/ontology claim,
+  not diagnostic work; fallback retains §7.3.1 ALL-fields eligibility and budgets.
+  Accept ontology-aware product behavior only through actual webpage questions
+  and visible source-correct answers, plus evidence of annotation use, across
+  mail/attachments and an independent non-mail case. Do not count abstention on
+  an answerable case as success. Historical worktree/build copies are not current
+  instructions; synchronize from root SPEC before a new delegated assignment.
 - Bounded source context may include paragraphs, cell ranges, image crops, or media
   clips with native citations and revalidated hash/revision/lineage/permissions.
   Spreadsheet execution preserves formula/raw/cached/display distinctions, types,

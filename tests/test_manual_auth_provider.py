@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
+from typing import Any
 
 import _paths  # noqa: F401
 from formowl_auth import FileAuditLogStore, ManualTrustedInternalAuthProvider
@@ -74,6 +76,8 @@ class ManualTrustedInternalAuthProviderTests(unittest.TestCase):
         self.assertEqual(context.session_identity.selected_user_id, "user_yifan")
         self.assertEqual(context.session_identity.selection_method, "manual_trusted_internal")
         self.assertEqual(context.workspace_memberships[0].workspace_id, "workspace_formowl")
+        self.assertEqual(context.current_workspace_id, "workspace_formowl")
+        self.assertEqual(context.current_workspace_role, "owner")
         self.assertEqual(context.active_grants[0].grant_id, "grant_001")
         self.assertEqual(context.pending_access_requests[0].request_id, "access_req_001")
         self.assertFalse(context.production_authentication)
@@ -83,12 +87,78 @@ class ManualTrustedInternalAuthProviderTests(unittest.TestCase):
         self.assertEqual(len(audit_logs), 1)
         self.assertEqual(audit_logs[0].action, "actor_selected")
         self.assertEqual(audit_logs[0].actor_user_id, "user_yifan")
+        self.assertEqual(audit_logs[0].session_id, "session_001")
+        self.assertEqual(audit_logs[0].target_type, "user")
+        self.assertEqual(audit_logs[0].target_id, "user_yifan")
         self.assertEqual(audit_logs[0].workspace_id, "workspace_formowl")
         self.assertEqual(audit_logs[0].status, "ok")
         self.assertEqual(audit_logs[0].timestamp, created_at)
 
-        with self.assertRaises(KeyError):
-            provider.select_actor("Disabled User")
+        selected_context = provider.whoami()
+        audit_snapshot = {path.name: path.read_bytes() for path in audit_store.base_dir.iterdir()}
+        for selector in ("Disabled User", "Unknown User"):
+            with self.subTest(selector=selector), self.assertRaises(KeyError):
+                provider.select_actor(selector)
+            self.assertIs(provider.whoami(), selected_context)
+            self.assertEqual(
+                {path.name: path.read_bytes() for path in audit_store.base_dir.iterdir()},
+                audit_snapshot,
+            )
+
+    def test_audit_failure_preserves_previous_actor_context_and_audit_bytes(self) -> None:
+        temp_dir = _paths.fresh_test_dir("manual-auth-provider-audit-failure")
+        audit_store = _ToggleFailingAuditLogStore(temp_dir)
+        created_at = "2026-06-17T10:00:00+00:00"
+        provider = ManualTrustedInternalAuthProvider(
+            users=[
+                User(
+                    user_id="user_yifan",
+                    display_name="Yifan Chen",
+                    status="active",
+                    created_at=created_at,
+                ),
+                User(
+                    user_id="user_ren",
+                    display_name="Ren Lin",
+                    status="active",
+                    created_at=created_at,
+                ),
+            ],
+            audit_store=audit_store,
+        )
+        selected_context = provider.select_actor(
+            "Yifan Chen",
+            session_id="session_001",
+            selected_at=created_at,
+        )
+        audit_snapshot = {path.name: path.read_bytes() for path in audit_store.base_dir.iterdir()}
+        audit_store.fail_create = True
+
+        with self.assertRaises(RuntimeError) as caught:
+            provider.select_actor(
+                "Ren Lin",
+                session_id="session_002",
+                selected_at="2026-06-17T11:00:00+00:00",
+            )
+
+        self.assertEqual(str(caught.exception), "audit log persistence failed")
+        self.assertNotIn("private", str(caught.exception))
+        self.assertIs(provider.whoami(), selected_context)
+        self.assertEqual(
+            {path.name: path.read_bytes() for path in audit_store.base_dir.iterdir()},
+            audit_snapshot,
+        )
+
+
+class _ToggleFailingAuditLogStore(FileAuditLogStore):
+    def __init__(self, base_dir: str | Path) -> None:
+        super().__init__(base_dir)
+        self.fail_create = False
+
+    def create(self, audit_log: Any) -> Any:
+        if self.fail_create:
+            raise RuntimeError("private audit backend failure")
+        return super().create(audit_log)
 
 
 if __name__ == "__main__":

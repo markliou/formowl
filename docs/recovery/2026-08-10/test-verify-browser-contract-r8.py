@@ -20,37 +20,27 @@ SPEC.loader.exec_module(verifier)
 class BrowserContractR8Tests(unittest.TestCase):
     def _response(self, answer: str) -> dict[str, object]:
         return {
+            "status": "ok",
             "assistant_text": answer,
-            "claim_state": "CANDIDATE_MATCHES",
-            "canonical_kg": False,
             "source_count": 0,
-            "citation_count": 0,
             "trace": {
+                "model_backed": True,
                 "retrieval_path": "mail_authorized_structured_set",
                 "mcp_call_count": 1,
-            },
-            "orchestration": {
-                "action": "call_formowl_tool",
-                "response_kind": "answer",
-                "formowl_tool_called": True,
-                "model": "gpt-test-codex",
+                "mcp_server": "formowl",
+                "mcp_tool": "query_effective_graph_view",
+                "retrieval_layer": "canonical_mail_structural_evidence",
+                "canonical_kg": False,
             },
         }
 
     def _health(self) -> dict[str, object]:
         return {
             "status": "ready",
-            "surface": "mail_human_uat",
-            "conversation_orchestrator_enabled": True,
-            "conversation_model": "gpt-test-codex",
-        }
-
-    @staticmethod
-    def _summary(chat_count: int, tool_count: int) -> dict[str, object]:
-        return {
-            "status": "ready",
-            "chat_count": chat_count,
-            "formowl_tool_call_count": tool_count,
+            "conversation_engine": "codex_app_server",
+            "formowl_mcp_required": True,
+            "configured_mcp_server_count": 1,
+            "configured_mcp_tool_count": 1,
         }
 
     def _verify(
@@ -59,9 +49,7 @@ class BrowserContractR8Tests(unittest.TestCase):
         values: tuple[str, ...],
         *,
         health: dict[str, object] | None = None,
-        before: dict[str, object] | None = None,
         response: dict[str, object] | None = None,
-        after: dict[str, object] | None = None,
         expected_fingerprint: str | None = None,
         expected_count: int | None = None,
     ) -> dict[str, object]:
@@ -70,15 +58,12 @@ class BrowserContractR8Tests(unittest.TestCase):
             "_request_json",
             side_effect=[
                 health or self._health(),
-                before or self._summary(10, 20),
                 response or self._response(answer),
-                after or self._summary(11, 21),
             ],
         ):
             return verifier.verify_browser_contract(
                 base_url="http://127.0.0.1:8088",
                 health_path="/api/health",
-                summary_path="/api/session-summary",
                 query_path="/api/chat",
                 query=verifier.DEFAULT_QUERY,
                 expected_fingerprint=(
@@ -96,15 +81,19 @@ class BrowserContractR8Tests(unittest.TestCase):
         self.assertEqual(report["status"], "passed")
         self.assertEqual(report["query_route"], "browser_to_sidecar_to_one_mcp")
         self.assertEqual(report["mcp_call_count"], 1)
-        self.assertEqual(report["chat_count_delta"], 1)
-        self.assertEqual(report["formowl_tool_call_count_delta"], 1)
+        self.assertTrue(report["model_backed"])
+        self.assertEqual(report["conversation_engine"], "codex_app_server")
+        self.assertTrue(report["formowl_mcp_required"])
+        self.assertEqual(report["configured_mcp_server_count"], 1)
+        self.assertEqual(report["configured_mcp_tool_count"], 1)
+        self.assertEqual(report["mcp_server"], "formowl")
+        self.assertEqual(report["mcp_tool"], "query_effective_graph_view")
+        self.assertEqual(report["retrieval_layer"], "canonical_mail_structural_evidence")
         self.assertEqual(report["distinct_projection_count"], 3)
         self.assertEqual(report["distinct_bullet_count"], 3)
         self.assertEqual(report["retrieval_path"], "mail_authorized_structured_set")
-        self.assertEqual(report["claim_state"], "CANDIDATE_MATCHES")
         self.assertFalse(report["canonical_kg"])
         self.assertEqual(report["source_count"], 0)
-        self.assertEqual(report["citation_count"], 0)
         self.assertEqual(
             report["fingerprint"],
             verifier._projection_fingerprint(values),
@@ -130,6 +119,40 @@ class BrowserContractR8Tests(unittest.TestCase):
                 with self.assertRaises(verifier.VerificationFailure):
                     self._verify(answer, values)
 
+    def test_unlabelled_source_or_citation_prose_is_rejected(self) -> None:
+        values = ("PART-01", "PART-02", "PART-03")
+        for extra in (
+            "source id redacted",
+            "citation omitted",
+            "reference unavailable",
+            "evidence withheld",
+            "The source is redacted.",
+            "Evidence is unavailable.",
+            "Citation was omitted.",
+            "來源已隱藏。",
+            "證據不可用。",
+        ):
+            with self.subTest(extra=extra):
+                answer = "\n".join([*[f"- {value}" for value in values], extra])
+                with self.assertRaisesRegex(
+                    verifier.VerificationFailure,
+                    "sources or citations",
+                ):
+                    self._verify(answer, values)
+
+    def test_ordinary_short_preamble_remains_allowed(self) -> None:
+        values = ("PART-01", "PART-02", "PART-03")
+        for preamble in (
+            "The matching identifiers are listed below.",
+            "以下列出符合項目。",
+        ):
+            with self.subTest(preamble=preamble):
+                report = self._verify(
+                    preamble + "\n" + "\n".join(f"- {value}" for value in values),
+                    values,
+                )
+                self.assertEqual(report["status"], "passed")
+
     def test_placeholder_and_truncated_bullets_are_rejected(self) -> None:
         for invalid in ("TBD", "PART-03...", "continued"):
             with self.subTest(invalid=invalid):
@@ -152,36 +175,46 @@ class BrowserContractR8Tests(unittest.TestCase):
                 ):
                     self._verify(answer, values)
 
-    def test_route_requires_ready_sidecar_and_exactly_one_tool_delta(self) -> None:
+    def test_route_requires_current_health_contract(self) -> None:
         values = ("PART-01", "PART-02", "PART-03")
         answer = "\n".join(f"- {value}" for value in values)
         for kwargs in (
             {
                 "health": {
                     "status": "ready",
-                    "surface": "mail_human_uat",
-                    "conversation_orchestrator_enabled": False,
-                    "conversation_model": "gpt-test-codex",
+                    "conversation_engine": "codex_app_server",
+                    "formowl_mcp_required": False,
+                    "configured_mcp_server_count": 1,
+                    "configured_mcp_tool_count": 1,
                 }
             },
-            {"after": self._summary(11, 22)},
-            {"after": self._summary(12, 21)},
+            {
+                "health": {
+                    "status": "ready",
+                    "conversation_engine": "codex_app_server",
+                    "formowl_mcp_required": True,
+                    "configured_mcp_server_count": 2,
+                    "configured_mcp_tool_count": 1,
+                }
+            },
         ):
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises(verifier.VerificationFailure):
                     self._verify(answer, values, **kwargs)
 
-    def test_response_requires_one_mcp_call_and_matching_sidecar_model(self) -> None:
+    def test_response_requires_exact_current_trace_contract(self) -> None:
         values = ("PART-01", "PART-02", "PART-03")
         answer = "\n".join(f"- {value}" for value in values)
         for field, value in (
             ("mcp_call_count", 2),
             ("mcp_call_count", True),
-            ("model", "different-model"),
-            ("formowl_tool_called", False),
+            ("mcp_server", "wrong-server"),
+            ("mcp_tool", "wrong-tool"),
+            ("model_backed", False),
+            ("canonical_kg", True),
         ):
             response = self._response(answer)
-            target = response["trace"] if field == "mcp_call_count" else response["orchestration"]
+            target = response["trace"]
             target[field] = value
             with self.subTest(field=field, value=value):
                 with self.assertRaises(verifier.VerificationFailure):
@@ -216,9 +249,7 @@ class BrowserContractR8Tests(unittest.TestCase):
                     "_request_json",
                     side_effect=[
                         self._health(),
-                        self._summary(10, 20),
                         self._response(answer),
-                        self._summary(11, 21),
                     ],
                 ),
                 patch.object(

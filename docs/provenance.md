@@ -30,6 +30,7 @@ Source / Asset / EvidenceSnapshot / source occurrence
   -> source inventory and completeness reconciliation
   -> ExtractorRun
   -> source-preserving Observation
+  -> source-completeness and semantic-annotation ledger
   -> candidate mention, entity, claim, relation, state, event, or frame
   -> review and governance decision
   -> CanonicalGraphRevision + OntologyRevision
@@ -50,7 +51,7 @@ Every methodology-bearing artifact preserves six distinct dimensions:
 | Dimension | Required meaning |
 | --- | --- |
 | source lineage | Which source object and source occurrence supplied the evidence |
-| interpretation lineage | Which extractor, rule, model, prompt, schema, and tokenizer produced derived candidates |
+| interpretation lineage | Which extractor, rule, model, prompt, schema, tokenizer, and complete/incomplete annotation pass produced derived candidates |
 | governance lineage | Which review or policy decision accepted, rejected, corrected, split, merged, or superseded a candidate |
 | authorization lineage | Which actor, workspace, grant, policy, and effective view permitted visibility |
 | execution lineage | Which validated plan, indexes, graph traversal, scoring, budgets, and executor produced the result |
@@ -73,6 +74,8 @@ source_occurrence_id
 evidence_snapshot_id
 source_inventory_id
 source_completeness_artifact_id
+semantic_annotation_ledger_id
+coverage_fingerprint
 extractor_run_id
 observation_id
 candidate_id
@@ -168,6 +171,37 @@ review state
 Deterministic extraction and semantic interpretation remain separate. Candidate
 records are proposals and cannot silently mutate canonical graph, ontology,
 user graph, wiki, or external-system state.
+
+### 5.1 Semantic coverage lineage
+
+An ontology-aware run records coverage independently from candidate cardinality.
+For each authorized source unit, retain:
+
+```text
+source inventory and occurrence id
+Observation/ExtractorRun ids
+annotation_status: annotated | pending | unsupported | failed
+candidate_count, including zero
+attachment/thread/parent-child lineage
+ontology/profile/model/prompt/schema revisions
+review/projection status and coverage fingerprint
+```
+
+`annotated` means the unit was read by the LLM semantic reader and its validated
+result persisted; it does not mean
+that a fact was found. `pending`, `unsupported`, and `failed` are explicit
+coverage gaps. A query cannot turn those gaps into `not_found`; it must disclose
+incompleteness and use eligible bounded source fallback or return supported
+facts with limits. `pending_review` describes governance, not a parser error;
+§7.3.1 ALL-fields eligibility is unchanged. Track read spans, truncation,
+zero-candidate outcomes, incremental changes and retry lineage separately;
+mechanical coverage is not semantic accuracy.
+Direct baseline retrieval may cite source evidence without this semantic chain,
+but such a result cannot prove complete ontology functionality. Bind actual
+selected annotation IDs to the plan, cited source and final answer, including
+item/target, temporal role and source-backed update/supersession decisions.
+These are pending product requirements under SPEC §3.1.1 and §15.6, not a
+claim that current artifacts already carry these fields.
 
 ## 6. Governance and Canonical Graph Lineage
 

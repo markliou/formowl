@@ -15,8 +15,9 @@ Use a data-first, source-preserving, scoped ontology process:
 
 ```text
 heterogeneous Observations
-  -> protected identifier and multilingual term candidates
-  -> source-local mentions and relations
+  -> bounded offline LLM semantic reading of complete declared source scope
+  -> source-linked entity/claim/event/relation/time/lineage candidates + outcome ledger
+     (protected identifiers and multilingual terms are supporting signals)
   -> candidate core/domain mappings
   -> evidence-backed review
   -> versioned scoped OntologyRevision
@@ -24,6 +25,17 @@ heterogeneous Observations
 
 Do not create ontology terms from final UAT or independent holdout questions.
 Do not use source format labels as enterprise-wide semantic truth.
+
+The 2026-10-18 product clarification is owned by SPEC §3.1.1/§6.2.1/§15.6 and
+remains **待實作／待測**, not a frozen-experiment change. Ontology vocabulary
+construction and applying a frozen vocabulary to source documents are separate:
+the former uses calibration/development evidence only; the latter processes
+authorized source content without consulting holdout questions or answer keys.
+Do not use source-only annotation as a loophole for holdout-driven tuning.
+Required reading includes all scoped mail attachments, bounded context and
+cross-document reconciliation; regex/term extraction alone is not semantic
+annotation. Use existing owners, immutable pins, incremental resumable batches
+and no query-time rebuild. Complete read coverage is not proof of semantic accuracy.
 
 ## Stable Core
 
@@ -90,7 +102,7 @@ not an ontology model and not a source of canonical semantics.
 
 ## Candidate Extraction
 
-Candidate terms and mappings may be generated through:
+Vocabulary/identifier candidates may be supported through:
 
 ```text
 deterministic schema/field names
@@ -107,6 +119,14 @@ reviewer corrections
 Every candidate records source Observation ids, source family, scope,
 extractor/model/prompt revision, confidence, and proposed core/domain mapping.
 LLM output remains a candidate.
+
+Ontology-aware source annotation additionally requires LLM interpretation of
+target/item, assertion/event type, temporal role and evidence-backed update links.
+Every unit receives an annotated/pending/unsupported/failed outcome; a valid
+zero-candidate result is different from an unread or truncated unit. Unsupported
+native modalities stay explicit. Missing annotations cannot prove source absence;
+supported source answers and eligible §7.3.1 fallback remain available without
+relabelling baseline success as ontology completion.
 
 ## Promotion Rules
 
@@ -161,7 +181,10 @@ KG/ontology arms.
 
 ## Current Claim Boundary
 
-The current runtime still reports `ascii_identifier_regex_v1` with no CJK
-support. This decision describes the frozen target; it does not prove runtime
-migration, source completeness, same-pipeline superiority, or methodology
-readiness.
+`ascii_identifier_regex_v1` without CJK support is the dated 2026-08-18 runtime,
+not current authority. The 2026-10-02 canonical container probe aligned with the
+frozen target/CJK support, but source completeness, accepted fingerprint binding,
+same-pipeline ablation and independent final-answer acceptance remain blocked.
+Consult the executable authority for current claims. Product ontology acceptance
+requires real webpage answers and original-source citation/date/relationship
+checks across mail and independent non-mail cases, not parser/ledger counts.

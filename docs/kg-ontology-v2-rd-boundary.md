@@ -16,8 +16,10 @@ The pre-rewrite document is immutable history under
 source adapters
   -> Asset / EvidenceSnapshot
   -> ExtractorRun
+  -> source-completeness reconciliation
   -> Observation
-  -> candidate mentions/entities/claims/relations/frames
+  -> complete ontology-aware semantic annotation ledger for the declared scope
+  -> candidate mentions/entities/claims/relations/temporal frames/lineage
   -> reviewed canonical KG + scoped ontology
   -> permission-filtered EffectiveGraphView
 
@@ -41,9 +43,11 @@ ontologies, indexes, or answer services.
 
 ### Resource extraction
 
-Owns deterministic and semantic extraction into Observations and candidate
-records. It does not commit canonical truth or generate definitive business
-answers.
+Owns deterministic extraction into source-preserving Observations and the
+complete semantic annotation ledger required by ontology-aware mode. It emits
+source-linked candidate records but does not commit canonical truth or generate
+definitive business answers. A direct baseline may use the Observation path
+without semantic annotations, but that is not an ontology-aware claim.
 
 ### Graph governance
 
@@ -81,8 +85,10 @@ BM25 or equivalent lexical retrieval
 + citation and answer-claim contract
 ```
 
-The graph path must earn its use by adding identity, cross-source joins,
-bounded topology, temporal state, contradiction, provenance, and coverage.
+The graph/ontology path must earn its use by reading the declared source scope
+and adding identity, cross-source joins, bounded topology, temporal state,
+contradiction, provenance, and coverage. Missing annotations or projections
+remain incomplete coverage, not evidence of absence.
 If those additions do not meet the frozen quality gate, strong RAG remains the
 default answer-retrieval path.
 
@@ -114,6 +120,7 @@ actor/workspace/task scope
 allowed source families and source bounds
 permission/effective-view revision
 graph revision and ontology revision
+semantic annotation ledger and coverage fingerprint when ontology-aware
 entity and relation slots
 allowed edge kinds and direction
 hop, candidate, evidence, token, time, and repair budgets
@@ -220,6 +227,31 @@ questions and answers may not.
 Ontology construction does not train a neural network. Embedding or LLM tools
 may generate candidates, but promotion requires evidence, scope, revision, and
 review.
+
+### 8.1 Ontology-aware semantic contract
+
+The product contract in SPEC §3.1.1/§6.2.1/§15.6 is **待實作／待測**; it does not
+change frozen experimental arms or executable gates. Full ontology-aware
+acceptance requires processing every authorized source unit, including mail
+attachments and native tables/documents, through an offline bounded LLM read.
+For each unit it persists `annotated`, `pending`, `unsupported`, or `failed`,
+with zero candidates represented explicitly as an annotated result. It preserves
+entity/claim/event/relation/time-frame annotations, source locators,
+thread/attachment lineage, correction/supersession links, and all model/prompt/
+profile/ontology/permission fingerprints.
+
+Query execution uses these annotations to select source evidence, then validates
+values against original native evidence. If the ledger, source inventory, or
+projection is incomplete, disclose coverage and preserve supported facts.
+Source fallback requires existing eligibility (§7.3.1 ALL-fields condition),
+not an extra retry on any gap. `pending_review` is governance, and failure
+retains its operational cause; none of these proves `not_found`. This contract is generic
+and must transfer across at least a mail/attachment update case and a materially
+different project/work-item status or deadline case.
+Use existing owners, immutable revisions and resumable batches with cross-source
+context reconciliation. Generic assertions bind target/item/quantity/time-role
+and source evidence; newest message time or a broad ontology tag is not a join
+or supersession rule. Acceptance is through the actual webpage, not ledger counts.
 
 ## 9. Exact-Set and Deterministic Boundary
 

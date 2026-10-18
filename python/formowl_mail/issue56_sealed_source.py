@@ -538,7 +538,16 @@ class SourceNativeLexicalLookup:
         # allowing late candidates from the frozen source corpus to survive;
         # hydration, permission, lineage and source matching remain authoritative
         # after this query.  A timeout is still a miss, never source absence.
-        per_token_limit = 8192
+        # A single validated identifier is an anchor lookup.  Do not make it
+        # depend on the helper join: on the large sealed SQLite accelerator
+        # that optional join can exhaust the bounded lookup budget and turn a
+        # present identifier into an empty shortlist.  Hydration still checks
+        # the helper/authority contract before any evidence is returned.
+        single_token = len(tokens) == 1
+        per_token_limit = limit if single_token else 8192
+        helper_join = "" if single_token else (
+            "JOIN helpers h ON h.observation_hash = p.observation_hash "
+        )
         deadline = time.monotonic() + timeout_ms / 1000
         with self._connection_lock:
             self._connection.execute(f"PRAGMA busy_timeout = {min(timeout_ms, 2000)}")
@@ -558,7 +567,7 @@ class SourceNativeLexicalLookup:
                 for token in tokens:
                     rows = self._connection.execute(
                         "SELECT p.observation_hash FROM postings p "
-                        "JOIN helpers h ON h.observation_hash = p.observation_hash "
+                        f"{helper_join}"
                         "WHERE p.source_family = ? AND p.token = ? "
                         "ORDER BY p.observation_hash COLLATE BINARY LIMIT ?",
                         (source_family, token, per_token_limit),

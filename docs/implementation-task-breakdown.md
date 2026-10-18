@@ -1,188 +1,86 @@
 # Implementation Task Breakdown
-## UAT consistency assessment — 2026-10-13 UTC, observed live diagnostic proof / 待測
+
+## Current UAT checkpoint — 2026-10-18 / #63 / 待測
+T0 is 2026-10-18T04:48:11Z; earlier “unstarted” wording below is historical.
+Declared scope unchanged: four mail messages, five native attachments, two independent documents; CP0 inventory verdict: `ops/cp0-inventory-verdict.safe.json`, product not passed.
+Retain r11 finite annotation-guided document proof: source-correct answer, selected_count=1/source_count=1, original lines49–54 verified, partial disclaimer; `ops/browser-document-r11-review.safe.json`. NOT mail/full-ontology/release acceptance.
+r17 source-seed completed and activated on candidate8096 ONLY; live R55/8088 unchanged. Two composed deltas added477 Observations; four-job prefix, both prior supplements and failure-manifest bytes retained; suffix-only admission, no full rebuild.
+r22c actual browser: ordinary chat PASS; reported PO2002 FAIL/incomplete; transfer PO1926 and independent CP1 document FAIL at typed_request before MCP. Earlier finite proof does not regrade these failures.
+A4 static selection/catalog/identity rejection diagnostics: Main canonical4PASS/0.213s; initial missing `_paths` helper harness log retained. r24 actual reported-delivery rejected annotation_pin_format_invalid at typed_request on attempts1/2, then provider incomplete; chat complete, other case outcomes pending. Main investigates pin ownership; v6 source-order rows14–23 running, stop first failure; no expanded scope.
+A1 copied-byte integrity canonical2PASS/11.238s; A3 scalar-quote canonical6PASS/0.087s, old test failure retained. These are focused diagnostics, NOT UAT acceptance or whole-suite proof.
+r25 v6 reader time schema frozen: asserted requires null property, other roles require string; exact atom-property binding remains server-validated. Main canonical3PASS/0.067s (`private/focused-reader-r25.log`); frozen v6 offset13 provider completed61.361s/4atoms, nested anyOf accepted. Semantic/source review pending: 4atoms versus prior9, neither ledger nor schema compliance proves correct/complete reading.
+r23 source-order offset13 passed the prior quote6 point, then rejected asserted + non-null property; failed output retained/unapproved, no automatic retry. Earlier r13 exact-span failures remain preserved in preimages.
+Full declared-scope semantic coverage remains incomplete; attachment parsing is not query coverage. Native row/cell binding, mail/attachment visible-answer acceptance and catalog128 cap remain open; no canonical publication/whole-ontology/release claim.
+Main canonical authority valid=true/ready=false; four methodology gates and independent three-reviewer release remain open, step4 in-progress; no checkbox or program-plan promotion. Host startup --check EXIT2 remains supplemental dependency-unavailable evidence, not a canonical regression/readiness override.
+One worker requests gpt-6.1-sol/high; actual metadata unverified. Current slice docs-only; implementation frozen pending explicit assignment, no new product tests/source/provider operations.
+[Lossless prior checkpoint and unique history](archive/2026-10-18/ontology-r24-uat-preedit/) with SHA256 manifest; existing archives unchanged.
+
+## Documentation publication — 2026-10-18 / #63
+Publish the current ontology requirements and issue reconciliation on an isolated
+documentation branch based on main `8dc9fc5`; no product/runtime/authority changes.
+The merged PR #62 integration record and main's frozen text-admission contract
+are preserved, not replaced by stale dirty-root instructions. Its scoped reviewed
+completion remains historical, not ontology or full-UAT acceptance; see the
+[lossless main/local preimages](archive/2026-10-18/ontology-issue63-publication-preedit/).
+Linked `.formowl` operational receipts are local-only evidence references, not
+public attachments or fresh validation of the deployed service. #63 T0 was unstarted at that publication checkpoint.
+
+## GitHub reconciliation — 2026-10-18 / tracking only
+User authorized consolidation against the current engineering/specification, not
+new runtime work. [#63](https://github.com/markliou/formowl/issues/63) now owns
+ontology-aware recovery A/B and CP0–CP3; engineering T0 had not started at that tracking checkpoint. CP0/1/2
+require a verdict at 2/8/16 cumulative work hours after T0; CP3 is dated after
+measured batch throughput. These are diagnostic checkpoints, not delivery promises.
+#56 is reopened for the unfinished methodology program; product and comparative
+close remain separate. #54 is superseded into #51 implementation plus #52 independent
+artifact/browser acceptance; all fourteen regressions remain. #48 is superseded
+into #63 risk/checkpoint reporting; OpenProject was not changed or declared On track.
+#19/#41/#53 retain distinct open scopes. #20 remains a scoped closed/deferred
+external-activation record, not a full acceptance claim. Remote readback verified
+open issues 19/41/51/52/53/56/63; no feature checkbox or authority gate was promoted.
+[Readback receipt and preimages](archive/2026-10-18/github-issue-reconciliation-preedit/)
+preserve this bookkeeping boundary; no code, deployment, provider, source or UAT run.
+
+## Ontology-aware semantic ingestion contract — 2026-10-18 / 待實作／待測
+- [ ] Build and verify the generic complete-scope semantic ingestion ledger:
+  source inventory -> attachment-aware extraction -> offline bounded LLM semantic reading
+  -> source-linked entity/claim/event/relation/time/supersession candidates
+  -> review/published ontology overlay -> ontology-guided retrieval -> native
+  evidence validation. Zero candidates is a recorded annotated result; pending,
+  unsupported, failed, stale, or partial coverage cannot become `not_found`.
+- [ ] Verify transfer on two materially different uses of the same core (for
+  example mail/attachment updates and project/work-item status/deadline) without
+  question-specific literals or hard-coded answers. Keep the feature **待測**;
+  actual webpage questions and visible source-correct answers are required by
+  SPEC §15.6; safe abstention on an answerable case fails. Current authority and
+  whole-UAT/reviewer gates remain open.
+
+## Dated R55 / ledger536 checkpoint — 2026-10-17 UTC / 待測
+- [R55 cutover](../.formowl/uat-weekend-20261016/ops/cutover-code-r55-result-safe.json) EXIT0/2026-10-17 20:01:55Z, **live8088**, code `d580faeab634…`; **R54 retained rollback**, no cleanup. Deployment authority is the exact frozen [package-r55](../.formowl/uat-weekend-20261016/package-r55.json)/code-r55/tests-r55 inventory, not dirty root product files; this docs slice does not synchronize root code. [Final read-only state](../.formowl/uat-weekend-20261016/ops/provider-session-r55-final-state.safe.json) confirms exact252code/93tests, pinned image running and8088 HTTP200/statusok/query service connected; health is not release acceptance.
+- [Canonical focused91PASS](../.formowl/uat-weekend-20261016/ops/provider-session-r55-differential.safe.json) is bounded proof. [Broader integration](../.formowl/uat-weekend-20261016/ops/integration-code-r55-safe.json) =**283 tests /22FAIL+1ERROR /13.005s, NON-GREEN**; all23 inherited assertion tails match R54, no new/resolved failures, Ruff0/compile0/exact252+93. Neither focused green nor inherited failure identity is whole-suite or release acceptance.
+- [Dated R54 manual review](../.formowl/uat-weekend-20261016/ops/provider-session-r54-manual-review.safe.json) =**7 functional LIMITED_PASS +1FAIL (C663)**, four lifecycle checks, source verifier EXIT0 and all9 sent provider requests wire-contract valid. [Formal ledger527](../.formowl/uat-weekend-20261016/ops/provider-session-r54-ledger.safe.json) =519+8 submissions, not passes; C663's original pre-provider clarification failure remains immutable.
+- [Final R55 manual review](../.formowl/uat-weekend-20261016/ops/provider-session-r55-manual-review.safe.json) records **9 browser questions LIMITED_PASS +4 lifecycle PASS**, finite batch only. [Wire verifier](../.formowl/uat-weekend-20261016/ops/provider-session-r55-wire.safe.json) EXIT0: all11 sent requests/9 cases contract-valid, `failure_findings=[]`. [Formal ledger536](../.formowl/uat-weekend-20261016/ops/provider-session-r55-ledger.safe.json) =527+9 submissions, **not passes**, no automatic retries. Whole-UAT/release/methodology acceptance remains false; original R54 C663 FAIL is not regraded.
+- [Fresh source verifier](../.formowl/uat-weekend-20261016/ops/provider-session-r55-source.safe.json) EXIT0 plus the later manual/native review establish all5 citation occurrences/3 unique citations resolve and match. Four requested capacitor values and origin field have same-target/header support; manufacturing location remains unverified. This proves only the returned finite evidence, not full-source coverage, cache-hit rate or upstream routing effectiveness.
+- [R55 frozen grammar correction](../.formowl/uat-weekend-20261016/worker-anscombe-supplied-negative-r55/handoff.safe.json) changes only shared closed supplied-text recognition: whole exterior negative-source constraints plus explicit quoted input, not a no-source override for mixed lookup. Same final tests RED12 subcases→6PASS, related69PASS, [scoped peer AGREE](../.formowl/uat-weekend-20261016/ops/reviewer-nash-supplied-negative-r55-safe.json); original/earlier failures remain preserved. C600 FAIL/unrerun and C601 compound-price-unit FAIL remain open; R52 C628/C651 observations prove only the exact-capability boundary, not full-source absence.
+- [Six provider-request requirements](../SPEC.md) §3.2 are inherited byte-identically from R54: stable server conversation UUID/header/cache key, fixed instructions/tool order, append-only provider input with dynamic tail, honest UA `uat-web-backend/0.1.0` matching application version, unchanged model/stream/store and current authority guards. Smaller eight-message routing history is separate. Cap/expiry stop safely without silent ID rotation; no cross-restart durability or nonblocking OAuth-reset claim. Public hosted terminology stays paused pending an explicit exception.
+- PDF/parser/topology work remains **paused**; [native-PDF review](../.formowl/uat-weekend-20261016/ops/native-pdf-r53-master-review-safe.json) is not a proven compound-unit fix. [Last lineage receipt](../.formowl/uat-weekend-20261016/ops/hybrid-current-r1/lineage-progress-safe.json) is not full index/embedding/activation; no new source/index operation or completion forecast here.
+- [Fresh canonical authority](../.formowl/uat-weekend-20261016/ops/authority-r55-final-tmpfs-container.json) EXIT0 with existing tmpfs config: valid=true/ready=false/errors=[], CJKtrue, execution `0eaba758e881…`. [Initial read-only/no-tmpfs probe](../.formowl/uat-weekend-20261016/ops/authority-r55-final-container.json) EXIT2 remains preserved; no product change or gate promotion. Four methodology gates and independent three-reviewer release gate remain open; feature待測/step4 in-progress. Source500ms/caps/guards and requested models unchanged; actual model/effort unverified, 3s unanswered.
+- [New lossless five-file preimages](archive/2026-10-18/weekend-r55-provider-status-preedit/SHA256SUMS.json) preserve every replaced checkpoint, prior failure and archive link. No prior archive edit, checkbox promotion, root product edit or mirror update.
+
+## Immutable history
+[Complete distinct pre-edit history](archive/2026-10-17/weekend-r37-contract-correction-preedit/root/docs/implementation-task-breakdown.md) retains every earlier checkpoint, failure, archive pointer and superseded status.
+[SHA256 manifest](archive/2026-10-17/weekend-r37-contract-correction-preedit/SHA256SUMS.json) binds all eight preimages; old archives remain unchanged. Historical evidence is not a standing dispatch or retry authorization.
+
+## Carried-forward unchecked work — unchanged
+These items retain their original text/status; dated proof is in the lossless preimage.
+
 - [ ] Verify the bounded generic repairs, replay candidate browser diagnostics
   and obtain three scoped reviewer decisions before acceptance.
-- [Frozen r4](../.formowl/uat-stability-20261013/package-r4.json), code dd731bfc…:
-  [verification](../.formowl/uat-stability-20261013/r4-verification-safe.json)153/153
-  PASS254.897s, integration3/3 PASS110.247s, lint/compile12 PASS; pinned image,
-  exact252+37 post-run hashes verified. Native32/32+115subtests PASS27.697s/Ruff;
-  query guard29/29+34subtests PASS0.184s/Ruff. Original native32tests/3ERROR28.468s
-  was invalid negative table_query fixture; no derived pass count, failure retained.
-- Baseline10actual browser turns/file=HTTP=DOM:5partial/1chat/2unexpected clarification/
-  1honest incomplete/1provider error,8comparable. Generic routing, retained-ID and
-  source-budget/read repairs preserve guards/budgets; historical500ms cause unproved.
-- R3 focused150+integration3 PASS preceded browser8/6pass, one MCP contract error
-  plus dependent missing-reference clarification/no failed private record. Actual
-  root unproved. Shared unsafe expansion reproduced syntheticred3tests/3failing
-  subcases/2errors; guard now precedes MCP, existing repair keeps same ID/scope.
-  Logging fallback hashes/status only, content_redacted=true/exact_result_preserved=false.
-- R4 initial candidate8:7comparable/correct,1provider502/connect_headers1.044s
-  after valid MCP. Separate predeclared fresh-chat+delivery2/2 PASS preserves the
-  original failure/incomparability. Ten unique records/log=HTTP=DOM; guard/redacted
-  fallback untriggered live (synthetic proof only). Citation IDs match prior
-  same-source proof; no fresh native reopening, no provider-root/stability claim.
-- Nash engineering/Bacon safety/Linnaeus methodology final scoped AGREE on r4;
-  rollout gate preserves original candidate failure. [Readiness15:04:37Z](../.formowl/uat-stability-20261013/live-r4-ready-safe.json)
-  confirms8088 r4dd731bfc…/252drift0, same image/source/settings/budgets,
-  logs0600/dir0700; old observability stopped/preserved rollback.
-- [Live matrix](../.formowl/uat-stability-20261013/live-r4-safe.json)/verifier EXIT0:
-  14/14known checks PASS; all14log=HTTP=DOM text/citations.8cited partial/4chat MCP0/
-  1honest incomplete unknown(provider1/MCP1)/1reset reference clarification(no provider/MCP).
-  Thirteen provider turns comparable; reset local/identity-exempt, not provider-comparable.
-  Repeated/fresh/rephrase origin citation, same-row manufacturer, unrelated-part origin/manufacturer and
-  PO delivery match prior same-source proof. Master screenshot review; PO page1/3
-  partial requested delivery, not shipment/latest commitment. Reload/reset/postreset
-  chat PASS; source pin unchanged/no fresh native reopen. Scope is observed known
-  regressions, not whole-UAT/provider-stability/standard.
-- [Cleanup15:11:45Z](../.formowl/uat-stability-20261013/final-operational-r4-safe.json):
-  8088healthy/exact252/drift0/restart0/OOMfalse;4own candidates removed/logs+rollback
-  retained; source/index/DB/unrelated containers untouched.14private IDs/records,
-  zero recording failures/redacted/unsafe-query events; URLs404 twice,0600/0700.
-- Historical source/artifact anomalies and upstream causes remain OPEN. Exact/error
-  exclusions, honest incomplete and all-fields contracts remain required. Canonical
-  authority-resume3 valid=true/ready=false/errors=[], four blocked; step4 in-progress.
-  Requested sol/high actual metadata unverified; Master/B bounded work remains active.
-- [Handoff](agent-goals/handoff-log.md) retains failures/history; exact pre-edit5docs
-  and hashes in unchanged [archive](archive/2026-10-13/uat-stability-r3-pre-verification/SNAPSHOT.md).
 
-## Opt-in private UAT logging — 2026-10-13 UTC, diagnostic-only / 待測
 - [ ] Capture and verify the authorized UAT interaction recorder in the candidate
   and live browser, then obtain three sequential scoped reviewer approvals.
   [Frozen r1](../.formowl/uat-observability-20261013/package-r1.json), code `4544e59a…`,
   copies r12 plus only two logging owners and two tests; unrelated dirty drift preserved.
-- Local canonical worker evidence: final logging9/9 + terminal6/6, Ruff/diff PASS;
-  earlier working-tree fixture PASS predates final provider correlation.
-  Master frozen36/36,2.192s,EXIT0 (`focused-r1b.log`); prior Docker125/zero tests
-  preserved. Final integration2: cookie PASS, opt-in fixture FAIL before service
-  with `private_artifact_fingerprint_invalid` (`integration-r1.log`,20.501s/EXIT1).
-  Candidate8096 Chromium/log capture PASS: repeated chat MCP0/distinct IDs,
-  unrelated LQP MCP1/provider2/citations2, private9→7→2 IDs/file=HTTP=DOM.
-  All3 scoped reviewers AGREE for logging activation only; exact evidence and
-  commands: [handoff](agent-goals/handoff-log.md). No all-green integration claim.
-- At logging activation8088: `formowl-uat-observability-live-20261013`, code4544e59a…/252drift0,
-  same source/image/gpt-5.5 high/budgets. Live ChromiumEXIT0: chat11195ms MCP0/provider1;
-  unrelated lookup23844ms MCP1/provider2/citations2/partial, file=HTTP=DOM,
-  raw9→7→2 IDs, provider/turn/MCP sameID/zero log failures/private-log URL404 twice.
-  [Live proof](../.formowl/uat-observability-20261013/live-browser-log-safe.json) and
-  [correlation](../.formowl/uat-observability-20261013/live-correlation-safe.json).
-  Repeat-prompt proof remains candidate-only. [Cleanup](../.formowl/uat-observability-20261013/final-operational-safe.json)
-  09:28:05Z: candidate removed/logs retained, live healthy/restart0/OOMfalse,
-  prior r12 stopped/preserved rollback; unrelated containers untouched.
-- Private schema v2 retains unique turn IDs, available validated plan/query/support,
-  citation membership and scan-stop metadata. Paired flags, private0600 persistent
-  operator mount, safe recording failures and unchanged public schemas/budgets:
-  [SPEC](../SPEC.md#731-source-neutral-evidence-double-check--待測).
-- Underlying COO inconsistency remains unresolved. [Canonical authority](../.formowl/uat-observability-20261013/authority-check.json)
-  valid=true/ready=false/errors=[], four gates blocked. No checkbox/standard/readiness
-  promotion; whole regression non-green and source-stability investigation OPEN.
-- Five complete pre-edit docs and hashes: [immutable checkpoint](archive/2026-10-13/uat-observability-checkpoint/SNAPSHOT.md).
-## Prior r12 LAN publication checkpoint — 2026-10-13 UTC, historical / 待測
-- User-confirmed target `8088`: `formowl-uat-live-8088-20261013` served the unchanged
-  verified r12 snapshot (`b2f4fa44…`), inventory252/drift0, same partial source `5e222fc…`.
-  [Readiness](../.formowl/publication-20261013/uat-8088/ready-safe.json): health OK;
-  [Final cutover](../.formowl/publication-20261013/uat-8088/final-safe.json): old8088/8089
-  stopped/preserved; primary8088 health OK before/after stopping8089.
-- [Cleanup](../.formowl/publication-20261013/cleanup/final-safe.json): six test containers
-  removed; logs/private artifacts retained, unrelated containers untouched; no image,
-  volume or data changes. This is operational cleanup, not broader acceptance.
-- Publication selects tested r12 bytes in Git index, preserving later two-file
-  working-tree changes; commit identity is in Git history. Selected75 paths/diff74:
-  frozen `dense_embedding.py` already equals HEAD; drift-byte audit matches, unrelated Issue20 unstaged.
-  GitLab push **NOT done**: outside-sandbox glab auth valid, configured bot belongs to
-  another project; no FormOwl remote, awaiting correct repository URL.
-- [8088 Chromium](../.formowl/publication-20261013/uat-8088/browser/acceptance-safe.json)
-  EXIT0, screenshots reviewed: ordinary MCP0/provider1; delivery MCP1/provider2/citation1;
-  COO MCP1/provider2/citations2; all comparable under trusted new deployment binding.
-  Delivery/COO remain partial; answers/citations match prior source-verified evidence
-  under identical code/source, **not a fresh native-source reopen**. Cutover scope only.
-- [Canonical authority](../.formowl/publication-20261013/authority-check.json): valid=true,
-  ready=false, errors=[], four gates blocked. No release/feature/methodology completion
-  or checkbox promotion; whole regression non-green, source-stability investigation parked/OPEN.
-## Delivery-resolution checkpoint — 2026-10-12 UTC, ACTIVE / 待測
-- At that dated checkpoint live `8089` ran r12/new partial source `5e222fc…`; full252 files, drift0.
-  Chromium LAN journey EXIT0: cited delivery and unrelated actual attachment,
-  ordinary MCP0/reload/reset/postreset pass; all four responses comparable.
-  **This observed question's source-verified answer was obtained in the real LAN
-  webpage**; Archimedes scoped AGREE. A first citation reopen failed with
-  `ingestion revision completed job changed`; once-only instrumentation then
-  passed both citations with original guards/results unchanged. Cause remains
-  unresolved: stability/reproducibility acceptance is blocked, not this observed
-  answer. No full-UAT, user-only blocker, phase-final or completion claim.
-- 2026-10-13 user-authorized investigation **parked pending recurrence**;
-  stability/reproducibility acceptance **OPEN/待查**. One full read **23.116s/EXIT0**:
-  all three same-call job fingerprints/counts and same-input hash engines match,
-  metadata stable during this call; two original browser citations resolve.
-  Current code/image/source match; first failed process unbound, mismatch branch/
-  values absent. Old mtimes/ctimes do not prove historical immutability or exclude
-  transient target swaps. Static hypotheses unproved; observed-date proof retained.
-  On recurrence, capture same-call job index, expected/actual hashes/counts and
-  frozen runtime/source identity before any retry; never repin/weaken guards or
-  reload to chase success. Operator helper only, no product diagnostic/patch/deploy/
-  rebuild/retry changes. Fresh canonical check valid=true/ready=false/errors=[]/
-  EXIT0 (`1123ffb9…`); four gates blocked, host dependency failure supplemental.
-  Partial diagnostic status only; no acceptance/release gate sought or checkbox
-  promotion. Safe evidence/capture boundaries: [handoff](agent-goals/handoff-log.md).
-- Storage O1/binder r4: canonical **49/49**, Ruff; three scoped agreements carried
-  through the r5 compatibility review. R5 materializer: **58/58**, Ruff, three
-  scoped agreements. B diagnostic binding: **19/19**, scoped Hypatia AGREE.
-  These close only their named findings, not source/business/full-UAT acceptance.
-- R10 corrected the rejected r8/r9 extra-file inventory: exactly **252 code +
-  33 test files**; Archimedes/Lagrange scoped AGREE. Combined canonical **82 tests,
-  81 pass / 1 failure, 170.385s** remains recorded. The failure was the mock's
-  nonpositional snippet/citation pairing, not paragraph content: deterministic red,
-  keyed repair **1/1 + 2/2**, Ruff/compile, Hypatia AGREE/closed. R11 focused
-  integration below supersedes that one failure; no whole-suite-green claim.
-- Fixed 2048-parent r2 extraction completed **17:10Z / EXIT0**, **622,631
-  Observations / 7,211 runs**. Prep-r2 failed on an old composer; corrected
-  prep-r3 reused that completed delta and finished **17:44:25Z / EXIT0**:
-  **5,588,435 Observations / 1,100,143 references / 10,479,384 postings**, pin
-  `7c11bec0…`, **not activated**. Successful extraction is not source completeness.
-- Safe source audit proves one successful native PDF run's three paragraphs all
-  became `[redacted_mail_evidence]`, losing identifier/date postings. **Source is
-  not absent.** B's generic path-span consumer repair is frozen: **26/26**, zero
-  failures/errors/skips, **0.601s**, Ruff. Detector/final guard unchanged;
-  attachment extractor version only **0.6.2**. Original red four tests/20 failing
-  subcases and two intermediate permission-fixture failures remain preserved.
-- Master r11: exactly **252 code + 34 test files**, fingerprint `ac409901…`;
-  two product deltas plus citation-fixture correction. Canonical **108/108,
-  170.274s, EXIT0**, zero failures/errors/skips; exact pre/post inventories verified.
-  Hypatia/Archimedes/Lagrange r11 scoped **AGREE (3/3)**, not broad release.
-  Fixture-r11 **EXIT0**: synthetic native PDF + independent document pass late cue,
-  native citation, ordinary MCP0/reload/reset. Safe-v2 proves all six responses
-  incomparable (missing deployment/code/build); each four-attempt business turn
-  retained only three records. Diagnostic only, not actual-date acceptance.
-  The NEW same-source-order **2048-parent/all-formats** version0.6.2 r3 batch
-  completed **18:57:38Z/EXIT0**, **622,631 Observations/7,211 runs**; prep-r4
-  completed **19:18:55Z/EXIT0**. Pin `5e222fc…`: **1,100,143 references /
-  407,401 helpers /10,671,080 postings**, still partial, zero independent-document
-  helpers. Admission found a successful native PDF run and three preserved indexed
-  paragraphs. Old runs, pins and ledgers remain preserved.
-- Prior serving r12 (`b2f4fa44…`), exact252+34: B's frozen retention-only repair
-  derives safe diagnostic capacity from the **unchanged six-request cap**;
-  **19/19,0.818s**, zero failures/errors/skips, Ruff. Final focused r12
-  **117/117,174.049s,EXIT0**, zero failures/errors/skips; pre/post exact252+34.
-  Hypatia/Archimedes/Lagrange scoped **AGREE (3/3)**. Active serving manifest is
-  then r12 on live8089; that candidate8096 proved then removed at19:35:25Z.
-  Old r5 remains stopped/preserved for rollback.
-  Initial freeze-helper TypeError/empty unpublished tree and operator readonly-
-  template chmod failure remain preserved; only the operator helper's private
-  tmpfs copy was corrected, no product/secrets changed by that correction.
-  Candidate citations reopened/hash/run/parent checked at19:26Z: requested
-  delivery, not PO/approval dates, shipment or latest supplier schedule.
-  Unrelated attachment proof is not independently registered document proof.
-  Live source/native proof later passed; first reopen failure remains unclosed.
-  Missing/truncated identity stays incomparable; standard/broad-source gates open.
-- Canonical `authority-resume4.json`: **valid=true / ready=false / errors=[] / EXIT0**;
-  four gates blocked, feature 待測, step 4 `in-progress`, no checkbox promotion.
-  Host dependency exit2 is supplemental only. Requested sol/high, actual
-  configuration unverified; no descendants. This checkpoint changes docs only.
-- Evidence and next-action detail: [handoff](agent-goals/handoff-log.md).
-  Full pre-edit history is preserved byte-for-byte with hashes in the
-  [immutable checkpoint](archive/2026-10-12/delivery-resolution-pre-span-repair/README.md).
-  Diagnostic/storage/redaction contracts reflect r11 extraction and r12 serving;
-  live source-stability acceptance and broad-source evidence remain open. Seven pre-edit
-  docs are [archived](archive/2026-10-12/delivery-resolution-r12-staged-checkpoint/SNAPSHOT.md).
-  No blanket worker/Master stop.
 
 ## Retention Rule
 - Keep every unchecked checklist item.
@@ -230,21 +128,20 @@ source/hash/lineage/permission checks and existing budgets remain mandatory.
 
 ## Current Unchecked Work
 
-- [ ] Implement issue #20 Google-backed ChatGPT MCP OAuth identity mapping and
-  gateway-controlled `ActorContext`.
+- [ ] Reconcile remaining issue #20 Google-backed ChatGPT MCP OAuth identity
+  mapping / gateway-controlled `ActorContext` verification and live activation.
   - Owner: System Backbone Agent.
-  - Repository implementation and local harness slices are extensive, but
-    validator blockers; seven external layers remain `not_supplied`, so #20
-  stays open.
-  - This bounded batch reviewer
-    gate is not the Issue #20-wide reviewer external layer, which remains
-    `not_supplied`.
-  - Remaining state: issue #20 stays unchecked and open. Repository authority is
-    the existing Issue #20 runbook, evidence packet, and completion transition.
+  - GitHub #20 is closed `not_planned` with a 2026-07-22 scoped offline-work
+    closure and deferred external activation, not full delivery. Historical
+    offline claims do not establish current validator or live acceptance.
+  - This local task remains unchecked; the existing Issue #20 runbook, evidence
+    packet and completion transition retain the unresolved verification work.
+    #63 tracks its current external-risk dependency without reopening old work.
   - External state: `live_postgresql`, `operator_cli_postgresql`,
     `production_container_lifecycle`, `mcp_inspector`, `live_chatgpt_google`,
     `reviewer_gate`, and `completion_audit` remain `not_supplied`.
-  - Next: freeze docs/local harness, run all seven external layers, and keep #20 unchecked.
+  - A later bounded authorized activation task must reconcile current artifacts
+    and external evidence; this issue-cleanup assignment runs none of those layers.
 
 - [ ] Implement issue #41 generic Core Asset Storage identity binding, tenant
   isolation, lifecycle, retention, and authorization.

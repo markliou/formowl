@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from array import array
 from collections.abc import Callable, Iterable, Iterator, Sequence as SequenceABC
+from contextlib import ExitStack
+import ctypes
+import errno
 import fcntl
 import hashlib
 import importlib
@@ -20,7 +23,9 @@ import mmap
 import os
 from pathlib import Path
 import platform
+import stat
 import struct
+import tempfile
 from typing import Any, Protocol, Sequence
 import unicodedata
 
@@ -62,6 +67,10 @@ _DEFAULT_DENSE_EVIDENCE_BATCH_CHUNK_SIZE = 32
 _DENSE_DURABLE_BATCH_CHUNK_SIZE = 32
 _DENSE_EVIDENCE_BATCH_SIZE_ENV = "FORMOWL_DENSE_EVIDENCE_BATCH_SIZE"
 _MAX_DENSE_EVIDENCE_BATCH_CHUNK_SIZE = 256
+_MAX_DENSE_CACHE_SEED_PROFILE_BYTES = 4096
+_MAX_DENSE_CACHE_SEED_JOURNAL_LINE_BYTES = 8192
+_MAX_DENSE_CACHE_SEED_JOURNAL_BYTES = 256 * 1024 * 1024
+_MAX_DENSE_CACHE_SEED_VECTOR_BYTES = 8 * 1024 * 1024 * 1024
 _MODEL_FILE_NAME = "model.safetensors"
 _MODEL_CONFIG_FILE_NAME = "config.json"
 _MAX_MODEL_BYTES = 1024 * 1024 * 1024
@@ -253,6 +262,184 @@ class DenseEvidenceVectorCache:
     def __init__(self, directory: str | Path) -> None:
         self.directory = Path(directory)
 
+    @staticmethod
+    def _declaration() -> dict[str, Any]:
+        return {
+            "artifact_id": "formowl_pinned_dense_batch_cache_v1",
+            "encoder_id": ISSUE56_TARGET_DENSE_ENCODER_ID,
+            "profile_fingerprint": ISSUE56_TARGET_DENSE_PROFILE_FINGERPRINT,
+            "dimension": ISSUE56_TARGET_DENSE_DIMENSION,
+            "format": "little_endian_float32_v1",
+            "text_key": "sha256_exact_utf8_v1",
+        }
+
+    def seed_from(self, base_directory: str | Path) -> dict[str, Any]:
+        """OFFLINE only: copy validated numerical rows once to a NEW cache.
+
+        The base must be quiescent with no uncommitted tail. It is opened
+        read-only, including its existing writer lock; recovery belongs to
+        its existing writer. No evidence, source or authorization bindings
+        are copied. The caller must freshly validate those for every revision.
+        Reads are capped at 4 KiB/profile, 8 KiB/journal record, 256 MiB/journal
+        and 8 GiB/vectors; vector blocks remain at most 32 rows.
+        """
+        base = Path(base_directory)
+        if os.path.lexists(self.directory):
+            raise DenseEmbeddingUnavailableError("dense_cache_seed_target_exists")
+        if base.is_symlink() or self.directory.resolve().is_relative_to(base.resolve()):
+            raise DenseEmbeddingUnavailableError("dense_cache_seed_source_invalid")
+        with ExitStack() as stack:
+            streams = {}
+            initial_stats = {}
+            for name in ("writer.lock", "profile.json", "vectors.f32", "batches.jsonl"):
+                try:
+                    descriptor = os.open(base / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                except OSError as exc:
+                    raise DenseEmbeddingUnavailableError("dense_cache_seed_source_invalid") from exc
+                stream = stack.enter_context(os.fdopen(descriptor, "rb"))
+                metadata = os.fstat(stream.fileno())
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise DenseEmbeddingUnavailableError("dense_cache_seed_source_invalid")
+                streams[name] = stream
+                initial_stats[name] = metadata
+                if name == "writer.lock":
+                    try:
+                        fcntl.flock(stream, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    except BlockingIOError as exc:
+                        raise DenseEmbeddingUnavailableError("dense_cache_seed_source_busy") from exc
+            caps = {
+                "profile.json": _MAX_DENSE_CACHE_SEED_PROFILE_BYTES,
+                "vectors.f32": _MAX_DENSE_CACHE_SEED_VECTOR_BYTES,
+                "batches.jsonl": _MAX_DENSE_CACHE_SEED_JOURNAL_BYTES,
+            }
+            if any(initial_stats[name].st_size > cap for name, cap in caps.items()):
+                raise DenseEmbeddingUnavailableError("dense_cache_seed_size_limit")
+            profile_bytes = streams["profile.json"].read(_MAX_DENSE_CACHE_SEED_PROFILE_BYTES + 1)
+            try:
+                declaration = json.loads(profile_bytes)
+            except (ValueError, UnicodeError) as exc:
+                raise DenseEmbeddingUnavailableError("dense_cache_profile_mismatch") from exc
+            if declaration != self._declaration():
+                raise DenseEmbeddingUnavailableError("dense_cache_profile_mismatch")
+            self.directory.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with tempfile.TemporaryDirectory(
+                prefix=".dense-cache-seed-", dir=self.directory.parent,
+            ) as temporary_directory:
+                staged = Path(temporary_directory) / "cache"
+                staged.mkdir(mode=0o700)
+                target_lock = stack.enter_context((staged / "writer.lock").open("x+b"))
+                os.chmod(staged / "writer.lock", 0o600)
+                fcntl.flock(target_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                result = self._seed_committed(streams, staged)
+                # Copy the validated profile only; never copy arbitrary files
+                # or hardlink payloads that a later writer could mutate.
+                with (staged / "profile.json").open("xb") as stream:
+                    os.chmod(staged / "profile.json", 0o600)
+                    stream.write(profile_bytes)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                for name, metadata in initial_stats.items():
+                    current = (base / name).stat(follow_symlinks=False)
+                    if (
+                        current.st_dev, current.st_ino, current.st_size,
+                        current.st_mtime_ns, current.st_ctime_ns,
+                    ) != (
+                        metadata.st_dev, metadata.st_ino, metadata.st_size,
+                        metadata.st_mtime_ns, metadata.st_ctime_ns,
+                    ):
+                        raise DenseEmbeddingUnavailableError("dense_cache_seed_source_changed")
+                if os.path.lexists(self.directory):
+                    raise DenseEmbeddingUnavailableError("dense_cache_seed_target_exists")
+                # Linux no-replace publication closes the empty-target race;
+                # the staged writer lock stays held through publication.
+                self._publish_seed(staged, self.directory)
+                return result
+
+    @staticmethod
+    def _publish_seed(staged: Path, target: Path) -> None:
+        rename = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+        if rename is None:
+            raise DenseEmbeddingUnavailableError("dense_cache_seed_publish_unavailable")
+        rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+        rename.restype = ctypes.c_int
+        # AT_FDCWD=-100, RENAME_NOREPLACE=1. Fail closed on unsupported filesystems.
+        if rename(-100, os.fsencode(staged), -100, os.fsencode(target), 1) != 0:
+            reason = (
+                "dense_cache_seed_target_exists" if ctypes.get_errno() == errno.EEXIST
+                else "dense_cache_seed_publish_unavailable"
+            )
+            raise DenseEmbeddingUnavailableError(reason)
+
+    @staticmethod
+    def _seed_committed(streams, staged: Path) -> dict[str, Any]:
+        journal = streams["batches.jsonl"]
+        payload = streams["vectors.f32"]
+        committed_bytes = 0
+        journal_bytes = 0
+        hashes_seen: set[str] = set()
+        row_size = ISSUE56_TARGET_DENSE_DIMENSION * 4
+        with (staged / "vectors.f32").open("xb") as output_payload, (
+            staged / "batches.jsonl"
+        ).open("xb") as output_journal:
+            os.chmod(staged / "vectors.f32", 0o600)
+            os.chmod(staged / "batches.jsonl", 0o600)
+            while line := journal.readline(_MAX_DENSE_CACHE_SEED_JOURNAL_LINE_BYTES + 1):
+                journal_bytes += len(line)
+                if (
+                    len(line) > _MAX_DENSE_CACHE_SEED_JOURNAL_LINE_BYTES
+                    or journal_bytes > _MAX_DENSE_CACHE_SEED_JOURNAL_BYTES
+                ):
+                    raise DenseEmbeddingUnavailableError("dense_cache_seed_size_limit")
+                if not line.endswith(b"\n"):
+                    raise DenseEmbeddingUnavailableError("dense_cache_seed_uncommitted_tail")
+                try:
+                    entry = json.loads(line)
+                except (ValueError, UnicodeError) as exc:
+                    raise DenseEmbeddingUnavailableError("dense_cache_journal_invalid") from exc
+                if not isinstance(entry, dict):
+                    raise DenseEmbeddingUnavailableError("dense_cache_journal_invalid")
+                hashes = entry.get("text_hashes")
+                if (
+                    set(entry) != {"offset", "text_hashes", "payload_sha256"}
+                    or type(entry.get("offset")) is not int
+                    or entry["offset"] != committed_bytes
+                    or not isinstance(hashes, list)
+                    or not 0 < len(hashes) <= _DENSE_DURABLE_BATCH_CHUNK_SIZE
+                    or any(
+                        not isinstance(key, str) or len(key) != 64
+                        or any(char not in "0123456789abcdef" for char in key)
+                        or key in hashes_seen for key in hashes
+                    )
+                    or len(set(hashes)) != len(hashes)
+                ):
+                    raise DenseEmbeddingUnavailableError("dense_cache_journal_invalid")
+                if committed_bytes + len(hashes) * row_size > _MAX_DENSE_CACHE_SEED_VECTOR_BYTES:
+                    raise DenseEmbeddingUnavailableError("dense_cache_seed_size_limit")
+                block = payload.read(len(hashes) * row_size)
+                if (
+                    len(block) != len(hashes) * row_size
+                    or hashlib.sha256(block).hexdigest() != entry["payload_sha256"]
+                ):
+                    raise DenseEmbeddingUnavailableError("dense_cache_payload_mismatch")
+                output_payload.write(block)
+                output_journal.write(line)
+                hashes_seen.update(hashes)
+                committed_bytes += len(block)
+            if (
+                payload.read(1)
+                or committed_bytes != os.fstat(payload.fileno()).st_size
+                or journal_bytes != os.fstat(journal.fileno()).st_size
+            ):
+                raise DenseEmbeddingUnavailableError("dense_cache_seed_uncommitted_tail")
+            for stream in (output_payload, output_journal):
+                stream.flush()
+                os.fsync(stream.fileno())
+        return {
+            "phase": "dense_cache_seeded",
+            "cached_unique_text_count": len(hashes_seen),
+            "committed_vector_bytes": committed_bytes,
+        }
+
     def encode(
         self,
         encoder: DenseEncoder,
@@ -280,14 +467,7 @@ class DenseEvidenceVectorCache:
         self, encoder, texts, *, progress, consume_batch=None,
     ) -> PackedEvidenceVectors:
         batch_size = configured_dense_evidence_batch_size()
-        declaration = {
-            "artifact_id": "formowl_pinned_dense_batch_cache_v1",
-            "encoder_id": encoder.encoder_id,
-            "profile_fingerprint": encoder.profile_fingerprint,
-            "dimension": encoder.dimension,
-            "format": "little_endian_float32_v1",
-            "text_key": "sha256_exact_utf8_v1",
-        }
+        declaration = self._declaration()
         declaration_path = self.directory / "profile.json"
         if declaration_path.exists():
             if json.loads(declaration_path.read_bytes()) != declaration:

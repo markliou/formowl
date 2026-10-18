@@ -35,8 +35,10 @@ already beats RAG. The executable authority gate must remain the claim guard.
 heterogeneous sources
   -> Asset / EvidenceSnapshot
   -> ExtractorRun
+  -> source-completeness reconciliation
   -> source-preserving Observation
-  -> candidate mentions, entities, claims, relations, and frames
+  -> complete semantic annotation ledger for the declared ontology-aware scope
+  -> candidate mentions, entities, claims, relations, temporal frames, and lineage
   -> reviewed/versioned canonical KG + scoped ontology mappings
   -> permission-filtered EffectiveGraphView
 
@@ -56,8 +58,11 @@ Layer responsibilities are explicit:
 - **RAG** recovers source evidence and remains the direct-lookup baseline.
 - **KG** supplies identity resolution, cross-source joins, bounded paths,
   temporal/current-state structure, contradiction links, and provenance.
-- **Ontology** supplies scoped vocabulary, type/frame mappings, validation, and
-  a capped ranking prior; uncertain inferred types are not truth.
+- **Ontology** supplies scoped vocabulary and source-linked semantic structure
+  for entities, claims, events, temporal frames, relations, attachment/thread
+  lineage, and supersession. Its score is capped/additive; uncertain inferred
+  types are not truth. Complete semantic ingestion is mandatory for the
+  ontology-aware arm, while strong RAG remains the baseline/fallback.
 - **Deterministic execution** owns exact set, count, inventory, aggregation,
   and completeness claims.
 - **The answer model** explains only the authorized evidence returned by the
@@ -139,6 +144,38 @@ Future calendar, ticket/project, document, database, and other adapters must
 preserve their source-specific occurrence identity while mapping shared
 semantics into the same graph.
 
+### Product semantic-ingestion contract — 待實作／待測
+
+SPEC §3.1.1/§6.2.1/§15.6 clarify the product's semantic-ingestion obligation,
+not a new comparison factor. Frozen arms, method/tokenizer, budgets, decision
+rules and executable gates are unchanged; no old result is regraded. Before
+claiming complete ontology-aware product behavior, the declared authorized scope
+must have a sealed source inventory, complete attachment-aware extraction, a
+per-unit semantic annotation ledger, review/governance status, and pinned
+ontology/graph/effective-view revisions. The semantic reader must interpret
+meaning and relations with an LLM from full source-preserving Observations; regex or
+identifier tokenization is only a deterministic support signal.
+
+A unit can be legitimately `annotated` with zero candidate assertions, but
+`pending`, `unsupported`, `failed`, partial, stale, or unexplained coverage
+limits coverage; governance `pending_review` is recorded separately. Eligible
+source fallback or supported answers with limits remain available, not
+`not_found`. This does not create a new recheck trigger or change §7.3.1 ALL-fields
+eligibility. LLM semantic reading is mandatory for this product capability;
+canonical publication remains review/governed. Perform it offline in resumable
+batches, not per question; parser/regex outputs cannot stand in for reading.
+
+The transfer test must include at least two materially different uses of the
+same core, such as a mail/attachment event-update case and a project/work-item
+status/deadline case. Domain literals and expected answers are not permitted to
+become hard-coded ontology rules.
+Report read coverage separately from semantic precision/recall, date-role and
+supersession correctness. Independent original-source adjudication and actual
+webpage answers establish product behavior; internal traces establish that
+annotations were used. Neither replaces the other or authorizes comparative
+claims. Any future new experimental factor needs its own reviewed/frozen protocol;
+do not attribute improved extraction to a scoring change.
+
 ### Candidate before canonical
 
 An Observation is evidence, not a canonical fact. Extractors and LLMs may emit
@@ -180,7 +217,7 @@ ablation.
 
 | Query class | Required execution |
 | --- | --- |
-| `evidence_lookup` | strong lexical+dense retrieval, optional entity linking and bounded evidence expansion |
+| `evidence_lookup` | strong lexical+dense retrieval; ontology-aware arms must use complete source-linked semantic annotations to guide evidence selection, then validate against raw/native evidence |
 | `relation_reasoning` | provenance-constrained typed traversal plus source evidence for every hop |
 | `exact_set_or_inventory` | validated deterministic structured executor and explicit coverage contract |
 | `global_summarization` | bounded, permission-filtered source/evidence set with incompleteness disclosure |
