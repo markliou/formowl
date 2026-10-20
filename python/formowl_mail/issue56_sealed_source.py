@@ -382,20 +382,38 @@ class SourceNativeLexicalLookup:
         if not self.has_keyed_source_metadata:
             return []
         with self._connection_lock:
-            row = self._connection.execute(
-                "SELECT position FROM reference_locators WHERE observation_hash = ?",
+            occurrence = self._connection.execute(
+                "SELECT occurrence_id, job_index, asset_id, extractor_run_id "
+                "FROM occurrence_helpers WHERE observation_hash = ? LIMIT 2",
                 (observation_hash,),
-            ).fetchone()
-            if row is None:
-                return []
+            ).fetchall()
+            if len(occurrence) > 1:
+                raise ContractValidationError("source occurrence helper is ambiguous")
             result = []
-            for offset in (-1, 1, -2, 2, -3, 3, -4, 4):
-                reference = self._connection.execute(
-                    "SELECT job_index, observation_id, observation_hash, job_fingerprint "
-                    "FROM reference_locators WHERE position = ?", (row[0] + offset,),
+            if occurrence:
+                occurrence_id, job_index, asset_id, extractor_run_id = occurrence[0]
+                result = self._connection.execute(
+                    "SELECT h.job_index, h.observation_id, h.observation_hash, h.job_fingerprint "
+                    "FROM occurrence_helpers o JOIN helpers h ON h.observation_hash = o.observation_hash "
+                    "WHERE o.occurrence_id = ? AND o.job_index = ? AND o.asset_id = ? "
+                    "AND o.extractor_run_id = ? AND o.observation_hash != ? "
+                    "ORDER BY h.observation_id COLLATE BINARY LIMIT 64",
+                    (occurrence_id, job_index, asset_id, extractor_run_id, observation_hash),
+                ).fetchall()
+            if not result:
+                row = self._connection.execute(
+                    "SELECT position FROM reference_locators WHERE observation_hash = ?",
+                    (observation_hash,),
                 ).fetchone()
-                if reference is not None:
-                    result.append(reference)
+                if row is None:
+                    return []
+                for offset in (-1, 1, -2, 2, -3, 3, -4, 4):
+                    reference = self._connection.execute(
+                        "SELECT job_index, observation_id, observation_hash, job_fingerprint "
+                        "FROM reference_locators WHERE position = ?", (row[0] + offset,),
+                    ).fetchone()
+                    if reference is not None:
+                        result.append(reference)
         return result
 
     def helper_for_mail_parent(

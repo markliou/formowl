@@ -1262,6 +1262,14 @@ def _build_source_start_semantic_handler(
             if term in unicodedata.normalize("NFKC", query_text).casefold()
             and (term.isdecimal() or tokenizer.analyze(term).protected_identifiers)
         )
+        # Mail may use one identifier as a bounded occurrence anchor, while a
+        # native table row must still satisfy every identifier from the query.
+        native_required_terms = required_terms
+        query_identifiers = tuple(
+            span.exact_token for span in tokenizer.analyze(query_text).protected_identifiers
+        )
+        if len(required_terms) == 1 and len(query_identifiers) > 1:
+            native_required_terms = tuple(sorted(set(query_identifiers)))
         source_budget = {
             "deadline": time.monotonic() + SOURCE_EVIDENCE_TIME_BUDGET_MS / 1000,
             "reads": 0, "evidence": 0, "context_bytes": 0,
@@ -1329,6 +1337,12 @@ def _build_source_start_semantic_handler(
             analysis = tokenizer.analyze(query_text)
             query_terms = set(analysis.tokens)
             protected_terms = {item.exact_token for item in analysis.protected_identifiers}
+            # The runtime may enter a split mail occurrence with one
+            # validated item anchor. Keep this guard aligned with that
+            # bounded entry condition; sibling PO segments are admitted only
+            # by the same-occurrence context walk below.
+            if required_terms and len(required_terms) == 1 and len(protected_terms) > 1:
+                protected_terms = set(required_terms)
             # A Query Agent may add presentation instructions to query_text.
             # Rank source candidates by the validated evidence constraints, not
             # those instruction words. Multiword constraints use the same frozen
@@ -1623,7 +1637,7 @@ def _build_source_start_semantic_handler(
                 family_deadline = now + max(0, kwargs["deadline_monotonic"] - now) / family_left
                 if family in {"attachment_table", "mail_inline_table"}:
                     scan = exact_lookup.scan_source_rows(
-                        required_terms=required_terms,
+                        required_terms=native_required_terms,
                         query_text=query_text,
                         source_families=("mail" if family == "mail_inline_table" else "attachment_table",),
                         mail_import_session_id=selector if mail_tool else None,

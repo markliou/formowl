@@ -1313,9 +1313,24 @@ def _query_agent_runtime_context(
         enabled_tool_names=dispatcher.enabled_tool_names,
     )
     is_explicit_workspace_request = user_text is not None and requires_workspace_evidence(user_text)
+    mail_handler = getattr(dispatcher.semantic_gateway, "mail_evidence_handler", None)
+    mail_capabilities = getattr(mail_handler, "authorized_capability_summary", None)
+    mail_only_scope = (
+        isinstance(mail_capabilities, Mapping)
+        and set(mail_capabilities.get("source_families", ()))
+        and set(mail_capabilities.get("source_families", ())).issubset(
+            {"mail", "attachment_table"}
+        )
+    )
     preferred_tool_name = (
         "query_mail_evidence"
-        if (is_explicit_workspace_request and "mail" in _explicit_source_families(user_text))
+        if (
+            is_explicit_workspace_request
+            and (
+                "mail" in _explicit_source_families(user_text)
+                or (not _explicit_source_families(user_text) and mail_only_scope)
+            )
+        )
         else "query_effective_graph_view"
     )
     descriptor = next(
@@ -1487,8 +1502,22 @@ def _run_gpt_query_agent(
             if bound_contract != request.request_contract:
                 request = replace(request, request_contract=bound_contract)
         if request.tool_name in {"query_mail_evidence", "query_effective_graph_view"}:
+            candidate_required_terms = (
+                list(request.required_terms)
+                if request.required_terms is not None
+                else list(protected_reference_identifiers(prompt))
+            )
+            # A mail occurrence may split the PO and item across body
+            # segments. Use the item as the bounded source-reader anchor;
+            # the complete identifiers remain bound in the request contract.
+            if len(candidate_required_terms) > 1 and any(
+                term.startswith("po") for term in candidate_required_terms
+            ):
+                candidate_required_terms = [
+                    term for term in candidate_required_terms if not term.startswith("po")
+                ][:1]
             bound_terms = request_contract_binder.bind_required_terms(
-                list(request.required_terms) if request.required_terms is not None else None,
+                candidate_required_terms or None,
                 allow_missing=request.tool_name == "query_effective_graph_view",
             )
             if bound_terms is not None and bound_terms != request.required_terms:
