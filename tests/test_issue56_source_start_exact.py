@@ -67,6 +67,18 @@ def _native_price_quantity_bytes():
     return output.getvalue()
 
 
+def _native_prefixed_identifier_bytes():
+    """Native numeric value whose source schema supplies the ``PO`` prefix."""
+    output = io.BytesIO()
+    with ZipFile(io.BytesIO(_native_table_bytes())) as source, ZipFile(output, "w") as target:
+        for member in source.infolist():
+            content = source.read(member.filename)
+            content = content.replace(b"Code", b"PO No.")
+            content = content.replace(b"ITEM-Q73", b"470002002")
+            target.writestr(member, content)
+    return output.getvalue()
+
+
 class SourceStartExactTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -276,6 +288,25 @@ class SourceStartExactTests(unittest.TestCase):
         arguments.pop("table_query")
         with patch.object(type(revision.source_records), "scan_authorized_observations", side_effect=AssertionError("lexical scan")):
             self.assert_values(handler(arguments))
+
+    def test_prefixed_identifier_and_second_term_reach_same_native_row(self):
+        _, _, handler, arguments = self.prepare(content=_native_prefixed_identifier_bytes())
+        arguments.pop("table_query")
+        arguments["query_text"] = "Find PO470002002 staged delivery"
+        arguments["required_terms"] = ["PO470002002", "staged"]
+        arguments["request_contract"].update(
+            original_query_hash=sha256_json(arguments["query_text"]),
+            requested_fields=["delivery"],
+        )
+
+        result = handler(arguments)
+
+        self.assertTrue(result["citations"], result)
+        self.assertTrue(result["evidence"], result)
+        row = result["evidence"][0]["table_row"]
+        values = {(item["field"], item["value"]) for item in row["cells"]}
+        self.assertIn(("PO No.", "470002002"), values)
+        self.assertIn(("State", "staged"), values)
 
     def test_automatic_exact_preserves_all_validated_content_constraints(self):
         _, _, handler, arguments = self.prepare()

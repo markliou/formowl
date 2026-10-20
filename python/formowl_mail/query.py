@@ -76,6 +76,47 @@ _REVISION_SOURCE_QUERY_LIMITS = replace(
     DEFAULT_SEMANTIC_PLAN_LIMITS,
     max_time_budget_ms=_REVISION_SOURCE_QUERY_TIME_BUDGET_MS,
 )
+
+# Source schemas sometimes label a numeric value with a type prefix (for
+# example ``PO No.`` stores ``470002002`` while a user asks for
+# ``PO470002002``).  This helper only proposes bindings when the prefix is an
+# explicit token in an authorized source field; callers still validate the
+# native row and value before exposing evidence.
+_TYPED_NUMERIC_IDENTIFIER_RE = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z]+)[\s#:_-]*([0-9]+)(?![0-9])"
+)
+_STRUCTURED_FIELD_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def bind_typed_identifier_to_source_schema(
+    identifier: str,
+    source_fields: Sequence[str],
+) -> tuple[tuple[str, str], ...]:
+    """Bind a typed identifier to native values through source field labels."""
+    if not isinstance(identifier, str) or not identifier.strip():
+        raise ContractValidationError("typed identifier is invalid")
+    if isinstance(source_fields, (str, bytes)) or not isinstance(source_fields, Sequence):
+        raise ContractValidationError("source schema fields are invalid")
+    normalized_identifier = _normalize_mail_relevance_text(identifier).strip()
+    match = _TYPED_NUMERIC_IDENTIFIER_RE.fullmatch(normalized_identifier)
+    if match is None:
+        return ()
+    prefix, native_value = match.groups()
+    bindings: list[tuple[str, str]] = []
+    for field in source_fields:
+        if not isinstance(field, str) or not field.strip():
+            raise ContractValidationError("source schema field is invalid")
+        field_tokens = set(
+            _STRUCTURED_FIELD_TOKEN_RE.findall(_normalize_mail_relevance_text(field))
+        )
+        if prefix not in field_tokens:
+            continue
+        binding = (field, native_value)
+        if binding not in bindings:
+            bindings.append(binding)
+    return tuple(bindings)
+
+
 _MAIL_EXPLICIT_EXACT_CONTROL_MARKERS = (
     "count",
     "exact set",

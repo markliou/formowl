@@ -71,6 +71,7 @@ from formowl_mail.query import (
     TextDocumentOccurrenceLineage,
     REVISION_SOURCE_FALLBACK_OBSERVATION_TYPES,
     _source_mail_observation_match,
+    bind_typed_identifier_to_source_schema,
     _attachment_child_lineages,
     _safe_snippet,
     _citation_for_snippet,
@@ -3971,9 +3972,32 @@ class _IngestionExactCellLookup:
             if not terms and table_query is None:
                 return RevisionOwnedMailSourceScan((), 0, False, "source_table_anchor_unresolved")
             hashes = set()
+            # A business identifier may carry the source column's type prefix
+            # (for example ``PO470002002``) while the native cell stores only
+            # its numeric value (``470002002``).  Resolve that representation
+            # through the sealed source schema, never by a global alias or by
+            # stripping arbitrary user text.  Keep the original term as a
+            # matcher below so an unbound identifier remains a normal literal.
+            typed_term_bindings: dict[str, tuple[tuple[str, str], ...]] = {}
             for term in terms:
                 check()
                 hashes.update(sha256_json(token) for token in self._tokenizer_profile.analyze(term).tokens)
+                if table_query is None:
+                    bindings = bind_typed_identifier_to_source_schema(
+                        term,
+                        tuple(
+                            item["field"]
+                            for item in self._columns
+                            if item["structure_status"] == "source_provided"
+                        ),
+                    )
+                    if bindings:
+                        typed_term_bindings[term] = bindings
+                        for field, value in bindings:
+                            for column_hash in self._normalized_columns.get(
+                                normalize_source_occurrence_structured_surface(field), ()
+                            ):
+                                hashes.add(source_occurrence_exact_cell_value_hash(column_hash, value))
             if table_query is not None:
                 # Resolve literal source-cell predicates through the existing
                 # sealed value shards, independently of tokenizer protection.
@@ -4045,8 +4069,30 @@ class _IngestionExactCellLookup:
                         == normalize_source_occurrence_structured_surface(predicate["value"])
                         for cell in cells) for predicate in table_query["filters"])
                 else:
-                    matches = all(any(term in unicodedata.normalize("NFKC", cell.text or "").casefold()
-                                      for cell in cells) for term in terms)
+                    def term_matches(term: str) -> bool:
+                        bindings = typed_term_bindings.get(term)
+                        if bindings:
+                            binding_values = {
+                                (
+                                    normalize_source_occurrence_structured_surface(field),
+                                    normalize_source_occurrence_structured_surface(value),
+                                )
+                                for field, value in bindings
+                            }
+                            return any(
+                                (
+                                    normalize_source_occurrence_structured_surface(
+                                        (cell.payload or {}).get("table_structure", {}).get("column_name") or ""
+                                    ),
+                                    normalize_source_occurrence_structured_surface(cell.text or ""),
+                                ) in binding_values
+                                for cell in cells
+                            )
+                        normalized_term = unicodedata.normalize("NFKC", term).casefold()
+                        return any(normalized_term in unicodedata.normalize("NFKC", cell.text or "").casefold()
+                                   for cell in cells)
+
+                    matches = all(term_matches(term) for term in terms)
                 if not matches:
                     continue
                 job_index = next(iter(job_indexes))
