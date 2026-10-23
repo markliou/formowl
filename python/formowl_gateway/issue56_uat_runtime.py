@@ -33,6 +33,7 @@ from formowl_mail.human_uat_orchestrator import (
     UatEvidenceToolRequest,
     _MAX_PROVIDER_ATTEMPT_DIAGNOSTICS,
     _MAX_PROVIDER_REQUESTS_PER_TURN,
+    _MAX_RESPONSE_CITATIONS,
     _UatTurnRequestContractBinder,
     _MAX_UAT_TURN_SECONDS,
     _PRIVATE_UAT_CITATION_TRACE,
@@ -51,9 +52,17 @@ from formowl_mail.human_uat_orchestrator import (
 )
 from formowl_mail.semantic_plan import (
     deterministic_query_class, requires_workspace_evidence,
-    is_identifier_reference, protected_reference_identifiers,
+    is_identifier_reference, is_prior_evidence_interpretation, protected_reference_identifiers,
+    has_explicit_record_target, _is_retained_relative_presentation, _normalize_routing_text,
 )
-from formowl_retrieval.gateway import source_evidence_deadline_scope
+from formowl_mail.issue56_sealed_source import (
+    bind_reviewed_annotation_query, current_reviewed_annotation_query_binding,
+    reviewed_annotation_query_scope,
+)
+from formowl_retrieval.gateway import (
+    source_evidence_deadline_scope, _SourcePhaseTrace, _source_phase_trace_scope, _trace,
+    _source_term_placement_scope,
+)
 
 from .issue56_diagnostic import (
     _SYNTHETIC_BEARER,
@@ -64,6 +73,7 @@ from .issue56_diagnostic import (
     mcp_query_request,
 )
 from .issue56_sealed_source_loader import (
+    _citation_for_snippet,
     build_issue56_production_semantic_handlers,
 )
 from .remote import (
@@ -270,6 +280,7 @@ _SAFE_PROVIDER_ERROR_MESSAGE_CLASSES = frozenset(
         "rate_limit",
         "capacity_unavailable",
         "invalid_parameter",
+        "model_account_unsupported",
         "unknown",
     }
 )
@@ -310,6 +321,21 @@ class _ConversationState:
     latest_evidence: Mapping[str, Any] | None = None
     turns: tuple[Mapping[str, Any], ...] = ()
     reference_binding: Mapping[str, Any] | None = None
+    provider_tools_configured: bool = False
+
+
+def _prior_visible_answer_capabilities(state, capabilities, prompt):
+    if not _is_retained_relative_presentation(
+        _normalize_routing_text(prompt), require_citation_preservation=True,
+    ):
+        return capabilities
+    # Only the immediate visible turn, never an older turn or retained union.
+    previous = state.turns[-1]["response"] if state.turns else {}
+    citations = previous.get("citations", ())
+    return {**(capabilities or {}), "prior_visible_answer": {
+        "status": previous.get("status"),
+        "citation_ids": list(citations) if len(citations) <= _MAX_RESPONSE_CITATIONS else [],
+    }}
 
 
 class Issue56UatQueryService:
@@ -340,6 +366,7 @@ class Issue56UatQueryService:
             self._formowl_tool_descriptor,
             self._authorized_capability_summary,
         ) = _query_agent_runtime_context(runtime.application)
+        self._provider_tool_catalog = _query_agent_tool_catalog(runtime.application)
         self._lock = RLock()
         self._pending: dict[str, tuple[str, str, float]] = {}
         self._sessions: dict[str, tuple[str, _ConversationState, float]] = {}
@@ -449,6 +476,10 @@ class Issue56UatQueryService:
             max_age = min(expires_in, self._oauth.access_token_lifetime_seconds)
             session_id = secrets.token_urlsafe(32)
             expires_at = time.monotonic() + max_age
+            while len(self._sessions) >= _MAX_BROWSER_AUTH_RECORDS:
+                evicted = next(iter(self._sessions))
+                self._sessions.pop(evicted)
+                self._conversation_model.discard_conversation(_conversation_identifier(evicted))
             _bounded_insert(
                 self._sessions,
                 session_id,
@@ -502,6 +533,9 @@ class Issue56UatQueryService:
                 raise PermissionError("auth_required")
             assert session_id is not None
             state = self._sessions[session_id][1]
+            _configure_provider_conversation(
+                self._conversation_model, state, session_id, self._provider_tool_catalog,
+            )
             previous_history = state.history
             previous_evidence = state.latest_evidence
             previous_turns = state.turns
@@ -526,7 +560,9 @@ class Issue56UatQueryService:
                     reference_binding=state.reference_binding,
                     safety_identifier=conversation_identifier,
                     formowl_tool_descriptor=turn_tool_descriptor,
-                    authorized_capability_summary=turn_capability_summary,
+                    authorized_capability_summary=_prior_visible_answer_capabilities(
+                        state, turn_capability_summary, prompt,
+                    ),
                     mcp_call=lambda request: self._call(
                         request,
                         bearer=bearer,
@@ -567,7 +603,7 @@ class Issue56UatQueryService:
                     previous_evidence=previous_evidence,
                     previous_turns=previous_turns,
                 )
-                self._conversation_model.discard_conversation(conversation_identifier)
+                _discard_failed_provider_conversation(self._conversation_model, conversation_identifier)
                 raise
             except Exception:
                 _record_failed_conversation_turn(
@@ -577,7 +613,7 @@ class Issue56UatQueryService:
                     previous_evidence=previous_evidence,
                     previous_turns=previous_turns,
                 )
-                self._conversation_model.discard_conversation(conversation_identifier)
+                _discard_failed_provider_conversation(self._conversation_model, conversation_identifier)
                 raise
 
     def _call(
@@ -597,6 +633,13 @@ class Issue56UatQueryService:
             raise _UatMcpTimeout()
         result_queue: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
 
+        wire_request = _mcp_query_request(request)
+        placement_binding = (
+            (request.required_term_placement, sha256_json(wire_request["params"]))
+            if request.required_term_placement is not None else None
+        )
+        annotation_binding = current_reviewed_annotation_query_binding()
+
         def run_mcp_request() -> None:
             client: Any = self._client
             close_client = False
@@ -609,16 +652,12 @@ class Issue56UatQueryService:
                         raise_server_exceptions=False,
                     )
                     close_client = True
-                result_queue.put(
-                    (
-                        True,
-                        client.post(
-                            "/mcp",
-                            headers=mcp_headers(bearer=bearer),
-                            json=_mcp_query_request(request),
-                        ),
+                with (_source_term_placement_scope(placement_binding),
+                      reviewed_annotation_query_scope(annotation_binding)):
+                    response = client.post(
+                        "/mcp", headers=mcp_headers(bearer=bearer), json=wire_request,
                     )
-                )
+                result_queue.put((True, response))
             except BaseException as exc:
                 result_queue.put((False, exc))
             finally:
@@ -660,6 +699,8 @@ class Issue56UatQueryService:
                 expires_at = value[-1]
                 if expires_at <= now:
                     values.pop(key, None)
+                    if values is self._sessions:
+                        self._conversation_model.discard_conversation(_conversation_identifier(key))
 
 
 class Issue56TemporaryLanQueryService:
@@ -693,6 +734,7 @@ class Issue56TemporaryLanQueryService:
             self._formowl_tool_descriptor,
             self._authorized_capability_summary,
         ) = _query_agent_runtime_context(application)
+        self._provider_tool_catalog = _query_agent_tool_catalog(application)
         self._lock = RLock()
         self._query_lock = Lock()
         self._behavior_log_path = behavior_log_path
@@ -787,15 +829,21 @@ class Issue56TemporaryLanQueryService:
     def ask(self, prompt: str, *, session_id: str | None) -> Mapping[str, Any]:
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt is required")
-        with self._query_lock:
+        # Provider/MCP diagnostics and the deadline are shared mutable state.
+        # Keep execution serialized, but never queue outside the turn budget.
+        if not self._query_lock.acquire(blocking=False):
+            return self._reject_busy_turn(prompt, session_id=session_id)
+        try:
             with self._lock:
                 self._prune_browser_sessions()
                 state = self._sessions.get(session_id)
                 if state is None or session_id is None:
                     raise PermissionError("browser_session_required")
+                _configure_provider_conversation(
+                    self._conversation_model, state, session_id, self._provider_tool_catalog,
+                )
                 previous_history = state.history
                 previous_evidence = state.latest_evidence
-                previous_turns = state.turns
                 started_at = time.perf_counter()
                 self.request_count = 0
                 self.last_mcp_statuses = ()
@@ -830,7 +878,9 @@ class Issue56TemporaryLanQueryService:
                     reference_binding=state.reference_binding,
                     safety_identifier=conversation_identifier,
                     formowl_tool_descriptor=turn_tool_descriptor,
-                    authorized_capability_summary=turn_capability_summary,
+                    authorized_capability_summary=_prior_visible_answer_capabilities(
+                        state, turn_capability_summary, prompt,
+                    ),
                     request_id=browser_request_sha256,
                     mcp_call=lambda request: self._call(
                         request,
@@ -897,9 +947,11 @@ class Issue56TemporaryLanQueryService:
                             prompt=prompt,
                             previous_history=previous_history,
                             previous_evidence=previous_evidence,
-                            previous_turns=previous_turns,
+                            # Busy overlaps append only display turns. Retain
+                            # them even when the active provider turn fails.
+                            previous_turns=state.turns,
                         )
-                self._conversation_model.discard_conversation(conversation_identifier)
+                _discard_failed_provider_conversation(self._conversation_model, conversation_identifier)
                 raise
             finally:
                 self._active_turn_deadline = None
@@ -937,6 +989,47 @@ class Issue56TemporaryLanQueryService:
                     _emit_behavior_log_failure(browser_request_sha256, exc)
                 finally:
                     _PRIVATE_UAT_CITATION_TRACE.reset(private_trace_token)
+        finally:
+            self._query_lock.release()
+
+    def _reject_busy_turn(
+        self, prompt: str, *, session_id: str | None,
+    ) -> Mapping[str, Any]:
+        started_at = time.perf_counter()
+        result = {
+            "status": "error",
+            "answer": "服務目前忙碌，這次問題尚未執行，請稍後再送出。",
+            "citations": [],
+            "clarification": None,
+            "diagnostic": {
+                "reason_code": "uat_service_busy",
+                "mcp": {"call_count": 0},
+                "diagnostic_comparability": diagnostic_comparability(None),
+            },
+        }
+        with self._lock:
+            self._prune_browser_sessions()
+            state = self._sessions.get(session_id)
+            if state is None or session_id is None:
+                raise PermissionError("browser_session_required")
+            # Admission failures are display-only; they cannot replace model
+            # history, evidence, references, or the active turn's diagnostics.
+            state.turns = (
+                *state.turns,
+                {"prompt": prompt, "response": _stored_browser_response(result)},
+            )[-_MAX_CONVERSATION_TURNS:]
+        if self._behavior_log_path is not None:
+            request_id = "sha256:" + secrets.token_hex(32)
+            try:
+                _append_behavior_log(
+                    self._behavior_log_path, request_id=request_id, prompt=prompt,
+                    result=result, request_count=0, statuses=(), call_traces=(),
+                    failure_sha256=None, provider_diagnostic=None, citation_stages=(),
+                    elapsed_ms=(time.perf_counter() - started_at) * 1_000.0,
+                )
+            except Exception as exc:
+                _emit_behavior_log_failure(request_id, exc)
+        return result
 
     def _call(
         self,
@@ -962,6 +1055,18 @@ class Issue56TemporaryLanQueryService:
         mcp_exception = False
         mcp_timeout = False
         turn_deadline = self._active_turn_deadline
+        phase_trace, phase_snapshot = None, None
+        if self._record_raw_uat_interactions and getattr(self, "_behavior_log_path", None) is not None:
+            try:
+                phase_trace = _SourcePhaseTrace({
+                    "browser_request_sha256": browser_request_sha256,
+                    "mcp_call_index": call_index,
+                    "source_binding_fingerprint": getattr(self, "_source_binding_fingerprint", None),
+                    "code_binding_fingerprint": getattr(getattr(self, "_diagnostic_deployment_binding", None),
+                                                        "code_binding_fingerprint", None),
+                })
+            except Exception:
+                phase_snapshot = None  # Diagnostic construction cannot fail a query.
         try:
             remaining = (
                 turn_deadline - time.monotonic()
@@ -970,7 +1075,14 @@ class Issue56TemporaryLanQueryService:
             )
             if remaining <= 0:
                 raise _UatMcpTimeout()
-            result_queue: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+            result_queue: queue.Queue[tuple[bool, Any, str | None]] = queue.Queue(maxsize=1)
+
+            wire_request = _mcp_query_request(request)
+            placement_binding = (
+                (request.required_term_placement, sha256_json(wire_request["params"]))
+                if request.required_term_placement is not None else None
+            )
+            annotation_binding = current_reviewed_annotation_query_binding()
 
             def run_mcp_request() -> None:
                 client: Any = self._client
@@ -992,22 +1104,24 @@ class Issue56TemporaryLanQueryService:
                         close_client = True
                     # Capture the turn binding before dispatch. A later turn
                     # must not lend its deadline to this in-flight request.
-                    with source_evidence_deadline_scope(turn_deadline):
+                    with (source_evidence_deadline_scope(turn_deadline), _source_phase_trace_scope(phase_trace),
+                          _source_term_placement_scope(placement_binding),
+                          reviewed_annotation_query_scope(annotation_binding)):
                         response = client.post(
                                 "/mcp",
                                 headers=mcp_headers(bearer=_SYNTHETIC_BEARER),
-                                json=_mcp_query_request(request),
+                                json=wire_request,
                         )
-                    result_queue.put((True, response))
+                    result_queue.put((True, response, _trace(phase_trace, "snapshot")))
                 except BaseException as exc:
-                    result_queue.put((False, exc))
+                    result_queue.put((False, exc, _trace(phase_trace, "snapshot")))
                 finally:
                     if close_client:
                         client.close()
 
             Thread(target=run_mcp_request, daemon=True).start()
             try:
-                succeeded, response_or_error = result_queue.get(timeout=remaining)
+                succeeded, response_or_error, phase_snapshot = result_queue.get(timeout=remaining)
             except queue.Empty:
                 raise _UatMcpTimeout() from None
             if not succeeded:
@@ -1105,6 +1219,14 @@ class Issue56TemporaryLanQueryService:
                     trace["private_diagnostic"] = _private_behavior_call_diagnostic(
                         request, trace, data if response_stage == "payload_validated" else None,
                     )
+                    if getattr(self, "_behavior_log_path", None) is not None:
+                        # Timeout never reads worker-owned cells. Late immutable
+                        # queue outcomes cannot mutate this turn or a later one.
+                        phase = ({"status": "incomplete_timeout"} if mcp_timeout else
+                                 json.loads(phase_snapshot) if phase_snapshot is not None else
+                                 {"status": "diagnostic_failed"})
+                        phase["query_hash"] = trace.get("query_hash")
+                        trace["private_diagnostic"]["source_phase_trace"] = phase
                 except Exception as exc:
                     _emit_behavior_log_failure(browser_request_sha256, exc)
             trace_sink.append(trace)
@@ -1122,6 +1244,7 @@ class Issue56TemporaryLanQueryService:
         for key, state in tuple(self._sessions.items()):
             if state.expires_at <= now:
                 self._sessions.pop(key, None)
+                self._conversation_model.discard_conversation(_conversation_identifier(key))
 
 
 def _append_behavior_log(
@@ -1232,6 +1355,36 @@ def _emit_behavior_log_failure(request_id: str | None, exc: Exception) -> None:
         pass
 
 
+def _private_field_query_hints_diagnostic(
+    request: UatEvidenceToolRequest | None,
+) -> dict[str, Any]:
+    """Hash accepted wire candidates; original proposal presence is not retained.
+
+    The typed request collapses omitted, empty and wholly dropped proposals.
+    A missing request/legacy diagnostic must never be interpreted as zero hints.
+    This observes validation, not transport completion or retrieval use.
+    """
+    diagnostic: dict[str, Any] = {
+        "availability": "unavailable", "proposal_presence": "unavailable",
+        "mcp_argument_presence": "unavailable", "accepted_count": None,
+        "accepted_hints": None, "fingerprint": None,
+    }
+    if request is not None:
+        arguments = _mcp_query_request(request)["params"]["arguments"]
+        hints = arguments.get("field_query_hints", [])
+        diagnostic.update({
+            "availability": "validated_request",
+            "mcp_argument_presence": "present" if "field_query_hints" in arguments else "absent",
+            "accepted_count": len(hints),
+            "accepted_hints": [
+                {"field_index": hint["field_index"], "text_sha256": sha256_json(hint["text"])}
+                for hint in hints
+            ],
+            "fingerprint": sha256_json(hints),
+        })
+    return diagnostic
+
+
 def _private_behavior_call_diagnostic(
     request: UatEvidenceToolRequest, trace: Mapping[str, Any],
     validated_response: Mapping[str, Any] | None,
@@ -1242,6 +1395,7 @@ def _private_behavior_call_diagnostic(
         "tool_name": request.tool_name,
         "request_contract": dict(contract) if contract is not None else None,
         "required_terms": list(request.required_terms) if request.required_terms else None,
+        "field_query_hints": _private_field_query_hints_diagnostic(request),
         "table_query_present": request.table_query is not None,
         "raw_governed": _private_citation_ids_snapshot(
             evidence_citation_ids(validated_response) if validated_response is not None else (),
@@ -1294,6 +1448,53 @@ def _browser_callback_url(
     return callback_url, parsed.scheme == "https"
 
 
+def _query_agent_tool_catalog(application: ConnectedMcpApplication | Any) -> tuple[Mapping[str, Any], ...]:
+    """Initial available catalog only; per-turn selection/validation stays separate."""
+    dispatcher = getattr(application, "dispatcher", None)
+    enabled_tool_names = (
+        dispatcher.enabled_tool_names
+        if dispatcher is not None
+        else {"whoami", "query_effective_graph_view"}
+    )
+    if dispatcher is not None:
+        mail_handler = getattr(dispatcher.semantic_gateway, "mail_evidence_handler", None)
+        mail_capabilities = getattr(mail_handler, "authorized_capability_summary", None)
+        source_families = (
+            set(mail_capabilities.get("source_families", ()))
+            if isinstance(mail_capabilities, Mapping)
+            else set()
+        )
+        if "query_mail_evidence" in enabled_tool_names:
+            enabled_tool_names = {"whoami", "query_mail_evidence"}
+    descriptors = build_remote_tool_descriptors(
+        required_scope=dispatcher.required_scope if dispatcher is not None else "formowl.use",
+        enabled_tool_names=enabled_tool_names,
+    )
+    return tuple(
+        item.model_dump(by_alias=True, exclude_none=True)
+        for item in sorted(descriptors, key=lambda item: item.name)
+        if item.name in {"query_effective_graph_view", "query_mail_evidence"}
+    )
+
+
+def _configure_provider_conversation(model, state, session_id, catalog) -> None:
+    # Called under the browser-state lock before respond can start. Disposal of
+    # this identity must also invalidate an in-flight provider call (model-owned).
+    if not state.provider_tools_configured:
+        configure = getattr(model, "configure_conversation_tools", None)
+        if callable(configure):
+            configure(safety_identifier=_conversation_identifier(session_id),
+                      tool_descriptors=deepcopy(catalog))
+        state.provider_tools_configured = True
+
+
+def _discard_failed_provider_conversation(model, safety_identifier) -> None:
+    # Persistent Responses journals survive failures; legacy app-server sessions
+    # keep their existing failure recovery behavior unless explicitly opted in.
+    if getattr(model, "preserve_conversation_on_failure", False) is not True:
+        model.discard_conversation(safety_identifier)
+
+
 def _query_agent_runtime_context(
     application: ConnectedMcpApplication | Any,
     *,
@@ -1328,7 +1529,16 @@ def _query_agent_runtime_context(
             is_explicit_workspace_request
             and (
                 "mail" in _explicit_source_families(user_text)
-                or (not _explicit_source_families(user_text) and mail_only_scope)
+                or (
+                    not _explicit_source_families(user_text)
+                    and (
+                        mail_only_scope
+                        or (
+                            isinstance(mail_capabilities, Mapping)
+                            and mail_capabilities.get("source_start") is True
+                        )
+                    )
+                )
             )
         )
         else "query_effective_graph_view"
@@ -1376,6 +1586,28 @@ def _query_agent_runtime_context(
         # The descriptor remains usable without an invalid optional capability
         # hint.  Tool execution still enforces authorization and contracts.
         capability_summary = None
+    if (
+        isinstance(capability_summary, Mapping)
+        and capability_summary.get("source_start") is True
+        and isinstance(user_text, str)
+        and requires_workspace_evidence(user_text)
+        and not _explicit_source_families(user_text)
+        and "mail" in capability_summary.get("source_families", ())
+    ):
+        capability_summary = {
+            **capability_summary,
+            "source_families": ["mail", "attachment_table"],
+        }
+    catalog = getattr(handler, "reviewed_annotation_catalog", None)
+    if (catalog is not None and capability_summary is not None and isinstance(user_text, str)
+            and requires_workspace_evidence(user_text)
+            and deterministic_query_class(user_text) == "evidence_lookup"):
+        view_for_query = getattr(handler, "reviewed_annotation_catalog_for_query", None)
+        if callable(view_for_query):
+            catalog = view_for_query(user_text)
+        # Public metadata guard remains mandatory even though candidates are private.
+        validate_public_gateway_payload(catalog)
+        capability_summary = {**capability_summary, "reviewed_annotation_catalog": catalog}
     tool_descriptor = descriptor.model_dump(by_alias=True, exclude_none=True)
     if descriptor.name == "query_mail_evidence":
         input_schema = dict(tool_descriptor["inputSchema"])
@@ -1416,6 +1648,9 @@ def _mcp_query_request(request: UatEvidenceToolRequest) -> dict[str, Any]:
                 arguments[key] = list(value) if key == "required_terms" else value
         if request.request_contract is not None:
             arguments["request_contract"] = dict(request.request_contract)
+        if request.reviewed_annotation_ids:
+            arguments["reviewed_annotation_ids"] = list(request.reviewed_annotation_ids)
+            arguments["reviewed_annotation_pin"] = request.reviewed_annotation_pin
         return payload
     payload = mcp_query_request(
         request.query_text,
@@ -1431,6 +1666,16 @@ def _mcp_query_request(request: UatEvidenceToolRequest) -> dict[str, Any]:
         arguments["request_contract"] = dict(request.request_contract)
     if request.required_terms is not None:
         arguments["required_terms"] = list(request.required_terms)
+    if request.reviewed_annotation_ids:
+        arguments["reviewed_annotation_ids"] = list(request.reviewed_annotation_ids)
+        arguments["reviewed_annotation_pin"] = request.reviewed_annotation_pin
+    from formowl_mail.human_uat_orchestrator import validated_field_query_hints
+
+    hints = validated_field_query_hints(
+        {**arguments, "field_query_hints": request.field_query_hints}, tool_name=request.tool_name,
+    )
+    if hints:
+        arguments["field_query_hints"] = list(hints)
     return payload
 
 
@@ -1452,8 +1697,22 @@ def _run_gpt_query_agent(
     UatConversationOutcome,
 ]:
     responses: list[Mapping[str, Any]] = []
+    # Interpretation depends on the server's citeable prior presentation, not
+    # history text or a new lookup. Compaction may remove unsupported citations.
+    if is_prior_evidence_interpretation(prompt) and (
+        latest_evidence is None
+        or not evidence_citation_ids(compact_evidence_for_model(
+            latest_evidence, item_limit=_MAX_RETAINED_EVIDENCE_ITEMS,
+        ))
+    ):
+        outcome = UatConversationOutcome(
+            response_kind="clarification",
+            answer_text="請提供要解釋的引用證據或欄位標籤；目前沒有可引用的先前證據。",
+            display_format="narrative", model_name="server-prior-evidence-validation",
+        )
+        return _browser_projection(outcome, (), latest_evidence=None), (), outcome
     identifiers = protected_reference_identifiers(prompt)
-    reference_only = is_identifier_reference(prompt) and not identifiers
+    reference_only = is_identifier_reference(prompt) and not has_explicit_record_target(prompt)
     if reference_only:
         families = (authorized_capability_summary or {}).get("source_families", ())
         if not reference_binding or not set(reference_binding["source_family_scope"]).issubset(families):
@@ -1472,6 +1731,8 @@ def _run_gpt_query_agent(
         user_text=prompt,
         authorized_capability_summary=authorized_capability_summary,
     )
+    if request_contract_binder._mail_qualifier is not None:
+        latest_evidence = None  # Current obligation cannot use the retained catalog.
     if reference_only:
         _emit_private_reference_trace(reference_binding, request_contract_binder._original_query_hash, request_id)
     prior_evidence_present = latest_evidence is not None
@@ -1490,6 +1751,9 @@ def _run_gpt_query_agent(
             raise RuntimeError(_UAT_MCP_NOT_AUTHORIZED_FOR_CONVERSATION)
         if len(responses) >= _MAX_MCP_CALLS_PER_TURN:
             raise RuntimeError("UAT Query Agent exceeded the MCP call budget")
+        expected_placement = request_contract_binder.placement_for_request(request)
+        if request.required_term_placement != expected_placement:
+            raise ContractValidationError("UAT private occurrence placement is missing or changed")
         if request.tool_name in {"query_effective_graph_view", "query_mail_evidence"}:
             bound_contract = request_contract_binder.bind(
                 request.request_contract,
@@ -1504,10 +1768,10 @@ def _run_gpt_query_agent(
         if request.tool_name in {"query_mail_evidence", "query_effective_graph_view"}:
             candidate_required_terms = (
                 list(request.required_terms)
-                if request.required_terms is not None
+                if request.required_terms
                 else list(protected_reference_identifiers(prompt))
             )
-            # A mail occurrence may split the PO and item across body
+            # A mail occurrence can be split into several source-owned body
             # segments, so the mail-only reader uses the item as its bounded
             # anchor. Attachment tables are different: PO and item are native
             # cells in one row, and dropping the PO here turns a conjunctive
@@ -1551,7 +1815,15 @@ def _run_gpt_query_agent(
                 request_contract=request.request_contract, required_terms=request.required_terms,
                 table_query=request.table_query, has_typed_selector=False,
             )
-        data = mcp_call(request)
+        request_contract_binder.validate_annotation_selection(request)
+        request_contract_binder._required_term_placement = expected_placement
+        catalog = (authorized_capability_summary or {}).get("reviewed_annotation_catalog")
+        annotation_binding = bind_reviewed_annotation_query(
+            user_text=prompt, catalog=catalog,
+            arguments=_mcp_query_request(request)["params"]["arguments"],
+        ) if catalog is not None else None
+        with reviewed_annotation_query_scope(annotation_binding):
+            data = mcp_call(request)
         responses.append(data)
         if (request.request_contract and evidence_citation_ids(data)
                 and data.get("status") not in {"error", "permission_denied"}):
@@ -2230,7 +2502,7 @@ def _governed_mail_evidence_records(
         "email_message_id",
         "message_occurrence_id",
     )
-    citation_records: list[tuple[str, dict[str, str], str | None]] = []
+    citation_records: list[tuple[str, str | None, dict[str, str], str | None]] = []
     for citation in citations:
         if not isinstance(citation, Mapping):
             continue
@@ -2239,6 +2511,15 @@ def _governed_mail_evidence_records(
             citation_id = citation.get("citation_hash")
         if not isinstance(citation_id, str) or not citation_id.strip():
             continue
+        citation_hash = citation.get("citation_hash")
+        if citation_hash is not None and not _is_browser_request_fingerprint(citation_hash):
+            continue
+        if citation_id.startswith("mailcitation_"):
+            try:
+                if _citation_for_snippet(dict(citation))["citation_id"] != citation_id:
+                    continue
+            except (KeyError, ContractValidationError):
+                continue
         identity = {
             field: value.strip()
             for field in identity_fields
@@ -2249,16 +2530,17 @@ def _governed_mail_evidence_records(
             not isinstance(source_type, str) or not source_type.strip()
         ):
             continue
-        citation_records.append((citation_id, identity, source_type))
+        citation_records.append((citation_id, citation_hash, identity, source_type))
 
     records: list[dict[str, Any]] = []
     for snippet in snippets:
-        if len(records) >= max(0, limit):
-            break
         if not isinstance(snippet, Mapping):
             continue
         snippet_text = snippet.get("snippet")
         if not isinstance(snippet_text, str) or not snippet_text.strip():
+            continue
+        snippet_hash = snippet.get("citation_hash")
+        if snippet_hash is not None and not _is_browser_request_fingerprint(snippet_hash):
             continue
         identity = {
             field: value.strip()
@@ -2270,7 +2552,9 @@ def _governed_mail_evidence_records(
             not isinstance(source_type, str) or not source_type.strip()
         ):
             continue
-        for citation_id, citation_identity, citation_source_type in citation_records:
+        for citation_id, citation_hash, citation_identity, citation_source_type in citation_records:
+            if citation_hash is not None and citation_hash != snippet_hash:
+                continue
             shared_identity_fields = set(identity).intersection(citation_identity)
             if not shared_identity_fields or any(
                 identity[field] != citation_identity[field] for field in shared_identity_fields
@@ -2285,6 +2569,8 @@ def _governed_mail_evidence_records(
             safe_record = {
                 "snippet": snippet_text,
                 "citation_id": citation_id,
+                **{key: snippet[key] for key in ("citation_hash", "mail_header_citation_hash", "source_context")
+                   if key in snippet},
             }
             try:
                 assert_no_public_raw_references(
@@ -2295,7 +2581,29 @@ def _governed_mail_evidence_records(
                 continue
             records.append(safe_record)
             break
-    return tuple(records)
+    return _compact_mail_evidence_records(records, limit=limit)
+
+
+def _compact_mail_evidence_records(
+    records: Sequence[Mapping[str, Any]], *, limit: int,
+) -> tuple[dict[str, Any], ...]:
+    # Validation can reject a pair member. Apply the existing whole-group caps
+    # after validation as well, rather than retaining an orphan or raw prefix.
+    # Group on source hashes, not opaque public citation IDs. The compactor
+    # strips snippet citation_id, so restore only the original selected records.
+    compact = compact_evidence_for_model(
+        {"evidence_snippets": records,
+         "citations": [
+             {"citation_hash": record["citation_hash"]} if "citation_hash" in record
+             else {"citation_id": record["citation_id"]} for record in records
+         ]},
+        item_limit=limit,
+    )
+    return tuple(
+        dict(record) for record in records
+        if {key: value for key, value in record.items() if key != "citation_id"}
+        in compact.get("evidence_snippets", ())
+    )
 
 
 def _governed_graph_evidence_records(
@@ -2591,7 +2899,14 @@ def _browser_projection(
         return project(
             {
                 "status": "error",
-                "answer": outcome.answer_text,
+                "answer": (
+                    "目前模型與帳戶設定不相容，請聯絡管理員檢查模型、帳戶及供應商路由設定。"
+                    "本回合無法提供可驗證的回答。"
+                    if safe_diagnostic.get("provider_error_message_class") == "model_account_unsupported"
+                    else "模型供應商目前容量不足，本回合未完成回答；這不是來源資料不存在。"
+                    if safe_diagnostic.get("provider_error_message_class") == "capacity_unavailable"
+                    else outcome.answer_text
+                ),
                 "citations": [],
                 "clarification": None,
             }
@@ -2863,9 +3178,17 @@ def _retained_authorized_evidence(
     if not required_citations:
         return None
     required_set = set(required_citations)
-    retained_payloads: list[dict[str, Any]] = []
+    retained_payloads: dict[int, dict[str, Any]] = {}
     available_citations: set[str] = set()
-    for response_index, response in enumerate(responses):
+    retained_evidence: dict[str, Any] | None = None
+    final_citations = set(outcome.citation_ids)
+    # Prefer what the final answer cited, then the newest governed response.
+    ordered_responses = sorted(
+        enumerate(responses),
+        key=lambda item: (bool(final_citations.intersection(evidence_citation_ids(item[1]))), item[0]),
+        reverse=True,
+    )
+    for response_index, response in ordered_responses:
         compact = compact_evidence_for_model(
             response,
             item_limit=_MAX_RETAINED_EVIDENCE_ITEMS,
@@ -2881,13 +3204,14 @@ def _retained_authorized_evidence(
             )
         else:
             mail_records = _governed_mail_evidence_records(
-                response,
+                compact,
                 limit=_MAX_RETAINED_EVIDENCE_ITEMS,
             )
         if mail_records:
             compact["evidence_snippets"] = list(mail_records)
             compact["citations"] = [
-                {"citation_id": record["citation_id"]} for record in mail_records
+                {key: record[key] for key in ("citation_id", "citation_hash") if key in record}
+                for record in mail_records
             ]
         else:
             compact.pop("evidence_snippets", None)
@@ -2918,31 +3242,48 @@ def _retained_authorized_evidence(
             compact.get("answer") or has_items or has_results or has_mail_snippets or context_bundle
         ):
             continue
-        retained_payloads.append(compact)
+        # A citation can support distinct field snippets.  Only coalesce
+        # equivalent payloads; the per-query hash does not change evidence.
+        if supported_citations.issubset(available_citations) and any(
+            {key: value for key, value in compact.items() if key != "query_hash"}
+            == {key: value for key, value in retained.items() if key != "query_hash"}
+            for retained in retained_payloads.values()
+        ):
+            continue
+        # Individual payloads fit, but repeated/nested envelopes can exceed the
+        # next turn's shared budget and be discarded as one unlinked group.
+        # Admit only whole payload groups that survive that same compaction.
+        next_citations = available_citations | supported_citations
+        # Preserve chronology in stored state for newest-first admission on a later turn.
+        candidate_payloads = [
+            payload for _, payload in sorted((*retained_payloads.items(), (response_index, compact)))
+        ]
+        candidate = compact_evidence_for_model(
+            {
+                "status": "partial",
+                "coverage": {"status": "incomplete", "coverage_status": "incomplete"},
+                "citations": [citation for citation in required_citations if citation in next_citations],
+                "results": candidate_payloads,
+            },
+            item_limit=_MAX_RETAINED_EVIDENCE_ITEMS,
+        )
+        if candidate.get("results") != candidate_payloads or not next_citations.issubset(
+            evidence_citation_ids(candidate)
+        ):
+            continue
+        retained_payloads[response_index] = compact
         available_citations.update(supported_citations)
+        retained_evidence = candidate
         if len(retained_payloads) >= _MAX_RETAINED_EVIDENCE_ITEMS:
             break
-    if not retained_payloads:
-        return None
-
-    return {
-        "status": "partial",
-        "coverage": {
-            "status": "incomplete",
-            "coverage_status": "incomplete",
-        },
-        "citations": [
-            citation for citation in required_citations if citation in available_citations
-        ],
-        "results": retained_payloads,
-    }
+    return retained_evidence
 
 
 def _prevalidated_mail_evidence_records(
     response: Mapping[str, Any],
     *,
     limit: int,
-) -> tuple[dict[str, str], ...]:
+) -> tuple[dict[str, Any], ...]:
     """Re-check already-redacted mail snippets when carrying state forward."""
 
     snippets = response.get("evidence_snippets")
@@ -2954,38 +3295,44 @@ def _prevalidated_mail_evidence_records(
         or isinstance(citations, (str, bytes))
     ):
         return ()
-    citation_ids: set[str] = set()
+    citation_bindings: set[tuple[str, str | None]] = set()
     for citation in citations:
         if isinstance(citation, str) and citation.strip():
-            citation_ids.add(citation)
+            citation_bindings.add((citation, None))
         elif isinstance(citation, Mapping):
             citation_id = citation.get("citation_id")
             if not isinstance(citation_id, str) or not citation_id.strip():
                 citation_id = citation.get("citation_hash")
             if isinstance(citation_id, str) and citation_id.strip():
-                citation_ids.add(citation_id)
-    if not citation_ids:
+                citation_hash = citation.get("citation_hash")
+                if citation_hash is None or _is_browser_request_fingerprint(citation_hash):
+                    citation_bindings.add((citation_id, citation_hash))
+    if not citation_bindings:
         return ()
 
-    records: list[dict[str, str]] = []
+    records: list[dict[str, Any]] = []
     for snippet in snippets:
-        if len(records) >= max(0, limit):
-            break
         if not isinstance(snippet, Mapping):
             continue
         snippet_text = snippet.get("snippet")
         citation_id = snippet.get("citation_id")
+        if not isinstance(citation_id, str) or not citation_id.strip():
+            citation_id = snippet.get("citation_hash")
+        snippet_hash = snippet.get("citation_hash")
         if (
             not isinstance(snippet_text, str)
             or not snippet_text.strip()
             or not isinstance(citation_id, str)
             or not citation_id.strip()
-            or citation_id not in citation_ids
+            or (snippet_hash is not None and not _is_browser_request_fingerprint(snippet_hash))
+            or (citation_id, snippet_hash) not in citation_bindings
         ):
             continue
         safe_record = {
             "snippet": snippet_text,
             "citation_id": citation_id,
+            **{key: snippet[key] for key in ("citation_hash", "mail_header_citation_hash", "source_context")
+               if key in snippet},
         }
         try:
             assert_no_public_raw_references(
@@ -2995,7 +3342,7 @@ def _prevalidated_mail_evidence_records(
         except ContractValidationError:
             continue
         records.append(safe_record)
-    return tuple(records)
+    return _compact_mail_evidence_records(records, limit=limit)
 
 
 def _failure_sha256(exc: Exception) -> str:

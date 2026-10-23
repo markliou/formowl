@@ -347,7 +347,7 @@ class PstMailArchiveExtractor:
     def __init__(
         self,
         *,
-        version: str = "0.2.2",
+        version: str = "0.2.6",
         parser_command: str = "readpst",
         runner: _ParserRunner | None = None,
         scratch_parent: str | Path | None = None,
@@ -3298,6 +3298,10 @@ def _inline_table_observations(
                     "value": text, "lineage": lineage,
                     "table_structure": _public_table_structure(cell_structure),
                     "canonical_fact_status": "not_asserted", **source_cell,
+                    "html_quote_provenance": table.get("quote_provenance", {
+                        "origin": "unknown", "basis": "unavailable",
+                        "quoted_message_metadata": "unresolved",
+                    }),
                 }
                 result.append(_native_bound_mail_observation(
                     source_asset_id=parent.asset_id,
@@ -3443,7 +3447,112 @@ def _thread_id(message: _ParsedMessage) -> str:
     )
 
 
+def _is_html_reply_header_boundary(tag: str, attrs: list[tuple[str, str | None]]) -> bool:
+    # Outlook's explicit reply/forward divider applies to following siblings.
+    # Header words in prose (including "From:") are not structural evidence.
+    identifiers = [value for name, value in attrs if name == "id"]
+    return tag == "div" and len(identifiers) == 1 and (identifiers[0] or "").casefold() == "divrplyfwdmsg"
+
+
+class _WordReplyHeaderBoundary:
+    """Recognize one closed bordered Word header, not dates or message identity."""
+
+    _EXCLUDED = frozenset({"table", "blockquote", "head", "script", "style"})
+    _LABELS = ("from:", "sent:", "to:", "subject:")
+
+    def __init__(self) -> None:
+        self._excluded: list[str] = []
+        self._reset()
+
+    def _reset(self) -> None:
+        self._stack: list[str] = []
+        self._paragraph_seen = False
+        self._label_index = 0
+        self._recipient_headers: set[str] = set()
+        self._prefix = ""
+
+    def start(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in self._EXCLUDED:
+            self._excluded.append(tag)
+            self._reset()
+            return
+        if self._excluded:
+            return
+        attributes = dict(attrs)
+        if not self._stack:
+            borders = re.findall(r"(?:^|;)\s*border-top\s*:\s*([^;]+)", attributes.get("style") or "", re.I)
+            if (tag == "div" and len(borders) == 1
+                    and not re.match(r"(?:none|hidden|0(?:[a-z%]+)?)(?:\s|$)", borders[0].strip(), re.I)):
+                self._stack.append(tag)
+            return
+        if tag == "p" and self._stack == ["div"] and not self._paragraph_seen:
+            if "msonormal" in (attributes.get("class") or "").casefold().split():
+                self._paragraph_seen = True
+                self._stack.append(tag)
+                return
+        elif "p" in self._stack:
+            if tag == "br":
+                self._finish_line()
+                return
+            if tag in {"b", "span", "a", "o:p"}:
+                self._stack.append(tag)
+                return
+        self._reset()
+
+    def data(self, value: str) -> None:
+        if not self._stack or (not self._prefix and not value.strip()):
+            return
+        if "p" not in self._stack or (":" not in self._prefix and "b" not in self._stack):
+            self._reset()
+            return
+        # Only the anchored label is retained; header values are not interpreted.
+        self._prefix = (self._prefix + (value if self._prefix else value.lstrip()))[:8]
+
+    def _finish_line(self) -> None:
+        if not self._prefix:
+            return
+        if self._label_index < 4 and self._prefix.casefold().startswith(self._LABELS[self._label_index]):
+            self._label_index += 1
+        elif (self._label_index == 3 and ":" in self._prefix
+              and (label := self._prefix.casefold().partition(":")[0]) in {"cc", "bcc"}
+              and label not in self._recipient_headers):
+            # Optional recipient lines cannot replace or reorder mandatory ones.
+            self._recipient_headers.add(label)
+        else:
+            self._reset()
+            return
+        self._prefix = ""
+
+    def end(self, tag: str) -> bool:
+        if self._excluded:
+            if tag == self._excluded[-1]:
+                self._excluded.pop()
+            return False
+        if tag == "br" or not self._stack:
+            return False
+        if tag != self._stack[-1]:
+            self._reset()
+            return False
+        if tag == "p":
+            self._finish_line()
+        if not self._stack:
+            return False
+        self._stack.pop()
+        if tag == "div":
+            complete = self._paragraph_seen and self._label_index == 4
+            self._reset()
+            return complete
+        return False
+
+
+
 class _HtmlTextExtractor(HTMLParser):
+    _HIDDEN_TAGS = frozenset({"head", "script", "style"})
+    _VOID_TAGS = frozenset({
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr",
+    })
+
     def __init__(self) -> None:
         super().__init__()
         self._parts: list[str] = []
@@ -3452,7 +3561,11 @@ class _HtmlTextExtractor(HTMLParser):
         self._tables: list[dict[str, Any]] = []
         self._table_ordinal = 0
         self._quoted_depth = 0
+        self._reply_boundary = False
+        self._reply_basis = "outlook_reply_header"
+        self._word_reply_header = _WordReplyHeaderBoundary()
         self._unclosed_marked_section = False
+        self._hidden_tag_stack: list[str] = []
 
     def parse_marked_section(self, i: int, report: int = 1) -> int:
         try:
@@ -3482,12 +3595,32 @@ class _HtmlTextExtractor(HTMLParser):
         return end + 2
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._word_reply_header.start(tag, attrs)
+        if self._hidden_tag_stack:
+            if tag not in self._VOID_TAGS:
+                self._hidden_tag_stack.append(tag)
+            return
+        if tag in self._HIDDEN_TAGS:
+            self._hidden_tag_stack.append(tag)
+            return
+        if not self._tables and not self._quoted_depth and _is_html_reply_header_boundary(tag, attrs):
+            # No structural end marker exists: the remaining siblings stay
+            # quoted candidates. Their sender/time and authorship are unresolved.
+            self._reply_boundary = True
+            self._reply_basis = "outlook_reply_header"
         if tag == "blockquote":
             self._quoted_depth += 1
         if tag == "table":
             self._table_ordinal += 1
             self._tables.append({
-                "table_ordinal": self._table_ordinal, "quoted_depth": self._quoted_depth,
+                "table_ordinal": self._table_ordinal,
+                "quoted_depth": self._quoted_depth + int(self._reply_boundary),
+                "quote_provenance": {
+                    "origin": "quoted" if self._quoted_depth or self._reply_boundary else "unmarked",
+                    "basis": ("blockquote" if self._quoted_depth else
+                              self._reply_basis if self._reply_boundary else "no_structural_quote_marker"),
+                    "quoted_message_metadata": "unresolved",
+                },
                 "rows": [], "row": None, "cell": None, "occupied": set(),
                 "invalid": self._unclosed_marked_section, "cell_count": 0,
             })
@@ -3532,6 +3665,14 @@ class _HtmlTextExtractor(HTMLParser):
                     frame["cell"]["parts"].append("\n")
 
     def handle_endtag(self, tag: str) -> None:
+        if self._word_reply_header.end(tag):
+            self._reply_boundary = True
+            self._reply_basis = "word_outlook_header_cluster"
+        if self._hidden_tag_stack:
+            if tag in self._hidden_tag_stack:
+                index = len(self._hidden_tag_stack) - 1 - self._hidden_tag_stack[::-1].index(tag)
+                del self._hidden_tag_stack[index:]
+            return
         if tag == "blockquote":
             self._quoted_depth = max(0, self._quoted_depth - 1)
         if not self._tables:
@@ -3547,7 +3688,7 @@ class _HtmlTextExtractor(HTMLParser):
                 self.warnings.append("pst_parser_html_table_unsupported")
             elif frame["rows"]:
                 self.tables.append({
-                    key: frame[key] for key in ("table_ordinal", "quoted_depth", "rows")
+                    key: frame[key] for key in ("table_ordinal", "quoted_depth", "quote_provenance", "rows")
                 })
 
     def _finish_cell(self) -> None:
@@ -3587,6 +3728,9 @@ class _HtmlTextExtractor(HTMLParser):
         self.tables.sort(key=lambda table: table["table_ordinal"])
 
     def handle_data(self, data: str) -> None:
+        self._word_reply_header.data(data)
+        if self._hidden_tag_stack:
+            return
         if data.strip():
             self._parts.append(data.strip())
             for frame in self._tables:

@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 import inspect
+import json
 import math
 import re
 import time
@@ -17,6 +18,7 @@ from formowl_contract import (
     Grant,
     Observation,
     now_iso,
+    sha256_json,
     to_plain,
 )
 from formowl_graph.index import (
@@ -242,6 +244,206 @@ _SOURCE_EVIDENCE_PREFERRED_TERMS: ContextVar[tuple[str, ...]] = ContextVar(
 )
 
 
+# Internal authority travels only inside this process; never public JSON/header.
+_SOURCE_TERM_PLACEMENT: ContextVar[Any] = ContextVar("source_term_placement", default=None)
+_SOURCE_OCCURRENCE_PAIR: ContextVar[Any] = ContextVar("source_occurrence_pair", default=None)
+
+
+@contextmanager
+def _source_term_placement_scope(binding: Any) -> Iterator[None]:
+    inherited = _SOURCE_TERM_PLACEMENT.get()
+    if inherited is not None and inherited != binding:
+        raise ContractValidationError("source placement scope cannot be changed or cleared")
+    token = _SOURCE_TERM_PLACEMENT.set(binding)
+    try:
+        yield
+    finally:
+        _SOURCE_TERM_PLACEMENT.reset(token)
+
+
+@contextmanager
+def _source_occurrence_pair_scope(pair: Any) -> Iterator[None]:
+    token = _SOURCE_OCCURRENCE_PAIR.set(pair)
+    try:
+        yield
+    finally:
+        _SOURCE_OCCURRENCE_PAIR.reset(token)
+
+
+# Private operator observation only: never a public/provider argument or payload.
+_SOURCE_PHASE_TRACE: ContextVar[Any] = ContextVar("formowl_private_source_phase", default=None)
+_TRACE_COUNTERS = (
+    "read_attempt", "reader_callback", "callback", "callback_stop", "projected", "project_none",
+    "matcher_rejected", "scope_rejected", "parent_unresolved", "parent_context",
+    "admitted", "duplicate_deferred", "context_limit", "deferred", "replayed",
+)
+
+
+_TRACE_VALUES = frozenset((*_TRACE_COUNTERS,
+    "unknown", "phase", "read", "decision", "completed", "failed", "declined",
+    "anchor", "parent", "attachment_parent", "serial", "lexical_lookup", "helper",
+    "anchor_barrier", "parent_plan", "ready_wait", "serial_siblings", "drain",
+    "project", "scan_result", "envelope", "applicability", "lookup_terms", "engine",
+    "selector", "exact_engine", "neighbor_context", "mail", "document_text",
+    "attachment_table", "mail_inline_table", "evidence_lookup", "exact_set_or_inventory",
+    "deadline", "observation_limit", "indexed_shortlist", "indexed_shortlist_miss",
+    "source_parent_binding_unresolved", "source_reference_unavailable", "indexed_query_terms_unavailable",
+    "source_table_shortlist", "email_message", "email_body_segment", "email_header",
+    "email_attachment_occurrence", "paragraph", "heading",
+))
+
+
+def _trace(target, method, *args, **kwargs):
+    """Only observer operations enter this boundary; source work never does."""
+    if target is None:
+        return None
+    try:
+        return getattr(target, method)(*args, **kwargs)
+    except Exception:
+        target.failed = True
+        return None
+
+
+class _SourceTraceCell:
+    def __init__(self, origin, **fields):
+        self.origin, self.failed = origin, False
+        self.data = {**fields, "state": "unknown", "submit_ms": self.stamp()}
+
+    def stamp(self):
+        return round((time.monotonic() - self.origin) * 1000, 3)
+
+    def start(self):
+        self.data["start_ms"] = self.stamp()
+        self.cpu_start = time.thread_time()
+
+    def observation(self, item):
+        self.data["_identity"] = (item.asset_id, item.extractor_run_id, item.observation_id)
+        self.data["observation_type"] = item.observation_type
+
+    def finish(self, state="completed", **fields):
+        self.data.update(fields, state=state, end_ms=self.stamp())
+        if hasattr(self, "cpu_start"):
+            self.data["thread_cpu_ms"] = round((time.thread_time() - self.cpu_start) * 1000, 3)
+
+
+class _SourcePhaseTrace:
+    """One request coordinator, bounded cells; workers mutate only their own cell.
+
+    Snapshot is permitted only AFTER the original request/reader joins. Runtime
+    timeout must not inspect this object. Native/exact per-read work is unknown.
+    """
+    def __init__(self, binding):
+        self.binding, self.origin = binding, time.monotonic()
+        self.failed, self.dropped, self.read_count = False, 0, 0
+        self.details, self.shortlisted = [], []
+        self.shortlist_count = 0
+        self.counters = dict.fromkeys(_TRACE_COUNTERS, 0)
+
+    def count(self, name, amount=1):
+        self.counters[name] += amount
+
+    def cell(self, **fields):
+        if self.failed or len(self.details) >= 256:
+            self.dropped += 1
+            return None
+        cell = _SourceTraceCell(self.origin, **fields)
+        self.details.append(cell)
+        return cell
+
+    def phase(self, name, **fields):
+        cell = self.cell(kind="phase", name=name, **fields)
+        _trace(cell, "start")
+        return cell
+
+    def read(self, role, binding, observation_hash, *, window=None, rank=None):
+        self.count("read_attempt")
+        self.read_count += 1
+        if self.read_count > 64:
+            self.dropped += 1
+            return None
+        return self.cell(kind="read", role=role, _binding=binding,
+                         observation_hash=observation_hash, ordinal=self.read_count,
+                         window=window, rank=rank)
+
+    def decision(self, name, observation_hash=None):
+        self.count(name)
+        cell = self.cell(kind="decision", name=name, observation_hash=observation_hash)
+        _trace(cell, "finish")
+
+    def rank(self, hashes, observation_hash):
+        return hashes.index(observation_hash)
+
+    def shortlist(self, hashes):
+        self.shortlist_count += len(hashes)
+        self.shortlisted.extend(hashes[:max(0, 256 - len(self.shortlisted))])
+
+    def snapshot(self):
+        # Only bounded identity/metadata references are serialized, never bodies.
+        details = []
+        for cell in self.details:
+            data = dict(cell.data)
+            for key in ("_binding", "_identity"):
+                if key in data:
+                    data[key[1:] + "_sha256"] = sha256_json(data.pop(key))
+            details.append(data)
+        failed = self.failed or any(cell.failed for cell in self.details)
+        def safe(value):
+            if isinstance(value, str):
+                return value if value in _TRACE_VALUES or re.fullmatch(r"sha256:[0-9a-f]{64}", value) else "unknown"
+            if isinstance(value, dict):
+                return {key: safe(item) for key, item in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [safe(item) for item in value]
+            return value if value is None or type(value) in (int, float, bool) else None
+
+        return json.dumps({
+            "version": 1, "status": "diagnostic_failed" if failed else "observed",
+            "binding": safe(self.binding), "counters": dict(self.counters),
+            "details": safe(details), "dropped_details": self.dropped,
+            "truncated": bool(self.dropped or self.shortlist_count > len(self.shortlisted)),
+            "incomplete": failed or bool(self.dropped) or any(cell.data["state"] == "unknown" for cell in self.details),
+            "shortlist_count": self.shortlist_count, "shortlist": safe(self.shortlisted),
+            "shortlist_prefix_sha256": sha256_json(self.shortlisted),
+            "shortlist_complete": self.shortlist_count == len(self.shortlisted),
+            "read_coverage": "first64_mail_document_attempts_native_exact_unknown",
+            "untraced_reads": "native_exact_neighbors_unknown",
+            "source_complete": "unknown", "observer_overhead": "unmeasured",
+        }, sort_keys=True)
+
+
+@contextmanager
+def _source_phase_trace_scope(trace):
+    token = _SOURCE_PHASE_TRACE.set(trace)
+    try:
+        yield
+    finally:
+        _SOURCE_PHASE_TRACE.reset(token)
+
+
+@contextmanager
+def _source_trace_phase(trace, name, **fields):
+    cell = _trace(trace, "phase", name, **fields)
+    try:
+        yield cell
+    except BaseException:
+        _trace(cell, "finish", "failed")
+        raise
+    else:
+        _trace(cell, "finish")
+
+
+@contextmanager
+def _source_trace_read(cell):
+    _trace(cell, "start")
+    try:
+        yield
+    except BaseException:
+        _trace(cell, "finish", "failed")
+        raise
+    else:
+        _trace(cell, "finish")
+
+
 def _validate_source_evidence_deadline(deadline_monotonic: float | None) -> None:
     if deadline_monotonic is not None and (
         type(deadline_monotonic) not in (int, float)
@@ -307,16 +509,16 @@ def source_evidence_query_terms_scope(
         _SOURCE_EVIDENCE_QUERY_TERMS.reset(token)
 
 
+def current_source_evidence_preferred_terms() -> tuple[str, ...]:
+    """Private soft field hints, never literal matcher or access constraints."""
+
+    return _SOURCE_EVIDENCE_PREFERRED_TERMS.get()
+
+
 def current_source_evidence_query_terms() -> tuple[str, ...]:
     """Return the current validated matcher terms for source acceleration."""
 
     return _SOURCE_EVIDENCE_QUERY_TERMS.get()
-
-
-def current_source_evidence_preferred_terms() -> tuple[str, ...]:
-    """Return optional field hints for bounded source candidate ordering."""
-
-    return _SOURCE_EVIDENCE_PREFERRED_TERMS.get()
 
 
 def _source_evidence_query_terms(
@@ -459,6 +661,7 @@ def source_evidence_double_check(
     deadline_monotonic: float | None = None,
     requested_fields: Sequence[str] = (),
     supported_requested_fields: Sequence[str] = (),
+    time_budget_ms: int | None = None,
 ) -> SourceEvidenceDoubleCheckResult:
     """One source-neutral recheck, not a new retrieval or authorization path.
 
@@ -466,7 +669,8 @@ def source_evidence_double_check(
     source revision and seal. The reader must enforce that binding; projection
     must revalidate access, hash and lineage before returning (hash, evidence).
     ``prepare`` reuses pinned runtime configuration before the phase clock;
-    ``begin`` and all reads/projections share the single 500ms deadline.
+    ``begin`` and all reads/projections share one bounded deadline (500ms by
+    default). A server-owned caller may explicitly supply a wider phase budget.
     The earliest trusted explicit/scoped absolute monotonic deadline also
     bounds preparation and can only shorten that phase. Neither deadline
     preempts a blocking callback. With neither supplied, behavior is unchanged.
@@ -474,6 +678,9 @@ def source_evidence_double_check(
     """
 
     policy = (execution_policy or SourceEvidenceExecutionPolicy.development_poc()).validate()
+    phase_budget_ms = SOURCE_EVIDENCE_TIME_BUDGET_MS if time_budget_ms is None else time_budget_ms
+    if type(phase_budget_ms) is not int or not 1 <= phase_budget_ms <= 2_000:
+        raise ContractValidationError("source evidence time budget is invalid")
     normalized_requested_fields = _normalize_source_evidence_field_sequence(
         requested_fields,
         parameter_name="requested_fields",
@@ -563,6 +770,7 @@ def source_evidence_double_check(
     evidence: list[dict[str, Any]] = []
     seen_hashes = set(excluded_hashes)
     callback_count = 0
+    trace = _SOURCE_PHASE_TRACE.get()
     stop_reason: str | None = None
 
     def consume(observation: Observation, source_scope: str) -> bool:
@@ -573,9 +781,13 @@ def source_evidence_double_check(
             stop_reason = "observation_limit"
             return False
         callback_count += 1
+        _trace(trace, "count", "callback")
         try:
             check_source_evidence_deadline(deadline)
-            projected = project_observation(observation, source_scope, deadline)
+            with _source_trace_phase(trace, "project") as project_cell:
+                _trace(project_cell, "observation", observation)
+                projected = project_observation(observation, source_scope, deadline)
+            _trace(trace, "count", "projected" if projected is not None else "project_none")
             if projected is not None:
                 observation_hash, item = projected
                 if observation_hash not in seen_hashes:
@@ -595,7 +807,7 @@ def source_evidence_double_check(
         if prepare is not None:
             prepare()
         check_source_evidence_deadline(deadline_monotonic)
-        deadline = time.monotonic() + SOURCE_EVIDENCE_TIME_BUDGET_MS / 1000
+        deadline = time.monotonic() + phase_budget_ms / 1000
         if deadline_monotonic is not None:
             deadline = min(deadline, deadline_monotonic)
         check_source_evidence_deadline(deadline)
@@ -633,6 +845,9 @@ def source_evidence_double_check(
     except _SourceEvidenceDeadlineExceeded:
         scan = replace(scan, complete=False, stop_reason="deadline")
 
+    cell = _trace(trace, "phase", "scan_result", scanned=scan.scanned_observation_count,
+                  complete=scan.complete, stop=scan.stop_reason)
+    _trace(cell, "finish")
     warnings = ["used"]
     if not scan.complete:
         warnings.append("incomplete")
