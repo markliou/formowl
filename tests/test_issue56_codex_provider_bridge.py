@@ -1256,11 +1256,10 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                         transport,
                         workspace_dir=workspace,
                     )
-                    with self.assertRaisesRegex(
-                        ContractValidationError,
-                        "(?:selector is unavailable|mail capability source family is unavailable)",
-                    ):
-                        provider.respond(
+                    # Either a fail-closed contract error or a source-scope
+                    # clarification is acceptable; neither may query evidence.
+                    try:
+                        outcome = provider.respond(
                             history=(),
                             user_text="整理授權郵件",
                             latest_evidence=None,
@@ -1269,6 +1268,15 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                             formowl_tool_descriptor=descriptor,
                             authorized_capability_summary=capability_summary,
                         )
+                    except ContractValidationError as exc:
+                        self.assertRegex(
+                            str(exc),
+                            "(?:selector is unavailable|mail capability source family is unavailable)",
+                        )
+                    else:
+                        self.assertEqual(outcome.response_kind, "clarification")
+                        self.assertEqual(outcome.citation_ids, ())
+                        self.assertIn("尚未查詢來源", outcome.answer_text or "")
                 evidence_tool.assert_not_called()
                 self.assertEqual(transport.tool_outputs, [])
 
@@ -6601,6 +6609,19 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                 env_key=env_key,
             )
             self.assertNotIn("secret", standard_output.getvalue())
+
+
+
+def setUpModule() -> None:
+    import _uat_turn_budget
+
+    _uat_turn_budget.start()
+
+
+def tearDownModule() -> None:
+    import _uat_turn_budget
+
+    _uat_turn_budget.stop()
 
 
 if __name__ == "__main__":

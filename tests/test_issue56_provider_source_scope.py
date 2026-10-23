@@ -57,17 +57,21 @@ class ProviderSourceScopeTests(unittest.TestCase):
 
     def test_attachment_container_is_not_implicitly_a_native_table(self):
         available = ["mail", "attachment_table", "document_text"]
+        # An attachment is a container (SPEC §7): naming mail must not hide the
+        # native tables inside mail attachments, so mail-attachment requests
+        # keep both attachment-bearing families. Explicit table or independent
+        # document wording still narrows the scope as before.
         cases = (
-            ("請查郵件附件中 orchid 的段落", ["mail"]),
-            ("Find orchid in mail attachments.", ["mail"]),
+            ("請查郵件附件中 orchid 的段落", ["attachment_table", "mail"]),
+            ("Find orchid in mail attachments.", ["attachment_table", "mail"]),
             ("Find orchid in attachments.", ["attachment_table", "mail"]),
             ("Find orchid in an attached document.", ["attachment_table", "mail"]),
             ("Find orchid in an attached PDF document.", ["attachment_table", "mail"]),
-            ("Find orchid in a document in mail attachments.", ["mail"]),
+            ("Find orchid in a document in mail attachments.", ["attachment_table", "mail"]),
             ("Find orchid in an attached file.", ["attachment_table", "mail"]),
             ("查附件文件中 orchid 的內容", ["attachment_table", "mail"]),
-            ("請查郵件附件中的文件內容，找 orchid", ["mail"]),
-            ("請查郵件附件中的文件以及獨立文件，找 orchid", ["document_text", "mail"]),
+            ("請查郵件附件中的文件內容，找 orchid", ["attachment_table", "mail"]),
+            ("請查郵件附件中的文件以及獨立文件，找 orchid", ["attachment_table", "document_text", "mail"]),
             ("查附件中 orchid 的內容", ["attachment_table", "mail"]),
             ("查附件表格中 orchid 的欄位", ["attachment_table"]),
             ("Find orchid in an attachment spreadsheet.", ["attachment_table"]),
@@ -159,7 +163,7 @@ class ProviderSourceScopeTests(unittest.TestCase):
                     if item.get("role") == "developer"
                     and "immutable FormOwl boundary" in item.get("content", "")
                 )
-                self.assertEqual(boundary["required_source_family_scope"], ["mail"])
+                self.assertEqual(boundary["required_source_family_scope"], ["attachment_table", "mail"])
                 if len(calls) == 2:
                     control = json.loads(next(item["output"] for item in reversed(payload["input"])
                                               if item.get("type") == "function_call_output"))
@@ -168,7 +172,9 @@ class ProviderSourceScopeTests(unittest.TestCase):
                 return {"status": "completed", "output": [{
                     "type": "function_call", "call_id": f"scope-{len(calls)}",
                     "name": "query_effective_graph_view",
-                    "arguments": json.dumps(_arguments(prompt, ["attachment_table"] if len(calls) == 1 else ["mail"])),
+                    "arguments": json.dumps(_arguments(
+                        prompt, ["document_text"] if len(calls) == 1 else ["attachment_table", "mail"],
+                    )),
                 }]}
             self.assertEqual(len(calls), 3)
             backend.assert_called_once()
@@ -186,7 +192,10 @@ class ProviderSourceScopeTests(unittest.TestCase):
             )
         self.assertEqual(outcome.response_kind, "answer")
         self.assertEqual(outcome.citation_ids, (citation,))
-        self.assertEqual(backend.call_args.args[0].request_contract["source_family_scope"], ["mail"])
+        self.assertEqual(
+            sorted(backend.call_args.args[0].request_contract["source_family_scope"]),
+            ["attachment_table", "mail"],
+        )
         self.assertEqual(len(outcome.tool_requests), 1)
 
 

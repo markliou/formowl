@@ -66,7 +66,8 @@ class SourceQueryStabilityTests(unittest.TestCase):
             result = handler(arguments)
         self.assertEqual([family for family, _ in calls], ["mail", "document_text"])
         self.assertLess(calls[0][1], calls[1][1])
-        self.assertLessEqual(calls[-1][1], 10.5)
+        # One shared source-start phase budget bounds every family/selector.
+        self.assertLessEqual(calls[-1][1], 10.0 + loader.SOURCE_START_EVIDENCE_TIME_BUDGET_MS / 1000)
         self.assertTrue(result["citations"])
         self.assertTrue(any(item.get("document_locator") for item in result["evidence"]))
         self.assertEqual(result["coverage"]["status"], "incomplete")
@@ -90,7 +91,8 @@ class SourceQueryStabilityTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertNotEqual(calls[0][0], calls[1][0])
         self.assertLess(calls[0][1], calls[1][1])
-        self.assertLessEqual(calls[-1][1], 10.5)
+        # One shared source-start phase budget bounds every family/selector.
+        self.assertLessEqual(calls[-1][1], 10.0 + loader.SOURCE_START_EVIDENCE_TIME_BUDGET_MS / 1000)
         self.assertLessEqual(calls[1][2], 8192 - 3)
         self.assertTrue(result["citations"])
         self.assertEqual(result["coverage"]["status"], "incomplete")

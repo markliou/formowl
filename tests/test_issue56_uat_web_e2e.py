@@ -184,6 +184,7 @@ class Issue56UatTerminalTraceTests(unittest.TestCase):
 
     def _service(self, outcome):
         service = object.__new__(Issue56TemporaryLanQueryService)
+        service._provider_tool_catalog = __import__("formowl_gateway.issue56_uat_runtime", fromlist=["_query_agent_tool_catalog"])._query_agent_tool_catalog(None)
         service._application = object()
         service._conversation_model = SimpleNamespace(
             respond=MagicMock(return_value=outcome), discard_conversation=MagicMock(),
@@ -2215,6 +2216,7 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             start=1,
         ):
             service = object.__new__(Issue56TemporaryLanQueryService)
+            service._provider_tool_catalog = __import__("formowl_gateway.issue56_uat_runtime", fromlist=["_query_agent_tool_catalog"])._query_agent_tool_catalog(None)
             service._client = SimpleNamespace(
                 post=MagicMock(return_value=response_for(warnings))
             )
@@ -2401,6 +2403,7 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             diagnostic=None,
         ):
             service = object.__new__(uat_runtime_module.Issue56TemporaryLanQueryService)
+            service._provider_tool_catalog = __import__("formowl_gateway.issue56_uat_runtime", fromlist=["_query_agent_tool_catalog"])._query_agent_tool_catalog(None)
             service._application = object()
             service._conversation_model = SimpleNamespace(discard_conversation=lambda _: None)
             service._lock = threading.RLock()
@@ -2556,6 +2559,7 @@ class Issue56UatWebE2ETests(unittest.TestCase):
 
         def ask_with(response):
             service = object.__new__(uat_runtime_module.Issue56TemporaryLanQueryService)
+            service._provider_tool_catalog = __import__("formowl_gateway.issue56_uat_runtime", fromlist=["_query_agent_tool_catalog"])._query_agent_tool_catalog(None)
             service._application = object()
             service._conversation_model = SimpleNamespace(discard_conversation=lambda _: None)
             service._lock = threading.RLock()
@@ -6162,6 +6166,19 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                     "/workspace/",
                 ):
                     self.assertNotIn(forbidden, rendered)
+
+
+
+def setUpModule() -> None:
+    import _uat_turn_budget
+
+    _uat_turn_budget.start()
+
+
+def tearDownModule() -> None:
+    import _uat_turn_budget
+
+    _uat_turn_budget.stop()
 
 
 if __name__ == "__main__":
