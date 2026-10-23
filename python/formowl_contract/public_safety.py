@@ -80,6 +80,20 @@ _RAW_PATH_TOKEN = re.compile(
 _LOCATOR_TOKEN = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>]+", re.IGNORECASE)
 
 
+def _numeric_division_positions(value: str) -> set[int]:
+    # Only a spaced binary operator between bounded numeric operands. Bare
+    # roots, numeric paths, path suffixes and other slashes remain unsafe.
+    return {match.start("slash") for match in re.finditer(
+        r"(?<![\w./\\])[0-9]+(?:\.[0-9]+)?[ \t]+(?P<slash>/)[ \t]+"
+        r"[0-9]+(?:\.[0-9]+)?(?![\w./\\])", value,
+    )}
+
+
+def _has_raw_path(value: str) -> bool:
+    division = _numeric_division_positions(value)
+    return any(match.start(2) not in division for match in _RAW_PATH.finditer(value))
+
+
 def safe_public_string(value: Any, field_name: str) -> str:
     if value is None:
         return ""
@@ -130,10 +144,17 @@ def redact_public_raw_references(value: str) -> tuple[str, int]:
         (_BACKEND_LOCATOR, "[redacted_internal_locator]"),
         (_URL_USERINFO, "[redacted_url_credentials]"),
         (_LOCATOR_TOKEN, "[redacted_locator]"),
-        (_RAW_PATH_TOKEN, "[redacted_path]"),
     ):
         redacted, count = pattern.subn(replacement, redacted)
         replacements += count
+    division = _numeric_division_positions(redacted)
+    def redact_path(match: re.Match[str]) -> str:
+        nonlocal replacements
+        if match.start() in division and match[0] == "/":
+            return match[0]
+        replacements += 1
+        return "[redacted_path]"
+    redacted = _RAW_PATH_TOKEN.sub(redact_path, redacted)
     if _unsafe_public_string(redacted):
         return "[redacted_mail_evidence]", max(1, replacements)
     return redacted, replacements
@@ -141,7 +162,7 @@ def redact_public_raw_references(value: str) -> tuple[str, int]:
 
 def _unsafe_public_string(value: str) -> bool:
     return bool(
-        _RAW_PATH.search(value)
+        _has_raw_path(value)
         or _BACKEND_LOCATOR.search(value)
         or _URL_USERINFO.search(value)
         or _INTERNAL_FORMOWL_LOCATOR.search(value)
@@ -182,3 +203,38 @@ def _dict_item_path(base_path: str, key: Any, index: int) -> str:
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,79}", key):
             return f"{base_path}.{key}" if base_path else key
     return f"{base_path}.item[{index}]" if base_path else f"item[{index}]"
+
+
+def private_public_safety_rejection_summary(
+    *, answer_text: str, coverage_note: str,
+) -> dict[str, Any]:
+    """Hash-only private diagnostics; this does not decide public acceptance."""
+    from .primitives import sha256_json
+
+    if not isinstance(answer_text, str) or not isinstance(coverage_note, str):
+        raise ContractValidationError("private safety diagnostic fields must be strings")
+    fields = {"answer_text": answer_text, "coverage_note": coverage_note}
+    patterns = (
+        ("raw_path", _RAW_PATH),
+        ("backend_locator", _BACKEND_LOCATOR),
+        ("url_userinfo", _URL_USERINFO),
+        ("internal_locator", _INTERNAL_FORMOWL_LOCATOR),
+        ("sql_text", _SQL_TEXT),
+        ("secret_assignment", _SECRET_ASSIGNMENT_TEXT),
+        ("bearer_credential", _BEARER_CREDENTIAL_TEXT),
+    )
+    field_rules = {
+        name: [code for code, pattern in patterns
+               if (_has_raw_path(value) if code == "raw_path" else pattern.search(value))]
+        for name, value in fields.items()
+    }
+    affected = [name for name, rules in field_rules.items() if rules]
+    codes = sorted({code for rules in field_rules.values() for code in rules})
+    return {
+        "rule_codes": codes,
+        "affected_fields": affected,
+        "field_hashes": {name: sha256_json(fields[name]) for name in affected},
+        "draft_hash": sha256_json(fields),
+        "matched_rule_count": len(codes),
+        "affected_field_count": len(affected),
+    }

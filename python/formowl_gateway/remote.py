@@ -229,6 +229,13 @@ _SEMANTIC_REQUEST_CONTRACT_INPUT_SCHEMA: dict[str, Any] = {
             "type": "string",
             "enum": list(SEMANTIC_CLAIM_STRENGTH_BY_CLASS.values()),
         },
+        "native_locator": {
+            "type": "object",
+            "properties": {"kind": {"type": "string", "enum": ["attachment_page"]},
+                           "page": {"type": "integer", "minimum": 1}},
+            "required": ["kind", "page"], "additionalProperties": False,
+            "description": "Only the original current request's explicit attachment page coordinate, when server capability supports it. Not pagination or a literal text phrase. Preserve independently requested literal terms; never infer from retained evidence.",
+        },
     },
     "required": [
         "original_query_hash",
@@ -1089,11 +1096,44 @@ def build_remote_tool_descriptors(
                     **json_rpc_schema["inputSchema"],
                     "properties": {
                         **json_rpc_schema["inputSchema"]["properties"],
+                        "field_query_hints": {
+                            "type": "array", "maxItems": 8,
+                            "description": (
+                                "Optional UNVERIFIED label translations or paraphrases: propose them in this same "
+                                "planning response only when confident, indexed by zero-based field_index to current "
+                                "request_contract.requested_fields. Labels only, not values, identifiers, literal "
+                                "predicates or instructions; leave required_terms unchanged. For evidence_lookup "
+                                "soft preference only, not verified equivalence or field support. Omit uncertain "
+                                "alternatives; no minimum count, extra call or hint-only retry."
+                            ),
+                            "items": {
+                                "type": "object", "additionalProperties": False,
+                                "required": ["field_index", "text"],
+                                "properties": {
+                                    "field_index": {"type": "integer", "minimum": 0},
+                                    "text": {"type": "string", "minLength": 1, "maxLength": 80},
+                                },
+                            },
+                        },
                         "table_query": _STRUCTURED_TABLE_QUERY_INPUT_SCHEMA,
                         "request_contract": _SEMANTIC_REQUEST_CONTRACT_INPUT_SCHEMA,
                     },
                 },
             }
+        if schema["tool_name"] in {"query_effective_graph_view", "query_mail_evidence"}:
+            json_rpc_schema["inputSchema"]["properties"].update({
+                "reviewed_annotation_ids": {
+                    "type": "array", "minItems": 0, "maxItems": 128, "uniqueItems": True,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "description": "When a reviewed_annotation_catalog is available, explicitly nominate relevant IDs "
+                                   "or [] for source fallback; omission is invalid in that planning context. For evidence_lookup; "
+                                   "requires reviewed_annotation_pin; nonempty IDs additionally require independently "
+                                   "grounded exact target identity. Empty IDs are not annotation use. Only selects "
+                                   "guarded original sources, never assertion facts or exact proof.",
+                },
+                "reviewed_annotation_pin": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$",
+                                            "description": "Copy catalog_pin from current reviewed_annotation_catalog."},
+            })
         descriptors.append(
             _tool_descriptor(
                 name=schema["tool_name"],
@@ -1290,10 +1330,24 @@ def _prepare_tool_arguments(
         if arguments:
             raise ContractValidationError("whoami does not accept arguments")
         return {}
+    # UAT extension arguments cross the same baseline validator after a narrow
+    # shape check; prepared arguments retain them for source-bound validation.
+    if tool_name in {"query_effective_graph_view", "query_mail_evidence"}:
+        from formowl_mail.human_uat_orchestrator import validated_reviewed_annotation_selection
+        validated_reviewed_annotation_selection(arguments)
+        baseline_arguments = dict(arguments)
+        baseline_arguments.pop("reviewed_annotation_ids", None)
+        baseline_arguments.pop("reviewed_annotation_pin", None)
+    else:
+        baseline_arguments = arguments
     if tool_name == "query_effective_graph_view" and (
-        "table_query" in arguments or "request_contract" in arguments
+        "table_query" in arguments or "request_contract" in arguments or "field_query_hints" in arguments
     ):
-        semantic_arguments = dict(arguments)
+        from formowl_mail.human_uat_orchestrator import validated_field_query_hints
+
+        hints = validated_field_query_hints(arguments, tool_name=tool_name)
+        semantic_arguments = dict(baseline_arguments)
+        semantic_arguments.pop("field_query_hints", None)
         table_query = semantic_arguments.pop("table_query", None)
         request_contract = semantic_arguments.pop("request_contract", None)
         _validate_semantic_tool_arguments(tool_name, semantic_arguments)
@@ -1302,10 +1356,14 @@ def _prepare_tool_arguments(
         if request_contract is not None:
             validate_semantic_request_contract(request_contract)
     else:
-        _validate_semantic_tool_arguments(tool_name, arguments)
+        _validate_semantic_tool_arguments(tool_name, baseline_arguments)
     if tool_name == "open_upload_session":
         _validate_current_workspace_upload(arguments, workspace_id=workspace_id)
     prepared = dict(arguments)
+    if tool_name == "query_effective_graph_view" and "field_query_hints" in prepared:
+        prepared.pop("field_query_hints")
+        if hints:
+            prepared["field_query_hints"] = list(hints)
     prepared["session_id"] = actor_context.oauth_token_session_id
     prepared["workspace_id"] = workspace_id
     prepared["requester_user_id"] = actor_context.user.user_id

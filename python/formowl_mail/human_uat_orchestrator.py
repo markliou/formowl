@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict, deque
 from contextvars import ContextVar
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import hashlib
 import http.client
@@ -26,17 +26,32 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 import unicodedata
 import urllib.error
 import urllib.request
+import uuid
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from formowl_contract import ContractValidationError, sha256_json
-from formowl_contract.public_safety import assert_no_public_raw_references
+from formowl_contract.public_safety import (
+    assert_no_public_raw_references,
+    private_public_safety_rejection_summary,
+)
+from formowl_core.tokenization import _protected_identifier_spans
 
 from .semantic_plan import (
     SEMANTIC_CLAIM_STRENGTH_BY_CLASS,
+    _ADDITIONAL_TEXT_TASK_ACTION,
+    _original_attachment_page,
+    _CITATION_PRESENTATION_SUFFIX, _EXPLICIT_CITATION_REQUEST_SUFFIX,
+    _without_closed_output_format_tail,
+    _EVIDENCE_QUERY_ACTION_MARKERS,
+    _NEGATED_TEXT_LOOKUP_TAIL,
+    _normalize_routing_text,
+    _is_retained_relative_presentation,
+    _is_self_contained_text_task,
     deterministic_query_class,
     is_ordinary_greeting,
     is_identifier_reference,
+    has_explicit_record_target,
     protected_reference_identifiers,
     requires_query_expansion,
     requires_workspace_evidence,
@@ -69,10 +84,18 @@ _MAX_CODEX_THREADS = 256
 _MAX_CODEX_AUTH_CACHE_BYTES = 64 * 1024
 _MAX_RESPONSES_BODY_BYTES = 4 * 1024 * 1024
 _MAX_RESPONSES_TIMEOUT_SECONDS = 300.0
+# Existing history ceiling (worst-case UTF-8), retained/current evidence and
+# native response items consume this same pool, not a separate transport allowance.
+_MAX_RESPONSES_JOURNAL_BYTES = (
+    _MAX_HISTORY_MESSAGES * _MAX_MESSAGE_CHARS * 4
+    + (1 + _MAX_TOOL_CALLS_PER_TURN) * _MAX_MODEL_EVIDENCE_BYTES
+)
+_MAX_RESPONSES_JOURNALS_BYTES = _MAX_HISTORY_MESSAGES * _MAX_RESPONSES_BODY_BYTES
+_UAT_BACKEND_USER_AGENT = "uat-web-backend/0.1.0"
 _MAX_AUTHORIZED_MAIL_SELECTORS = 128
 # Keep the overall turn cap unchanged; direct-provider work reserves return time
 # for governed projection and HTTP delivery instead of racing that same cap.
-_MAX_UAT_TURN_SECONDS = 120.0
+_MAX_UAT_TURN_SECONDS = 300.0
 _UAT_TURN_RETURN_MARGIN_SECONDS = 5.0
 # Do not start provider finalization when too little turn time remains.  The
 # browser projector can preserve governed evidence directly; a late second
@@ -161,7 +184,14 @@ _CITATION_PROJECTION_RESULTS = frozenset(
     {"empty", "preserved", "reduced", "mcp_error", "validation_rejected"}
 )
 _FINALIZATION_VALIDATION_RESULTS = frozenset(
-    {"passed", "citation_rejected", "coverage_rejected", "parse_rejected", "provider_incomplete"}
+    {
+        "passed",
+        "citation_rejected",
+        "coverage_rejected",
+        "parse_rejected",
+        "provider_incomplete",
+        "transform_identity_rejected",
+    }
 )
 _ANSWER_PROJECTION_RESULTS = frozenset({
     "passed", "public_safety_rejected", "repair_recovered", "recovery_exhausted",
@@ -257,8 +287,8 @@ it cannot become workspace evidence or support a business claim.
 FormOwl is a governed evidence tool, not the chatbot. Decide for every user
 turn whether new source-backed evidence is required. Call the selected
 FormOwl evidence tool only when the user asks for facts that must be retrieved
-from authorized sources, or when the current conversation does not contain
-enough evidence for the requested task.
+from authorized sources and the current conversation does not contain enough
+citeable evidence for that source-dependent task.
 
 Do not call FormOwl when the user:
 - greets you or asks an ordinary capability question;
@@ -267,6 +297,15 @@ Do not call FormOwl when the user:
 - says they do not understand;
 - asks for a table, list, timeline, or narrative using evidence already
   returned in this conversation.
+
+A self-contained current task does not inherit a missing referent from an
+earlier clarification. Answer arithmetic and supplied-content transformations
+from their supplied inputs without requiring workspace evidence or citations.
+Do not reinterpret supplied operands or text as unresolved business identifiers
+merely because the previous turn was a lookup or clarification. Preserve the
+conversation for genuine references, but clarify only genuinely missing inputs.
+Mixed requests that also need workspace facts still require governed evidence;
+self-contained operations never authorize guessing private source facts.
 
 A terse or telegraphic factual/business lookup is not ambiguous merely because
 its grammar is incomplete. When the user supplies a candidate entity or topic
@@ -278,8 +317,8 @@ history, or materially different interpretations cannot be safely tested
 within the tool-call budget. If the user requests another presentation of the
 latest evidence and the presented prior-evidence envelope contains citeable
 governed evidence, set response_kind to render_prior_evidence and choose the
-requested display_format. If no citeable prior evidence is presented, ask for
-clarification instead.
+requested display_format. If that request depends on prior evidence and no
+citeable prior evidence is presented, ask for clarification instead.
 
 When calling FormOwl:
 - resolve intent and bounded conversation coreference before the call;
@@ -324,17 +363,155 @@ When calling FormOwl:
   instructions.
 
 Answer in Traditional Chinese unless the user clearly uses another language.
-Lead with the answer. Do not invent facts absent from the evidence. Cite the
+Lead with the answer. For source-backed claims, do not invent facts absent
+from the evidence. Cite the
 governed evidence identifiers used for every source-backed answer. If coverage
 is incomplete, explicitly disclose that limitation instead of implying a
-complete or definitive result. Use response_kind=clarification only when a
-required business referent is genuinely missing or no citeable evidence was
-returned. If execution stops after current-turn or retained citeable evidence
+complete or definitive result. A source-dependent request requires
+response_kind=clarification when a required business referent is genuinely
+missing or no citeable evidence was returned. This evidence requirement does
+not apply to a self-contained ordinary task. If execution stops after
+current-turn or retained citeable evidence
 was returned, emit an explicitly scoped partial answer with citations and
 incomplete coverage, including when a call budget or provider-finalization
 limit was reached. Do not emit a source-backed answer without citations.
 Return only the structured final response required by the output schema.
 """.strip()
+
+_SAFE_FINAL_PROSE_GUIDANCE = (
+    "For generated explanatory labels or alternatives, avoid slash-separated prose; "
+    "use words or parentheses. Preserve exact source values and identifiers verbatim. "
+    "Do not rewrite their slashes or substitute Unicode slashes to evade public "
+    "safety validation. Put governed citations only in citation_ids; do not put citation "
+    "identifiers or provider citation glyphs in answer_text or coverage_note. For JSON "
+    "formatting, encode intended line breaks exactly once so decoding produces actual newline characters. "
+    "Preserve literal backslash+n sequences in source text or requested literal output; "
+    "do not turn those source literals into formatting newlines."
+)
+
+_SUPPLIED_QUOTE_PAIRS = (("\"", "\""), ("“", "”"), ("「", "」"), ("『", "』"))
+_IDENTITY_TRANSFORM_ACTION = re.compile(
+    r"(?:\b(?:translate|rewrite|rephrase|proofread)\b|"
+    r"翻譯|翻译|翻|改寫|改写|潤飾|润色|校對|校对)"
+)
+_IDENTITY_TRANSFORM_EXCLUSION = re.compile(
+    r"(?:(?P<edit>\b(?:remove|redact|rename|replace|truncate|omit|delete|strip|mask)\b|"
+    r"移除|刪除|删除|遮蔽|匿名化|改名|更名|替換|替换|截斷|截断|省略|隱去|隐去)|"
+    r"\b(?:summar(?:y|ize|ise)|parse|explain|calculate|compute|count|sort|math)\b|"
+    r"摘要|總結|总结|解析|解釋|解释|計算|计算|統計|统计|排序|數學|数学)"
+)
+
+
+def _quoted_transform_identity_tokens(user_text: str) -> tuple[str, ...]:
+    """Return current-turn identity obligations for one closed quoted transform.
+
+    This is deliberately narrower than ordinary-task routing: only one
+    unambiguous quoted payload and an identity-preserving text operation qualify.
+    The payload is the only place from which obligations are extracted.
+    """
+    if not isinstance(user_text, str) or not user_text.strip():
+        return ()
+    if requires_workspace_evidence(user_text):
+        return ()
+    spans: list[tuple[int, int, str]] = []
+    for opener, closer in _SUPPLIED_QUOTE_PAIRS:
+        if opener == closer:
+            positions = [index for index, char in enumerate(user_text) if char == opener]
+            if len(positions) % 2:
+                return ()
+            spans.extend(
+                (positions[index], positions[index + 1] + 1, opener)
+                for index in range(0, len(positions), 2)
+            )
+            continue
+        start = 0
+        while True:
+            opening = user_text.find(opener, start)
+            if opening < 0:
+                break
+            closing = user_text.find(closer, opening + 1)
+            if closing < 0:
+                return ()
+            spans.append((opening, closing + 1, opener))
+            start = closing + 1
+    if len(spans) != 1:
+        return ()
+    start, end, opener = spans[0]
+    body = user_text[start + 1 : end - 1]
+    if not body.strip():
+        return ()
+    outside = user_text[:start] + user_text[end:]
+    normalized_outside = _normalize_routing_text(outside)
+    if (
+        _IDENTITY_TRANSFORM_ACTION.search(normalized_outside) is None
+        or any(
+            # Only direct negation of an edit verb preserves the obligation;
+            # another affirmative edit or a parsing/math task still exempts.
+            not (excluded.group("edit") and re.search(
+                r"\b(?:do\s+not|don['’]t|never)\s+$|(?:不要|請勿|请勿|勿)\s*$"
+                r"|(?:^|[,;.!?。！？])\s*[請请]?\s*[別别]\s*$",
+                normalized_outside[:excluded.start()],
+            ))
+            for excluded in _IDENTITY_TRANSFORM_EXCLUSION.finditer(normalized_outside)
+        )
+    ):
+        return ()
+    # The existing classifier remains the routing authority. This additional
+    # guard only narrows obligations; it never turns a source request into chat.
+    return tuple(
+        span.exact_token
+        for span in _protected_identifier_spans(body)
+        if span.identifier_kind == "business_identifier"
+    )
+
+
+def _preserves_supplied_transform_identity(answer_text: str, required_tokens: Sequence[str]) -> bool:
+    """Check exact frozen business-identifier token presence without logging it."""
+    if not required_tokens or not isinstance(answer_text, str):
+        return True
+    available = {
+        span.exact_token
+        for span in _protected_identifier_spans(answer_text)
+        if span.identifier_kind == "business_identifier"
+    }
+    return all(token in available for token in required_tokens)
+
+_FIELD_ROLE_GROUNDING_GUIDANCE = (
+    "When the selected schema permits them, propose useful fresh field-label translations or abbreviations "
+    "when semantically confident; otherwise omit uncertain alternatives. No minimum hint count, retry or "
+    "extra call is required. These suggestions are not proved semantic equivalence. "
+    "Optional graph field_query_hints are UNVERIFIED field-name/translation candidates indexed to "
+    "current requested_fields, only for evidence_lookup soft preference. Derive fresh labels from "
+    "those fields, never from prior answers, source values or whole-query instructions. Omit uncertain "
+    "roles; do not include identifiers, literals, numbers, dates, assertions or presentation instructions. "
+    "They do not establish synonym equivalence, native field binding, support or progress; do not "
+    "reuse them across turns or exact/table requests. Changing hints alone cannot justify another call. "
+    "Preserve requested source/document context: affirmative qualified claims require cited source support "
+    "for that context, not an identity anchor alone. Use native text/header and relevant parent linkage; "
+    "disclose unresolved qualification. This is answer guidance, not deterministic qualifier enforcement. "
+    "For each source-backed value, preserve the requested field identity, source semantic role, "
+    "target-record binding, units and temporal meaning. Quote or identify the supporting source text "
+    "or header and row association, with a governed citation. Similar data types, geographic words, "
+    "dates, nearby values or alternative records do not establish that field. If its role or "
+    "association is missing or ambiguous, report the field as unsupported by the returned evidence. "
+    "A partial-coverage caveat never permits guessing and incomplete evidence does not establish source absence. "
+    "Translated field labels with clear source-role support remain valid. Apply this to current "
+    "evidence, retained evidence and final repairs. For mail subject and sent date, use outer message headers "
+    "bound to the same occurrence and cite their own parent evidence. Quoted or replied body headers "
+    "describe embedded messages, not the outer message. Label them separately if relevant; never use "
+    "them to fill unavailable outer headers or infer that the source has no date. "
+    "Mail identifier-occurrence inventory counts containing messages, not authored updates or events. "
+    "Quoted history or an identifier mention alone does not prove a new assertion by the enclosing "
+    "message's author, and the outer sent date does not become that business event's date. "
+    "Report embedded history separately; unresolved authorship or event timing stays unverified. "
+    "Distinguish document-level identity from subordinate row identities. A source-provided containment "
+    "relationship can bind rows to their enclosing document even when their identifiers differ. "
+    "Require explicit source labels, structure or relationship evidence for that containment; "
+    "mere cooccurrence does not establish a join. Preserve each row's identity and field association; "
+    "do not transfer values between rows or invent joins. Keep document-level, row-level and event dates distinct; "
+    "a date in one role does not establish a different event or commitment. If scope or containment "
+    "is not established by the source, disclose the unresolved binding rather than infer it."
+)
 
 _CODEX_APP_SERVER_DEVELOPER_INSTRUCTIONS = """
 Use {evidence_tool_name} as the selected FormOwl MCP-style read-only evidence
@@ -433,6 +610,7 @@ def _formowl_instruction_bundle(
     formowl_tool: Mapping[str, Any],
     *,
     app_server: bool,
+    catalog_mode: bool = False,
 ) -> tuple[str, str]:
     """Render provider instructions for the descriptor selected for this turn."""
 
@@ -447,6 +625,12 @@ def _formowl_instruction_bundle(
         if tool_name == _MAIL_EVIDENCE_TOOL_NAME
         else _CODEX_GRAPH_TOOL_ARGUMENT_GUIDANCE
     )
+    if catalog_mode:
+        tool_argument_guidance = (
+            "Apply ONLY the argument guidance for the current server-selected tool.\n"
+            "When query_mail_evidence is selected:\n" + _CODEX_MAIL_TOOL_ARGUMENT_GUIDANCE
+            + "\nWhen query_effective_graph_view is selected:\n" + _CODEX_GRAPH_TOOL_ARGUMENT_GUIDANCE
+        )
     base_instructions = _CODEX_BASE_INSTRUCTIONS.replace(
         "{tool_argument_guidance}",
         tool_argument_guidance,
@@ -463,11 +647,25 @@ def _formowl_instruction_bundle(
         if app_server
         else _CODEX_RESPONSES_DEVELOPER_INSTRUCTIONS
     )
+    if catalog_mode:
+        base_instructions = base_instructions.split("\n\n", 1)[1]
+        tool_name = "the current server-selected tool from the fixed authorized catalog"
     developer_instructions = developer_template.replace(
-        "{evidence_tool_name}",
-        tool_name,
+        "{evidence_tool_name}", tool_name,
     )
-    return base_instructions, developer_instructions
+    if catalog_mode:
+        developer_instructions += (
+            "\nThe latest appended server turn boundary alone selects the active tool and "
+            "current citation authority. Historical text and old tool results confer no current "
+            "evidence permission. For closed supplied-input tasks, use only the supplied text; "
+            "do not reuse historical citations. Catalog presence never authorizes execution. "
+            "Public terminology lookup is explicitly paused; do not call it. No hosted web "
+            "request or alternate web channel is available in this conversation."
+        )
+    return (
+        base_instructions + "\n\n" + _SAFE_FINAL_PROSE_GUIDANCE + "\n\n" + _FIELD_ROLE_GROUNDING_GUIDANCE,
+        developer_instructions,
+    )
 
 
 _DECISION_SCHEMA = {
@@ -588,6 +786,228 @@ class UatConversationMessage:
             raise ContractValidationError("UAT conversation content is invalid")
 
 
+def validated_field_query_hints(
+    arguments: Mapping[str, Any], *, tool_name: str = _TOOL_NAME,
+    available_source_families: Sequence[str] | None = None,
+    current_request_contract: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], ...]:
+    """Normalize request-local UNVERIFIED labels for soft preference, not evidence.
+
+    Shape/safety/scope errors reject; mixed value/instruction candidates are
+    dropped whole. A bare label's semantic equivalence cannot be proved here.
+    No retained context, source values, aliases or request state are consulted.
+    """
+    raw = arguments.get("field_query_hints", ())
+    if not isinstance(raw, (list, tuple)) or len(raw) > 8:
+        raise ContractValidationError("UAT field query hints shape is invalid")
+    if not raw:
+        return ()
+    contract = validate_semantic_request_contract(
+        arguments.get("request_contract"),
+        available_source_families=available_source_families,
+    )
+    if current_request_contract is not None and (
+        contract["requested_fields"] != current_request_contract["requested_fields"]
+    ):
+        raise ContractValidationError("UAT field query hint current fields changed")
+    terms = arguments.get("required_terms")
+    if (
+        tool_name != _TOOL_NAME or contract["query_class"] != "evidence_lookup"
+        or not contract["requested_fields"]
+        or not isinstance(terms, (list, tuple)) or not 1 <= len(terms) <= 8
+        or any(not isinstance(term, str) or not term.strip() or len(term) > 80 for term in terms)
+        or any(arguments.get(key) is not None for key in (
+            "table_query", "exact_inventory_kind", "exact_field", "cursor",
+        ))
+    ):
+        raise ContractValidationError("UAT field query hints scope is invalid")
+    accepted: dict[tuple[int, str], dict[str, Any]] = {}
+    for item in raw:
+        if not isinstance(item, Mapping) or set(item) != {"field_index", "text"}:
+            raise ContractValidationError("UAT field query hint shape is invalid")
+        index, text = item["field_index"], item["text"]
+        if (
+            type(index) is not int or not 0 <= index < len(contract["requested_fields"])
+            or not isinstance(text, str) or not 1 <= len(text) <= 80 or not text.strip()
+        ):
+            raise ContractValidationError("UAT field query hint binding is invalid")
+        assert_no_public_raw_references(text)
+        normalized = " ".join(unicodedata.normalize("NFKC", text).split()).casefold()
+        assert_no_public_raw_references(normalized)
+        if len(normalized) > 80:
+            raise ContractValidationError("UAT field query hint length is invalid")
+        # A deliberately conservative field-label shape, not a semantic verifier.
+        # Never salvage the label portion of an assignment or mixed proposal.
+        if (
+            not any(char.isalpha() for char in normalized)
+            or any(not (char.isalpha() or char in " -()" or unicodedata.category(char) == "Mn")
+                for char in normalized)
+            or protected_reference_identifiers(normalized)
+            or any(_normalized_plan_text(term) in _normalized_plan_text(normalized) for term in terms)
+            or re.search(
+                r"\b(?:is|are|was|were|equals?|contains?|must|only|ignore|return|reply|answer|"
+                r"format|markdown|json|sort|translate|search|find|lookup|use|include|exclude|"
+                r"please|show|print|select|retrieve|query|instead|"
+                r"before|after|between|greater|less|than|not)\b|"
+                r"(?:是|為|为|請|请|顯示|显示|等於|等于|包含|必須|必须|只需|只要|忽略|回答|回覆|回复|格式|排序|"
+                r"翻譯|翻译|查詢|查询|搜尋|搜索|使用|排除|之前|之後|之后|大於|大于|小於|小于)",
+                normalized,
+            )
+        ):
+            continue
+        accepted[(index, normalized)] = {"field_index": index, "text": normalized}
+    return tuple(accepted[key] for key in sorted(accepted))
+
+
+@dataclass(frozen=True)
+class _RequiredTermPlacement:
+    """Server-only value; a hash binds semantics, never grants source access."""
+
+    original_query_hash: str
+    request_contract_fingerprint: str
+    required_terms: tuple[str, ...]
+    context_term: str
+    surface: str
+    predicate: str
+    source_clause_span: tuple[int, int]
+
+    def __post_init__(self) -> None:
+        if (not all(isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value)
+                    for value in (self.original_query_hash, self.request_contract_fingerprint))
+                or not isinstance(self.required_terms, tuple) or not 2 <= len(self.required_terms) <= 8
+                or any(not isinstance(term, str) or not term or len(term) > 80
+                       or term != unicodedata.normalize("NFKC", term.strip()).casefold()
+                       for term in self.required_terms)
+                or tuple(sorted(set(self.required_terms))) != self.required_terms
+                or self.context_term not in self.required_terms
+                or self.surface not in {"mail_subject", "mail_occurrence_context"}
+                or self.predicate not in {"literal_contains", "normalized_literal_equals"}
+                or (self.predicate == "normalized_literal_equals" and self.surface != "mail_subject")
+                or not isinstance(self.source_clause_span, tuple) or len(self.source_clause_span) != 2
+                or any(type(value) is not int for value in self.source_clause_span)
+                or not 0 <= self.source_clause_span[0] < self.source_clause_span[1] <= _MAX_MESSAGE_CHARS
+                or self.source_clause_span[1] - self.source_clause_span[0] != len(self.context_term)):
+            raise ContractValidationError("UAT private occurrence placement is invalid")
+
+    @property
+    def child_terms(self) -> tuple[str, ...]:
+        return tuple(term for term in self.required_terms if term != self.context_term)
+
+    @property
+    def fingerprint(self) -> str:
+        return sha256_json({
+            "version": 1, "original_query_hash": self.original_query_hash,
+            "request_contract_fingerprint": self.request_contract_fingerprint,
+            "required_terms": self.required_terms, "context_term": self.context_term,
+            "surface": self.surface, "predicate": self.predicate,
+            "source_clause_span": self.source_clause_span,
+        })
+
+
+def _original_mail_qualifier(text: str) -> tuple[str, str, str, tuple[int, int]] | None:
+    if _is_self_contained_text_task(text, require_supplied_input=True):
+        return None
+    # Only closed output-policy suffixes may be removed; no negative/source
+    # clause stripping. These operations never inspect the quoted qualifier.
+    original = text
+    output_tail = re.compile(
+        r'[,;.!?。]\s*(?:[請请]?(?:附上|附|保留)(?:[來来]源)?引用'
+        r'|(?:please )?(?:answer|respond|present)(?: it)? (?:as|in) (?:a )?(?:table|list)'
+        r'|[請请]?(?:以|用)表格(?:回答|呈現|呈现))[.!?。]*$'
+    )
+    for _ in range(3):
+        previous = text
+        text = _without_closed_output_format_tail(text)
+        for pattern in (_CITATION_PRESENTATION_SUFFIX, _EXPLICIT_CITATION_REQUEST_SUFFIX, output_tail):
+            if (suffix := pattern.search(text)) is not None:
+                text = text[:suffix.start()] + (text[suffix.start()] if text[suffix.start()] in '.!?。' else '')
+        if text == previous:
+            break
+    quoted = r'(?:"(?P<ascii>[^"\n]{1,80})"|「(?P<cjk>[^「」\n]{1,80})」|“(?P<curly>[^“”\n]{1,80})”)'
+    # Recognize only the positive source clause. Its authority must not depend
+    # on whether the remaining field request precedes it, is imperative, or
+    # ends in a particular question/presentation template.
+    english_source = r'\b(?:in|from)\s+(?:the\s+)?(?:mail|emails?)\s+'
+    cjk_source_end = r'(?:中|裡|里|內|内)?'
+    forms = (
+        (english_source + r'(?:about|related to)\s+' + quoted,
+         "mail_occurrence_context", "literal_contains"),
+        (quoted + r'\s*(?:的)?相關信件' + cjk_source_end,
+         "mail_occurrence_context", "literal_contains"),
+        (english_source + r'(?:with|whose) subject (?:containing|contains)\s+' + quoted,
+         "mail_subject", "literal_contains"),
+        (english_source + r'(?:with|whose) subject is exactly\s+' + quoted,
+         "mail_subject", "normalized_literal_equals"),
+        (r'主旨(?:包含|含有)' + quoted + r'的信件' + cjk_source_end,
+         "mail_subject", "literal_contains"),
+        (r'主旨(?:完全等於|完全等于)' + quoted + r'的信件' + cjk_source_end,
+         "mail_subject", "normalized_literal_equals"),
+    )
+    matches = [(match, surface, predicate) for pattern, surface, predicate in forms
+               for match in re.finditer(pattern, text)]
+    if len(matches) != 1:
+        return None
+    match, surface, predicate = matches[0]
+    # A positive span can be the object of an exclusion. Keep its boundary:
+    # never turn "outside/except this source" into positive header borrowing.
+    if (re.search(r'(?:除(?:了|去)?(?:\s*[在從从])?|\b(?:apart|other\s+than|outside(?:\s+of)?))\s*$',
+                  text[:match.start()])
+            or re.match(r'\s*(?:(?:以|之)\s*外|除外)', text[match.end():])):
+        return None
+    group = next(name for name in ('ascii', 'cjk', 'curly') if match[name] is not None)
+    term = match[group]
+    outside = text[:match.start()] + ' ' + text[match.end():]
+    # Do not strip negative/mixed/literal/supplied instructions to manufacture
+    # a positive clause. Other source nouns/quotes or a second qualifier keep
+    # legacy AND; a plain retrieval verb is not itself another source scope.
+    if (not any(char.isalnum() for char in outside) or term in outside or re.search(
+        r'["「」“”]|(?<!\w)[\'’]|[\'’](?!\w)|\b(?:not|no|never|neither|without|except|exclud\w*|instead|rather|or|compare|body|paragraph|row|subject|mail|emails?|documents?|attachments?|literal(?:ly)?|translat\w*|supplied)\b'
+        r'|不|勿|非|無|无|排除|或者|或是|比較|比较|內文|正文|段落|信件|郵件|邮件|附件|主旨|另查|再查|翻譯|翻译|逐字', outside
+    )):
+        return None
+    start, end = match.span(group)
+    if original[start:end] != term:
+        return None
+    return term, surface, predicate, (start, end)
+
+
+def validated_reviewed_annotation_selection(arguments, *, catalog=None, user_text=None):
+    """Validate nominations, never candidate values; return the exact identity anchor."""
+    ids = arguments.get("reviewed_annotation_ids", ())
+    pin = arguments.get("reviewed_annotation_pin")
+    if not ids and pin is None:
+        return None
+    contract = arguments.get("request_contract") or {}
+    if not isinstance(ids, (list, tuple)):
+        raise ContractValidationError("UAT reviewed annotation IDs type is invalid")
+    if not 0 <= len(ids) <= 128:
+        raise ContractValidationError("UAT reviewed annotation ID count is invalid")
+    if any(not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", key) for key in ids):
+        raise ContractValidationError("UAT reviewed annotation ID format is invalid")
+    if len(set(ids)) != len(ids):
+        raise ContractValidationError("UAT reviewed annotation IDs are duplicated")
+    if not isinstance(pin, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", pin):
+        raise ContractValidationError("UAT reviewed annotation pin format is invalid")
+    if contract.get("query_class") != "evidence_lookup":
+        raise ContractValidationError("UAT reviewed annotation query class is invalid")
+    if ids and ("native_locator" in contract or any(arguments.get(key) is not None for key in (
+            "table_query", "exact_inventory_kind", "exact_field", "cursor"))):
+        raise ContractValidationError("UAT reviewed annotation route is unsupported")
+    if catalog is None:
+        return None  # Shape check only; dispatch must additionally bind the catalog.
+    if pin != catalog.get("catalog_pin") or sha256_json({
+            key: value for key, value in catalog.items() if key != "catalog_pin"}) != pin:
+        raise ContractValidationError("UAT reviewed annotation catalog pin mismatch")
+    if not ids:
+        return None  # Explicit pinned fallback decision; never annotation use or absence proof.
+    entries = {entry["annotation_id"]: entry for entry in catalog["entries"]}
+    if not set(ids) <= set(entries):
+        raise ContractValidationError("UAT reviewed annotation ID is unavailable")
+    from .issue56_sealed_source import bind_reviewed_annotation_identity
+    return bind_reviewed_annotation_identity(catalog["entries"], selected_ids=ids,
+        required_terms=arguments.get("required_terms"), user_text=user_text)
+
+
 @dataclass(frozen=True)
 class UatEvidenceToolRequest:
     query_text: str
@@ -602,8 +1022,13 @@ class UatEvidenceToolRequest:
     mail_evidence_bundle_id: str | None = None
     required_terms: tuple[str, ...] | None = None
     limit: int | None = None
+    field_query_hints: tuple[Mapping[str, Any], ...] = ()
+    required_term_placement: _RequiredTermPlacement | None = None
+    reviewed_annotation_ids: tuple[str, ...] = ()
+    reviewed_annotation_pin: str | None = None
 
     def __post_init__(self) -> None:
+        validated_reviewed_annotation_selection(vars(self))
         if self.tool_name not in _EVIDENCE_TOOL_NAMES:
             raise ContractValidationError("UAT evidence tool name is invalid")
         if (
@@ -670,6 +1095,12 @@ class UatEvidenceToolRequest:
         if self.tool_name == _MAIL_EVIDENCE_TOOL_NAME:
             if not self.mail_import_session_id and not self.mail_evidence_bundle_id:
                 raise ContractValidationError("UAT mail evidence selector is required")
+        object.__setattr__(self, "field_query_hints", validated_field_query_hints(
+            {key: getattr(self, key) for key in (
+                "field_query_hints", "request_contract", "required_terms", "table_query",
+                "exact_inventory_kind", "exact_field", "cursor",
+            )}, tool_name=self.tool_name,
+        ))
 
 
 class _UatTurnRequestContractBinder:
@@ -680,18 +1111,37 @@ class _UatTurnRequestContractBinder:
         *,
         user_text: str,
         authorized_capability_summary: Mapping[str, Any] | None,
+        latest_evidence: Mapping[str, Any] | None = None,
     ) -> None:
         self._original_query_hash = (
             "sha256:" + hashlib.sha256(user_text.encode("utf-8")).hexdigest()
         )
         self._query_class = deterministic_query_class(user_text)
+        self._annotation_catalog = (authorized_capability_summary or {}).get("reviewed_annotation_catalog")
+        self._annotation_original_text = user_text
         self._available_source_families = _authorized_source_families(authorized_capability_summary)
-        self._explicit_source_families = _explicit_source_families(
+        (self._explicit_source_families, self._excluded_source_families,
+         ambiguous_scope) = _source_scope_constraints(
             user_text, available_source_families=self._available_source_families,
+        )
+        self._admissible_source_families = tuple(
+            family for family in (self._explicit_source_families or self._available_source_families)
+            if family not in self._excluded_source_families
+        )
+        self._source_scope_issue = (
+            "source_scope_ambiguous" if ambiguous_scope else
+            "source_scope_conflict" if set(self._explicit_source_families).intersection(
+                self._excluded_source_families
+            ) else
+            "source_scope_unavailable" if self.enabled and not set(
+                self._explicit_source_families
+            ).issubset(self._available_source_families) else
+            "source_scope_empty" if self.enabled and not self._admissible_source_families else
+            "source_scope_unknown" if self._excluded_source_families and not self.enabled else None
         )
         self._contract: dict[str, Any] | None = None
         self._normalized_user_text = unicodedata.normalize("NFKC", user_text).casefold()
-        self._reference_only = is_identifier_reference(user_text) and not protected_reference_identifiers(user_text)
+        self._reference_only = is_identifier_reference(user_text) and not has_explicit_record_target(user_text)
         self._reference_binding = (
             (authorized_capability_summary or {}).get("conversation_reference_binding")
             if self._reference_only else None
@@ -700,6 +1150,45 @@ class _UatTurnRequestContractBinder:
             _without_attached_document_labels(self._normalized_user_text) != self._normalized_user_text
         )
         self._required_terms: tuple[str, ...] | None = None
+        self._mail_qualifier = _original_mail_qualifier(self._normalized_user_text)
+        # A closed transform's page words describe retained evidence, not a new
+        # lookup. Require actual citeable state, never capability metadata alone.
+        closed_retained = (
+            latest_evidence is not None and bool(evidence_citation_ids(latest_evidence))
+            and _is_retained_relative_presentation(_normalize_routing_text(user_text))
+        )
+        self._native_page, self._native_page_issue = (
+            (None, None) if closed_retained else _original_attachment_page(self._normalized_user_text)
+        )
+        if self._native_page is not None:
+            from formowl_mail.semantic_plan import supports_native_attachment_page
+            if (not supports_native_attachment_page(authorized_capability_summary)
+                    or "mail" not in self._admissible_source_families
+                    or self._query_class != "evidence_lookup" or self._mail_qualifier is not None):
+                self._native_page_issue = "native_page_unsupported"
+        self._required_term_placement: _RequiredTermPlacement | None = None
+        identifiers = protected_reference_identifiers(user_text)
+        words = set(self._normalized_user_text.split())
+        # "Compare both A and B" compares targets, not their cooccurrence.
+        cooccurrence = bool(words & {"cooccurrence", "co-occurrence"}) or bool(
+            re.search(r"\b(?:mention(?:ing)?|contain(?:ing)?)\s+both\b", self._normalized_user_text)
+        ) or any(
+            text in self._normalized_user_text
+            for text in ("same record", "same row", "同時", "同时", "同一")
+        )
+        comparison = bool(words & {"compare", "comparison", "vs", "versus"}) or any(
+            text in self._normalized_user_text for text in ("比較", "比较", "對比", "对比")
+        )
+        self._cooccurrence_targets = identifiers if cooccurrence else ()
+        self._comparison_targets = (
+            identifiers if self.enabled and self._query_class == "evidence_lookup"
+            and comparison and not cooccurrence
+            and 2 <= len(identifiers) <= _MAX_TOOL_CALLS_PER_TURN else ()
+        )
+        self._comparison_terms: dict[str, tuple[str, ...]] = {}
+        self._comparison_shared_terms: tuple[str, ...] | None = None
+        self._comparison_final_targets: set[str] = set()
+        self._comparison_mail_selector: tuple[str | None, str | None] | None = None
         (
             self._mail_selector_kind,
             self._authorized_mail_import_session_ids,
@@ -709,6 +1198,50 @@ class _UatTurnRequestContractBinder:
     @property
     def enabled(self) -> bool:
         return bool(self._available_source_families)
+
+    def source_scope_preflight(
+        self, latest_evidence: Mapping[str, Any] | None,
+    ) -> UatConversationOutcome | None:
+        if self._native_page_issue:
+            message = "目前無法安全確認這個附件頁碼限制；請明確指定單一附件及正向頁碼。尚未查詢來源，不代表資料不存在。"
+            return UatConversationOutcome(
+                response_kind="clarification", answer_text=message, display_format="narrative",
+                model_name="server-native-page-validation", coverage_status="incomplete", coverage_note=message,
+                provider_diagnostic={"provider_attempt_count": 0, "provider_attempts": []},
+            )
+        if not self._source_scope_issue or not requires_workspace_evidence(
+            self._normalized_user_text, query_class=self._query_class,
+            prior_evidence_citeable=bool(evidence_citation_ids(latest_evidence)),
+            prior_evidence_present=latest_evidence is not None,
+        ):
+            return None
+        messages = {
+            "source_scope_unavailable": "指定的來源類型不在目前可用的授權範圍；請確認要查詢的來源。",
+            "source_scope_conflict": "來源限制同時包含與排除同一類型；請釐清要查詢的來源。",
+            "source_scope_empty": "排除條件後沒有可查詢的授權來源類型；請調整來源範圍。",
+            "source_scope_ambiguous": "目前無法安全判定混合指令的來源限制；請分別說明要查詢與排除的來源。",
+            "source_scope_unknown": "目前尚未確認授權來源範圍；請先確認允許查詢且未排除的來源。",
+        }
+        message = messages[self._source_scope_issue] + "尚未查詢來源，這不代表資料不存在。"
+        _record_private_citation_stage({
+            "stage": "source_scope_preflight", "rejection_code": self._source_scope_issue,
+            "provider_attempt_count": 0, "mcp_call_count": 0,
+        })
+        return UatConversationOutcome(
+            response_kind="clarification", answer_text=message, display_format="narrative",
+            model_name="server-source-scope-validation", coverage_status="incomplete",
+            coverage_note=message,
+            provider_diagnostic={"provider_attempt_count": 0, "provider_attempts": []},
+        )
+
+    def validate_annotation_selection(self, request: UatEvidenceToolRequest) -> None:
+        if self._annotation_catalog is not None and request.reviewed_annotation_pin is None:
+            raise ContractValidationError("UAT reviewed annotation decision is required")
+        if request.reviewed_annotation_ids or request.reviewed_annotation_pin is not None:
+            if self._annotation_catalog is None or (request.reviewed_annotation_ids and request.required_term_placement is not None):
+                raise ContractValidationError("UAT reviewed annotation catalog is unavailable")
+            validated_reviewed_annotation_selection(vars(request), catalog=self._annotation_catalog,
+                                                    user_text=self._annotation_original_text)
 
     def trusted_context(self) -> Mapping[str, Any] | None:
         if not self.enabled:
@@ -720,14 +1253,18 @@ class _UatTurnRequestContractBinder:
 
         return {
             "artifact_id": "formowl_uat_turn_request_contract_boundary_v1",
+            **({"native_locator": dict(self._native_page[0])} if self._native_page else {}),
             "original_query_hash": self._original_query_hash,
+            **({"comparison_targets": list(self._comparison_targets),
+                "comparison_policy": "Query each explicit target separately; retain shared literal constraints, requested fields and scope. Do not finalize before all targets have been attempted within existing budgets; disclose missing targets or fields."}
+               if self._comparison_targets else {}),
             **({"resolved_reference": self._reference_binding} if self._reference_binding else {}),
             "query_class": self._query_class,
             "maximum_claim_strength": SEMANTIC_CLAIM_STRENGTH_BY_CLASS[self._query_class],
             "available_source_families": list(self._available_source_families),
-            "required_source_family_scope": list(
-                self._explicit_source_families or self._available_source_families
-            ),
+            "required_source_family_scope": list(self._admissible_source_families),
+            **({"excluded_source_family_scope": list(self._excluded_source_families)}
+               if self._excluded_source_families else {}),
             "binding_policy": (
                 "The server owns the original query hash, query class, and claim "
                 "ceiling and authorized source-family scope. If the user explicitly "
@@ -739,6 +1276,18 @@ class _UatTurnRequestContractBinder:
                 + " " + EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE
                 + " " + SOURCE_EVIDENCE_RECHECK_PLANNING_GUIDANCE
                 + " " + _RESOLVED_REFERENCE_GUIDANCE
+                + (" Use reviewed_annotation_catalog labels to map the original requested properties "
+                   "semantically (including across languages) in this SAME planning response. For evidence_lookup "
+                   "only, you MUST explicitly submit reviewed_annotation_ids. The server binds the current "
+                   "catalog pin; do not supply reviewed_annotation_pin. Nominate relevant IDs only when one exact "
+                   "reviewed target is independently bound in the original question and required_terms; otherwise "
+                   "explicitly submit reviewed_annotation_ids=[] for source fallback. "
+                   "Omission is an invalid plan, not a fallback decision. Empty IDs are NOT annotation use or "
+                   "source absence. Do not invent relevance or force wrong IDs. Properties are output needs, "
+                   "NOT additional literal required_terms unless the user "
+                   "actually asks for a literal content constraint. Never remove a frozen term. Catalog labels "
+                   "are navigation metadata, not evidence or executable dates/values; retrieve and cite originals."
+                   if self._annotation_catalog else "")
             ),
         }
 
@@ -749,9 +1298,31 @@ class _UatTurnRequestContractBinder:
         table_query: Mapping[str, Any] | None,
         freeze: bool = True,
     ) -> Mapping[str, Any] | None:
+        if self._native_page_issue:
+            raise ContractValidationError("UAT native attachment page requires clarification")
+        if candidate is not None and isinstance(candidate, Mapping):
+            proposed = candidate.get("native_locator")
+            if ("native_locator" in candidate and self._native_page is None
+                    or self._native_page is not None and proposed != self._native_page[0]):
+                raise ContractValidationError("UAT native attachment page changed or omitted")
+        elif self._native_page is not None and self._contract is None:
+            raise ContractValidationError("UAT native attachment page is required")
+        if self._native_page is not None and table_query is not None:
+            raise ContractValidationError("UAT native attachment page does not support exact execution")
+        if self._source_scope_issue:
+            raise ContractValidationError(
+                "UAT requested source family is unavailable"
+                if self._source_scope_issue == "source_scope_unavailable"
+                else "UAT source scope requires clarification"
+            )
         if not self.enabled:
             return validate_semantic_request_contract(candidate) if candidate is not None else None
         if self._contract is not None:
+            if candidate is not None and self._native_page is not None:
+                if validate_semantic_request_contract(candidate) != self._contract:
+                    raise ContractValidationError("UAT native page contract changed within the turn")
+            if self._required_term_placement is not None and candidate != self._contract:
+                raise ContractValidationError("UAT occurrence request contract changed or omitted within the turn")
             return self._contract
         if candidate is not None and not isinstance(candidate, Mapping):
             raise ContractValidationError("UAT request contract is invalid")
@@ -770,6 +1341,10 @@ class _UatTurnRequestContractBinder:
         candidate_source_families = (
             candidate.get("source_family_scope") if isinstance(candidate, Mapping) else None
         )
+        if set(candidate_source_families or ()).intersection(self._excluded_source_families):
+            raise ContractValidationError(
+                "UAT request source scope conflicts with explicit user source"
+            )
         if candidate_source_families is not None:
             # Validate only the model's source-family proposal.  The remaining
             # contract fields are server-bound below, so a forged hash, class,
@@ -808,7 +1383,7 @@ class _UatTurnRequestContractBinder:
             # Without an explicit user source constraint, the provider can
             # propose a route but cannot silently shrink the authorized
             # request boundary.
-            source_family_scope = list(self._available_source_families)
+            source_family_scope = list(self._admissible_source_families)
         requested_fields = candidate_requested_fields
         if requested_fields is None:
             requested_fields = (
@@ -819,6 +1394,7 @@ class _UatTurnRequestContractBinder:
                 "original_query_hash": self._original_query_hash,
                 "query_class": self._query_class,
                 "source_family_scope": source_family_scope,
+                **({"native_locator": dict(self._native_page[0])} if self._native_page else {}),
                 "requested_fields": requested_fields,
                 "maximum_claim_strength": SEMANTIC_CLAIM_STRENGTH_BY_CLASS[self._query_class],
             },
@@ -858,6 +1434,15 @@ class _UatTurnRequestContractBinder:
             or protected_reference_identifiers(query_text) != (self._reference_binding["identifier"],)
         ):
             raise ContractValidationError("UAT reference requires a resolved identifier")
+
+        if self._comparison_targets:
+            target = self._comparison_target(required_terms)
+            if protected_reference_identifiers(query_text) != (target,):
+                raise ContractValidationError("UAT comparison query conflicts with its target")
+            if table_query is not None and protected_reference_identifiers(" ".join(
+                str(item["value"]) for item in table_query["filters"]
+            )) != (target,):
+                raise ContractValidationError("UAT comparison table filter conflicts with its target")
 
         expansion_required = requires_query_expansion(self._normalized_user_text)
         typed_expansion_present = (
@@ -900,6 +1485,12 @@ class _UatTurnRequestContractBinder:
         if self._reference_only and not anchor:
             raise ContractValidationError("UAT evidence required terms are not grounded: unresolved reference")
 
+        if self._native_page is not None and candidate is None:
+            raise ContractValidationError("UAT native page requires current child target terms")
+        if self._mail_qualifier is not None and candidate is None:
+            raise ContractValidationError("UAT occurrence qualifier terms are required")
+        if candidate is None and (self._comparison_targets or self._cooccurrence_targets):
+            raise ContractValidationError("UAT multi-target lookup requires explicit target terms")
         if candidate is None:
             if self._required_terms is not None:
                 return self._required_terms
@@ -929,6 +1520,20 @@ class _UatTurnRequestContractBinder:
             or (anchor is not None and anchor not in terms)
         ):
             raise ContractValidationError("UAT evidence required terms are not grounded")
+        if self._mail_qualifier is not None and (
+            self._mail_qualifier[0] not in terms or len(terms) < 2
+        ):
+            raise ContractValidationError("UAT occurrence qualifier and child terms are required")
+        if self._native_page is not None:
+            _, targets, coordinate = self._native_page
+            outside_coordinate = self._normalized_user_text.replace(coordinate, " ", 1)
+            if (not set(targets).issubset(terms) or not any(term in outside_coordinate for term in terms)
+                    or any(
+                        (term in coordinate or coordinate in term)
+                        and not _is_explicit_literal_content_term(self._normalized_user_text, term, require_explicit_intent=True)
+                        for term in terms
+                    )):
+                raise ContractValidationError("UAT native page target/coordinate term roles are invalid")
         for term in terms:
             source_family = _required_term_source_family(term)
             if (
@@ -943,16 +1548,27 @@ class _UatTurnRequestContractBinder:
                 raise ContractValidationError(
                     "UAT evidence required term is a source-family label, not content"
                 )
-        if self._required_terms is not None and terms != self._required_terms:
+        if self._cooccurrence_targets and not set(self._cooccurrence_targets).issubset(terms):
+            raise ContractValidationError("UAT cooccurrence requires all explicit targets")
+        target = self._comparison_target(terms) if self._comparison_targets else None
+        frozen_terms = self._comparison_terms.get(target) if target else self._required_terms
+        if frozen_terms is not None and terms != frozen_terms:
             restored_identifier_scope = (
                 allow_server_restored_identifiers
                 and request_contract is not None
                 and "attachment_table" in request_contract.get("source_family_scope", ())
                 and set(protected_reference_identifiers(self._normalized_user_text)).issubset(terms)
-                and set(self._required_terms).issubset(terms)
+                and set(frozen_terms).issubset(terms)
             )
             if not restored_identifier_scope:
                 raise ContractValidationError("UAT evidence required terms changed within the turn")
+        shared_terms = tuple(term for term in terms if term != target)
+        if target and (
+            target in self._comparison_final_targets
+            or (self._comparison_shared_terms is not None
+                and shared_terms != self._comparison_shared_terms)
+        ):
+            raise ContractValidationError("UAT comparison target is final or shared constraints changed")
         if request_contract is not None and request_contract["query_class"] == "evidence_lookup":
             requested_fields = {
                 unicodedata.normalize("NFKC", field.strip()).casefold()
@@ -964,24 +1580,167 @@ class _UatTurnRequestContractBinder:
                     self._normalized_user_text, term, require_explicit_intent=True,
                 )
             )
+            temporal_ranges = _original_temporal_comparison_spans(self._normalized_user_text)
+            temporal_spans = [self._normalized_user_text[start:end] for start, end in temporal_ranges]
+            outside_temporal = self._normalized_user_text
+            for start, end in reversed(temporal_ranges):
+                outside_temporal = outside_temporal[:start] + " " * (end - start) + outside_temporal[end:]
+            # Substring grounding must not turn a shortened calendar prefix
+            # into a lexical filter. Preserve separately grounded whole terms;
+            # explicit literal intent remains term-specific above. Mask only
+            # recognized temporal occurrences, never other identical topics.
+            if any(
+                re.search(r"(?<![a-z0-9_./-])" + re.escape(span) + r"(?![a-z0-9_./-])", term)
+                or (span.startswith(term) and not re.search(
+                    r"(?<![a-z0-9_./-])" + re.escape(term) + r"(?![a-z0-9_/-]|\.[a-z0-9])",
+                    outside_temporal,
+                ))
+                for span in temporal_spans
+                for term in non_literal_terms
+            ):
+                raise ContractValidationError(
+                    "UAT evidence required term is a temporal predicate, not literal content"
+                )
             # Decorated fields can still overlap a content constraint. Reject
             # ambiguous roles for repair, never guess which term to remove.
             # ASCII identifier fragments do not count; CJK spans need no spaces.
+            role_terms = set(non_literal_terms)
+            composite_role_terms: set[str] = set()
+            for term in non_literal_terms:
+                # A grounded subject/property phrase is not a literal predicate
+                # merely because it occurs in the request. Inspect, never rewrite.
+                composite = re.fullmatch(r"(.+?)\s*(?:的|之|['’]s\b|:)\s*([^,，;；。!?？]+)", term)
+                if composite is not None and composite[1].strip():
+                    composite_role_terms.add(composite[2].strip())
+            role_terms.update(composite_role_terms)
+            # Keep derived roles even when the same text is also a standalone
+            # identity. One candidate term cannot erase another term's overlap.
+            # A full protected target may decorate an output label without
+            # becoming an output-field filter. Exempt only that standalone
+            # identity, not property words or composite subject/property terms.
+            # Keep every required term intact; an identifier-only field remains
+            # ambiguous and must still be repaired.
+            identity_terms = set(protected_reference_identifiers(self._normalized_user_text))
+            if anchor is not None:
+                identity_terms.add(anchor)
+            # Provider labels may translate the original output slot. Keep
+            # those structural roles for validation only, not as new filters
+            # or rewritten contract fields. Standalone identities retain their
+            # existing exemption; composite-derived properties never borrow it.
+            original_fields = _original_requested_field_spans(self._normalized_user_text)
             if any(
                 re.search(r"(?<![a-z0-9_./-])" + re.escape(term) + r"(?![a-z0-9_./-])", field)
                 is not None
-                for field in requested_fields
-                for term in non_literal_terms
+                and not (term not in composite_role_terms and term in non_literal_terms
+                         and term in identity_terms
+                         and (term != field or field not in requested_fields))
+                for field in requested_fields | original_fields
+                for term in role_terms
             ):
                 raise ContractValidationError(
                     "UAT evidence required term overlaps a requested output field; clarify field/term roles"
                 )
+        if target:
+            if freeze:
+                self._comparison_terms[target] = terms
+                self._comparison_shared_terms = shared_terms
+            return terms
         if allow_server_restored_identifiers:
             self._required_terms = terms
             return terms
         if freeze and self._required_terms is None:
             self._required_terms = terms
         return self._required_terms if self._required_terms is not None else terms
+
+    def placement_for_request(self, request: UatEvidenceToolRequest) -> _RequiredTermPlacement | None:
+        if self._native_page is not None and any(getattr(request, key) is not None for key in (
+            "table_query", "exact_inventory_kind", "exact_field", "cursor",
+        )):
+            raise ContractValidationError("UAT native page requires ordinary child lookup")
+        if self._mail_qualifier is None:
+            return None
+        contract = request.request_contract
+        if (not contract or contract["query_class"] != "evidence_lookup"
+                or contract["source_family_scope"] != ["mail"]
+                or self._comparison_targets or self._reference_only
+                or any(getattr(request, key) is not None for key in (
+                    "table_query", "exact_inventory_kind", "exact_field", "cursor",
+                ))):
+            raise ContractValidationError("UAT occurrence placement requires ordinary mail lookup")
+        terms = self.bind_required_terms(
+            list(request.required_terms) if request.required_terms is not None else None,
+            freeze=False, request_contract=contract,
+        )
+        term, surface, predicate, span = self._mail_qualifier
+        outside = self._normalized_user_text[:span[0]] + self._normalized_user_text[span[1]:]
+        if any(child not in outside for child in terms if child != term):
+            raise ContractValidationError("UAT child predicate must be grounded outside the source qualifier")
+        placement = _RequiredTermPlacement(
+            self._original_query_hash, sha256_json(contract), terms, term, surface, predicate, span,
+        )
+        if self._required_term_placement is not None and placement != self._required_term_placement:
+            raise ContractValidationError("UAT occurrence placement changed within the turn")
+        return placement
+
+    def _comparison_target(self, terms: Sequence[str] | None) -> str:
+        identifiers = protected_reference_identifiers(" ".join(terms or ()))
+        if (len(identifiers) != 1 or identifiers[0] not in self._comparison_targets
+                or identifiers[0] not in (terms or ())):
+            raise ContractValidationError("UAT comparison requires exactly one admitted target")
+        return identifiers[0]
+
+    @property
+    def comparison_pending(self) -> bool:
+        return bool(set(self._comparison_targets) - self._comparison_final_targets)
+
+    def record_comparison_result(self, request: UatEvidenceToolRequest, result: Mapping[str, Any]) -> bool:
+        if not self._comparison_targets or result.get("status") in {"error", "failed", "permission_denied"}:
+            return False
+        target = self._comparison_target(request.required_terms)
+        terminal = _has_citeable_evidence(result) or _source_fallback_exhausted(request, result)
+        new_terminal = terminal and target not in self._comparison_final_targets
+        if terminal:
+            self._comparison_final_targets.add(target)
+        return new_terminal
+
+    def validate_comparison_decision(
+        self, decision: Mapping[str, Any], records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
+    ) -> Mapping[str, Any]:
+        if self._native_page is not None:
+            children, dependent = set(), set()
+            for request, result in records:
+                if (request.request_contract != self._contract
+                        or result.get("status") in {"error", "failed", "permission_denied"}):
+                    continue
+                items = result.get("evidence", result.get("evidence_snippets", ()))
+                current = {item.get("citation_hash") for item in items if isinstance(item, Mapping)
+                           and item.get("source_type") == "mail_attachment_text"
+                           and type(item.get("attachment_locator", {}).get("page")) is int
+                           and item["attachment_locator"]["page"] == self._native_page[0]["page"]}
+                current.discard(None)
+                children.update(current)
+                dependent.update(item.get("citation_hash") for item in items if isinstance(item, Mapping)
+                                 and item.get("source_context", {}).get("relationship") == "outer_message_header"
+                                 and item["source_context"].get("anchor_citation_hash") in current)
+            cited = set(decision["citation_ids"])
+            if (not cited <= children | dependent or decision["response_kind"] != "clarification"
+                    and not cited.intersection(children)):
+                raise RuntimeError("UAT native page answer requires a current qualified child citation")
+        if not self._comparison_targets:
+            return decision
+        supported: set[str] = set()
+        for request, result in records:
+            fields = request.request_contract.get("requested_fields", ()) if request.request_contract else ()
+            if (fields and _validated_field_support(request, result) == {sha256_json(field) for field in fields}
+                    and set(evidence_citation_ids(result)) & set(decision["citation_ids"])):
+                supported.add(self._comparison_target(request.required_terms))
+        missing = set(self._comparison_targets) - supported
+        if missing:
+            if decision["coverage_status"] != "incomplete":
+                raise RuntimeError("Codex comparison hid incomplete target coverage")
+            return {**decision, "coverage_note": decision["coverage_note"] +
+                    " Comparison targets with unverified fields: " + ", ".join(sorted(missing)) + "."}
+        return decision
 
     def bind_mail_selector(
         self,
@@ -1045,6 +1804,9 @@ class _UatTurnRequestContractBinder:
                 raise ContractValidationError("UAT authorized mail selector is unavailable")
             if supplied_selector not in authorized_selectors:
                 raise ContractValidationError("UAT mail selector is unauthorized")
+            if (self._comparison_mail_selector is not None
+                    and (supplied_session_id, supplied_bundle_id) != self._comparison_mail_selector):
+                raise ContractValidationError("UAT comparison mail scope changed")
             return (
                 supplied_session_id,
                 supplied_bundle_id,
@@ -2280,10 +3042,24 @@ class CodexAppServerConversationModel:
             Mapping,
         ):
             raise ContractValidationError("UAT authorized capabilities are invalid")
+        if authorized_capability_summary is not None and not requires_workspace_evidence(user_text):
+            authorized_capability_summary = {key: value for key, value in authorized_capability_summary.items()
+                                             if key != "reviewed_annotation_catalog"}
         request_contract_binder = _UatTurnRequestContractBinder(
             user_text=user_text,
             authorized_capability_summary=authorized_capability_summary,
+            latest_evidence=latest_evidence,
         )
+        if request_contract_binder._mail_qualifier is not None or request_contract_binder._native_page is not None:
+            latest_evidence = None
+        if request_contract_binder._native_page is not None:
+            authorized_capability_summary = {
+                key: value for key, value in (authorized_capability_summary or {}).items()
+                if key not in {"prior_visible_answer", "conversation_reference_binding"}
+            }
+        local_scope_outcome = request_contract_binder.source_scope_preflight(latest_evidence)
+        if local_scope_outcome is not None:
+            return local_scope_outcome
         with self._lock:
             turn_lock = self._turn_locks.setdefault(safety_identifier, threading.Lock())
         with turn_lock:
@@ -2315,6 +3091,7 @@ class CodexAppServerConversationModel:
                             raise RuntimeError("Codex requested too many UAT tools")
                         result = dict(evidence_tool(request))
                         evidence_records.append((request, result))
+                        request_contract_binder.record_comparison_result(request, result)
                     return {
                         "trust": "untrusted_evidence",
                         "data": compact_evidence_for_model(result),
@@ -2449,6 +3226,7 @@ class CodexAppServerConversationModel:
                             "Codex tool execution record is inconsistent"
                         )
                     decision = _parse_decision(turn.final_message)
+                    decision = request_contract_binder.validate_comparison_decision(decision, evidence_records)
                     evidence_results = tuple(
                         compact_evidence_for_model(result) for _, result in evidence_records
                     )
@@ -2467,6 +3245,7 @@ class CodexAppServerConversationModel:
                         reason=_finalization_stop_reason(exc),
                         model_name=f"codex:{thread.model_name}",
                         evidence_records=evidence_records,
+                        suppress_evidence_citations=request_contract_binder._native_page is not None,
                     )
                 return UatConversationOutcome(
                     **decision,
@@ -2996,6 +3775,10 @@ def _provider_error_message_class(message: Any) -> str:
         )
     ):
         return "invalid_parameter"
+    if {"model", "account"}.issubset(normalized.split()) and re.search(
+        r"\bnot supported\b", normalized
+    ):
+        return "model_account_unsupported"
     return "unknown"
 
 
@@ -3089,6 +3872,14 @@ def _provider_diagnostic(
             if flat_error
             else None
         )
+        if (
+            reason_code == "http_error"
+            and isinstance(http_status, int) and not isinstance(http_status, bool)
+            and 100 <= http_status <= 599 and not 200 <= http_status < 300
+            and not isinstance(error, Mapping) and not flat_error
+            and isinstance(response.get("detail"), str)
+        ):
+            raw_error_message = response["detail"]
         provider_error_message_class = _provider_error_message_class(raw_error_message)
     diagnostic = {
         "reason_code": reason_code,
@@ -3331,6 +4122,19 @@ def _safe_provider_request_shape(value: Any) -> dict[str, Any] | None:
     ):
         return None
     safe["fingerprint"] = fingerprint
+    contract = value.get("conversation_contract")
+    if isinstance(contract, Mapping):
+        hashes = ("conversation_uuid_sha256", "header_sha256", "cache_key_sha256",
+                  "instructions_sha256", "tools_sha256", "schema_sha256", "input_sha256",
+                  "previous_input_sha256", "prefix_sha256", "working_fields_sha256")
+        flags = ("uuid_valid", "affinity_equal", "append_only")
+        counts = ("input_item_count", "previous_input_item_count")
+        if (all(_safe_diagnostic_fingerprint(contract.get(k)) is not None for k in hashes)
+                and all(type(contract.get(k)) is bool for k in flags)
+                and all(type(contract.get(k)) is int and 0 <= contract[k] <= _MAX_RESPONSES_JOURNAL_BYTES
+                        for k in counts)
+                and contract.get("user_agent") == _UAT_BACKEND_USER_AGENT):
+            safe["conversation_contract"] = {k: contract[k] for k in (*hashes, *flags, *counts, "user_agent")}
     return safe
 
 
@@ -3366,10 +4170,90 @@ def _private_citation_ids_snapshot(citation_ids: Sequence[str]) -> dict[str, Any
 
 def _record_private_citation_stage(event: Mapping[str, Any]) -> None:
     sink = _PRIVATE_UAT_CITATION_TRACE.get()
-    if sink is not None and len(sink) < (
-        _MAX_MCP_CITATION_STAGE_DIAGNOSTICS + _MAX_FINALIZATION_VALIDATION_DIAGNOSTICS
-    ):
+    if sink is None:
+        return
+    # Rejected proposals consume the existing tool budget, not final-trace space.
+    planner_rejection = event.get("stage") == "planner_rejection"
+    limit = _MAX_TOOL_CALLS_PER_TURN if planner_rejection else (
+        _MAX_MCP_CITATION_STAGE_DIAGNOSTICS + 2 * _MAX_FINALIZATION_VALIDATION_DIAGNOSTICS
+    )
+    retained = sum(
+        (item.get("stage") == "planner_rejection") == planner_rejection for item in sink
+    )
+    if retained < limit:
         sink.append(dict(event))
+
+
+# Exact static messages only: unknown errors never become diagnostic text.
+_PLANNER_REJECTION_CODES = {
+    "Codex FormOwl tool arguments are invalid": "invalid_argument_keys",
+    "UAT request contract is invalid": "invalid_contract",
+    "semantic request contract shape is invalid": "contract_shape_invalid",
+    "semantic request contract goal is invalid": "contract_goal_invalid",
+    "semantic request contract query hash is invalid": "contract_query_hash_invalid",
+    "semantic request contract query class is invalid": "contract_query_class_invalid",
+    "semantic request contract source scope is invalid": "contract_source_scope_invalid",
+    "semantic request contract source scope is unavailable": "contract_source_scope_unavailable",
+    "semantic request contract requested fields are invalid": "contract_requested_fields_invalid",
+    "semantic request contract requested field is invalid": "contract_requested_field_invalid",
+    "semantic request contract claim strength is invalid": "contract_claim_strength_invalid",
+    "UAT requested source family is unavailable": "source_family_unavailable",
+    "UAT request source scope conflicts with explicit user source": "source_scope_conflict",
+    "UAT evidence required terms are invalid": "invalid_required_terms",
+    "UAT evidence required terms are not grounded": "ungrounded_required_terms",
+    "UAT evidence required terms changed within the turn": "frozen_terms_changed",
+    "UAT evidence required term is a source-family label, not content": "source_label_as_term",
+    "UAT evidence required term overlaps a requested output field; clarify field/term roles":
+        "field_term_role_overlap",
+    "UAT evidence required term is a temporal predicate, not literal content":
+        "temporal_term_role_overlap",
+    "UAT mail evidence selector is invalid": "invalid_mail_selector",
+    "UAT evidence tool query requires typed expansion": "unexpanded_query",
+    "UAT evidence tool request contract is required": "missing_request_contract",
+    "UAT comparison query conflicts with its target": "comparison_query_target_conflict",
+    "UAT comparison table filter conflicts with its target": "comparison_table_target_conflict",
+    "UAT comparison requires exactly one admitted target": "comparison_target_arity_invalid",
+    "UAT comparison target is final or shared constraints changed": "comparison_target_or_shared_terms_invalid",
+    "UAT comparison mail scope changed": "comparison_mail_scope_changed",
+    "UAT reference requires a resolved identifier": "reference_identifier_unresolved",
+    "UAT reviewed annotation decision is required": "catalog_decision_required",
+    "UAT reviewed annotation IDs type is invalid": "annotation_ids_type_invalid",
+    "UAT reviewed annotation ID count is invalid": "annotation_ids_count_invalid",
+    "UAT reviewed annotation ID format is invalid": "annotation_id_format_invalid",
+    "UAT reviewed annotation IDs are duplicated": "annotation_ids_duplicate",
+    "UAT reviewed annotation pin format is invalid": "annotation_pin_format_invalid",
+    "UAT reviewed annotation query class is invalid": "annotation_query_class_invalid",
+    "UAT reviewed annotation route is unsupported": "annotation_route_unsupported",
+    "UAT reviewed annotation catalog pin mismatch": "annotation_catalog_pin_mismatch",
+    "UAT reviewed annotation ID is unavailable": "annotation_id_unavailable",
+    "UAT reviewed annotation catalog is unavailable": "annotation_catalog_unavailable",
+    "UAT reviewed annotation identity is not independently bound": "annotation_identity_unbound",
+    "UAT reviewed annotation original identity is unknown or ambiguous": "annotation_identity_ambiguous",
+}
+
+
+def _private_planner_rejection(
+    error: Exception,
+    arguments: Mapping[str, Any],
+    *,
+    validation_stage: str,
+    provider_attempt: int,
+    tool_attempt: int,
+) -> dict[str, Any]:
+    known_keys = {
+        "query_text", "request_contract", "required_terms", "table_query",
+        "mail_import_session_id", "mail_evidence_bundle_id", "limit", "page_size",
+        "exact_field", "exact_inventory_kind", "cursor", "reviewed_annotation_ids", "reviewed_annotation_pin",
+    }
+    return {
+        "stage": "planner_rejection",
+        "validation_stage": validation_stage,
+        "rejection_code": _PLANNER_REJECTION_CODES.get(str(error), "unclassified"),
+        "provider_attempt": provider_attempt,
+        "tool_attempt": tool_attempt,
+        "known_argument_keys": sorted(known_keys.intersection(arguments)),
+        "unknown_argument_key_count": min(64, len(set(arguments) - known_keys)),
+    }
 
 
 def _safe_enum_value(value: Any, allowed: frozenset[str], *, max_length: int = 96) -> str | None:
@@ -3453,6 +4337,32 @@ def _citation_projection_result(
     return "validation_rejected"
 
 
+_COMPACTION_REASON_CODES = frozenset({
+    "base_byte_budget", "metadata_byte_budget", "group_byte_budget",
+    "group_item_budget", "exact_inventory_item_budget", "required_context_missing",
+    "evidence_support_filtered", "serialization_rejected",
+})
+_COMPACTION_COUNT_KEYS = (
+    "byte_limit", "item_limit", "base_bytes", "metadata_bytes", "group_count",
+    "accepted_group_count", "rejected_group_count", "max_candidate_bytes",
+    "presented_bytes", "filtered_record_count",
+)
+
+
+def _private_compaction_diagnostic(value: Mapping[str, Any]) -> dict[str, Any]:
+    safe = {
+        key: count for key in _COMPACTION_COUNT_KEYS
+        if (count := _safe_diagnostic_count(value.get(key), maximum=2**63 - 1)) is not None
+    }
+    reasons = value.get("reason_counts")
+    safe["reason_counts"] = {
+        key: count for key in sorted(_COMPACTION_REASON_CODES)
+        if isinstance(reasons, Mapping)
+        and (count := _safe_diagnostic_count(reasons.get(key), maximum=2**63 - 1)) is not None
+    }
+    return safe
+
+
 def _mcp_citation_stage_diagnostic(
     *,
     call_index: int,
@@ -3460,6 +4370,7 @@ def _mcp_citation_stage_diagnostic(
     raw_result: Mapping[str, Any] | None,
     presented_result: Mapping[str, Any] | None,
     projection_result: str,
+    compaction_diagnostic: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     raw_citations = evidence_citation_ids(raw_result) if raw_result is not None else ()
     presented_citations = (
@@ -3470,6 +4381,8 @@ def _mcp_citation_stage_diagnostic(
         "raw_governed": _private_citation_ids_snapshot(raw_citations),
         "compacted_presented": _private_citation_ids_snapshot(presented_citations),
         "projection_result": projection_result,
+        **({"compaction": _private_compaction_diagnostic(compaction_diagnostic)}
+           if compaction_diagnostic is not None else {}),
     })
     return {
         "call_index": max(1, int(call_index)),
@@ -3632,7 +4545,8 @@ def safe_provider_loop_diagnostics(value: Mapping[str, Any] | None) -> dict[str,
             selected_tool = choice.get("selected_tool")
             offered_tool_count = _safe_diagnostic_count(
                 choice.get("offered_tool_count"),
-                maximum=2,
+                maximum=(3 if (_safe_provider_request_shape(raw.get("request_shape")) or {}).get(
+                    "conversation_contract") is not None else 2),
             )
             offered_tool_fingerprint = _safe_diagnostic_fingerprint(
                 choice.get("offered_tool_fingerprint")
@@ -3840,9 +4754,14 @@ class VerifiedDiagnosticDeployment:
 def diagnostic_deployment_settings(
     *, host: str, port: int, record_raw_uat_interactions: bool,
     temporary_access_enabled: bool, provider_base_url: str,
+    typed_evidence_notes: bool = False,
 ) -> dict[str, Any]:
     """Pure manifest helper; startup supplies actual resolved settings, not JSON."""
+    if type(typed_evidence_notes) is not bool:
+        raise ContractValidationError("UAT typed evidence notes mode is invalid")
     return {
+        "typed_evidence_notes": typed_evidence_notes,
+        "typed_evidence_notes_policy": "typed_evidence_notes_v2",
         "host": host, "port": port, "temporary_lan_diagnostic": True,
         "record_raw_uat_interactions": record_raw_uat_interactions,
         "temporary_access_enabled": temporary_access_enabled,
@@ -4152,8 +5071,46 @@ class _UatProviderFailure(RuntimeError):
         )
 
 
+def _responses_wire_json(value: Any) -> bytes:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def _responses_wire_hash(value: Any) -> str:
+    return "sha256:" + hashlib.sha256(_responses_wire_json(value)).hexdigest()
+
+
+def _responses_catalog_descriptor(descriptor: Mapping[str, Any]) -> dict[str, Any]:
+    # Runtime adds only required_terms admission per turn (and for mail). The
+    # binder still enforces it; this normalization grants no other schema drift.
+    normalized = deepcopy(dict(descriptor))
+    schema = normalized["inputSchema"]
+    schema["required"] = sorted(set(schema.get("required", ())) - {"required_terms"})
+    return normalized
+
+
+@dataclass
+class _ResponsesConversationJournal:
+    identity: str
+    descriptors: dict[str, dict[str, Any]]
+    instructions: str
+    tools: list[dict[str, Any]]
+    schema: dict[str, Any]
+    journal: list[dict[str, Any]] = field(default_factory=list)
+    sent_input_sha256: str = field(default_factory=lambda: _responses_wire_hash([]))
+    sent_count: int = 0
+    retained_bytes: int = 2
+    started: bool = False
+    closed: bool = False
+    exhausted: bool = False
+    turn_input_offset: int = 0
+    request_timeout: float | None = None
+    lock: Any = field(default_factory=threading.RLock)
+
+
 class CodexResponsesConversationModel:
     """Use one direct Responses provider as the bounded UAT conversation model."""
+
+    preserve_conversation_on_failure = True
 
     def __init__(
         self,
@@ -4162,15 +5119,19 @@ class CodexResponsesConversationModel:
         api_key: str,
         model: str = _DEFAULT_CODEX_MODEL,
         reasoning_effort: str = "high",
-        timeout_seconds: float = 120.0,
+        timeout_seconds: float = 240.0,
         clock: Callable[[], datetime] | None = None,
         timezone_name: str = _DEFAULT_UAT_TIMEZONE,
         stream_initial_requests: bool = False,
+        typed_evidence_notes: bool = False,
     ) -> None:
         normalized_base_url = _normalize_custom_provider_base_url(base_url)
         if type(stream_initial_requests) is not bool:
             raise ContractValidationError("UAT initial streaming mode is invalid")
         self._stream_initial_requests = stream_initial_requests
+        if type(typed_evidence_notes) is not bool:
+            raise ContractValidationError("UAT typed evidence notes mode is invalid")
+        self._typed_evidence_notes = typed_evidence_notes
         if (
             not isinstance(api_key, str)
             or not api_key.strip()
@@ -4205,11 +5166,215 @@ class CodexResponsesConversationModel:
             timezone_name=timezone_name,
         )
 
+        self._conversation_journals: dict[str, _ResponsesConversationJournal] = {}
+        self._conversation_journal_lock = threading.RLock()
+        self._active_journal: ContextVar[_ResponsesConversationJournal | None] = ContextVar(
+            "formowl_responses_journal", default=None,
+        )
+        self._journals_closed = False
+        self._journals_opted_in = False
+
     @property
     def model_name(self) -> str:
         return f"codex-responses:{self._model}"
 
-    def respond(
+    def extract_structured_json(
+        self, *, instructions: str, source_unit: Mapping[str, Any],
+        response_schema: Mapping[str, Any], schema_name: str,
+        max_input_bytes: int = 256 * 1024, max_output_tokens: int = 8192,
+    ) -> dict[str, Any]:
+        """One isolated offline no-tool read; never appends to a chat journal.
+
+        Intended callback for graph.candidates.read_and_store_source_unit. The
+        caller owns source authorization/completeness and candidate validation.
+        Model identity is reported verbatim, not inferred from requested config.
+        This call owns its affinity UUID; any future bounded retry must reuse
+        this payload/UUID and frozen instructions/tools, never a browser journal.
+        """
+        if self._active_journal.get() is not None:
+            raise ContractValidationError("offline semantic read cannot run inside a conversation")
+        if (not isinstance(instructions, str) or not instructions.strip()
+                or not isinstance(source_unit, Mapping) or not isinstance(response_schema, Mapping)
+                or not isinstance(schema_name, str)
+                or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", schema_name) is None
+                or type(max_input_bytes) is not int or not 1 <= max_input_bytes <= 256 * 1024
+                or type(max_output_tokens) is not int or not 1 <= max_output_tokens <= 8192):
+            raise ContractValidationError("offline semantic read configuration is invalid")
+        source_text = json.dumps(dict(source_unit), ensure_ascii=False, sort_keys=True,
+                                 separators=(",", ":"), allow_nan=False)
+        if len(source_text.encode("utf-8")) > max_input_bytes:
+            raise ContractValidationError("offline semantic source exceeds complete-unit byte cap")
+        offline_session_id = str(uuid.uuid4())
+        payload = {
+            "model": self._model, "instructions": instructions,
+            "input": [{"role": "user", "content": source_text}],
+            "tools": [], "tool_choice": "none", "parallel_tool_calls": False,
+            "text": {"format": {"type": "json_schema", "name": schema_name,
+                                  "strict": True, "schema": deepcopy(dict(response_schema))}},
+            "reasoning": {"effort": self._reasoning_effort},
+            "max_output_tokens": max_output_tokens, "store": False,
+            "stream": self._stream_initial_requests, "prompt_cache_key": offline_session_id,
+        }
+        request_fingerprint = sha256_json({"endpoint": self._responses_url, "payload": payload})
+        response = self._request_response(payload, offline_session_id=offline_session_id)
+        if (response.get("status") != "completed" or response.get("error") is not None
+                or response.get("incomplete_details") is not None):
+            raise ContractValidationError("offline semantic response is incomplete")
+        texts: list[str] = []
+        output = response.get("output", [])
+        if not isinstance(output, list):
+            raise ContractValidationError("offline semantic response output is invalid")
+        for item in output:
+            if not isinstance(item, Mapping):
+                raise ContractValidationError("offline semantic response item is invalid")
+            if item.get("type") == "reasoning":
+                continue
+            if (item.get("type") != "message" or item.get("role") != "assistant"
+                    or item.get("status", "completed") != "completed"
+                    or not isinstance(item.get("content"), list)):
+                raise ContractValidationError("offline semantic response must contain no tools")
+            for part in item["content"]:
+                if (not isinstance(part, Mapping) or part.get("type") != "output_text"
+                        or not isinstance(part.get("text"), str)):
+                    raise ContractValidationError("offline semantic response refused or has unsupported content")
+                texts.append(part["text"])
+        # Some Responses-compatible providers also return the convenience field.
+        convenience = response.get("output_text")
+        if convenience is not None:
+            if not isinstance(convenience, str) or texts and convenience != "".join(texts):
+                raise ContractValidationError("offline semantic response text conflicts")
+            if not texts:
+                texts.append(convenience)
+        output_text = "".join(texts)
+        if not output_text.strip() or len(output_text.encode("utf-8")) > 256 * 1024:
+            raise ContractValidationError("offline semantic response text is empty or oversized")
+
+        def object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            value: dict[str, Any] = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("duplicate JSON key")
+                value[key] = item
+            return value
+
+        def invalid_constant(value: str) -> Any:
+            raise ValueError("non-finite JSON constant")
+
+        try:
+            data = json.loads(output_text, object_pairs_hook=object_pairs,
+                              parse_constant=invalid_constant)
+            if not isinstance(data, dict):
+                raise ValueError("JSON object required")
+            # Also rejects overflowing JSON numbers such as 1e999.
+            json.dumps(data, allow_nan=False)
+        except (ValueError, TypeError, RecursionError) as exc:
+            raise ContractValidationError("offline semantic response is not complete strict JSON") from exc
+        observed_model = response.get("model")
+        return {"data": data, "requested_model": self._model,
+                "observed_model": observed_model if isinstance(observed_model, str) and observed_model.strip() else None,
+                "reasoning_effort": self._reasoning_effort,
+                "request_fingerprint": request_fingerprint}
+
+    def configure_conversation_tools(
+        self, *, safety_identifier: str, tool_descriptors: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Trusted UAT runtime opts in with its complete, unspecialized catalog.
+
+        Repeat configuration is idempotent. Neither drift, retirement nor capacity
+        can silently recreate a conversation or rotate its affinity identity.
+        """
+        if not isinstance(safety_identifier, str) or not 0 < len(safety_identifier) <= 64:
+            raise ContractValidationError("UAT safety identifier is invalid")
+        if not isinstance(tool_descriptors, (list, tuple)) or not 1 <= len(tool_descriptors) <= 2:
+            raise ContractValidationError("UAT provider catalog is invalid")
+        descriptors = [_validated_formowl_tool_descriptor(d) for d in tool_descriptors]
+        catalog = {d["name"]: d for d in sorted(descriptors, key=lambda d: d["name"])}
+        if len(catalog) != len(descriptors):
+            raise ContractValidationError("UAT provider catalog has duplicates")
+        with self._conversation_journal_lock:
+            self._journals_opted_in = True
+            current = self._conversation_journals.get(safety_identifier)
+            if current is not None:
+                if current.descriptors != catalog:
+                    raise ContractValidationError("UAT provider catalog changed; start a new conversation")
+                return
+            if self._journals_closed or len(self._conversation_journals) >= _MAX_CODEX_THREADS:
+                raise ContractValidationError("UAT provider conversation capacity exhausted")
+            base, developer = _formowl_instruction_bundle(descriptors[0], app_server=False, catalog_mode=True)
+            instructions = base + "\n\n" + developer
+            if self._typed_evidence_notes:
+                instructions += "\n\n" + _TYPED_EVIDENCE_NOTES_GUIDANCE
+            tools = [_responses_function_tool(d) for d in catalog.values()]
+            tools.append(_responses_function_tool(_PUBLIC_TERM_DYNAMIC_TOOL))
+            self._conversation_journals[safety_identifier] = _ResponsesConversationJournal(
+                identity=str(uuid.uuid4()), descriptors=catalog, instructions=instructions, tools=tools,
+                schema=_decision_schema_for_prior_evidence(
+                    allow_render_prior_evidence=True, typed_evidence_notes=self._typed_evidence_notes,
+                    field_count=8,
+                ),
+            )
+
+    def respond(self, *, history: Sequence[UatConversationMessage], user_text: str,
+                latest_evidence: Mapping[str, Any] | None, safety_identifier: str,
+                evidence_tool: Callable[[UatEvidenceToolRequest], Mapping[str, Any]],
+                formowl_tool_descriptor: Mapping[str, Any] | None = None,
+                authorized_capability_summary: Mapping[str, Any] | None = None) -> UatConversationOutcome:
+        arguments = dict(history=history, user_text=user_text, latest_evidence=latest_evidence,
+            safety_identifier=safety_identifier, evidence_tool=evidence_tool,
+            formowl_tool_descriptor=formowl_tool_descriptor,
+            authorized_capability_summary=authorized_capability_summary)
+        with self._conversation_journal_lock:
+            journal = self._conversation_journals.get(safety_identifier)
+        if journal is None:
+            if self._journals_opted_in:
+                return self._conversation_stop()
+            # Reusable legacy bridge callers retain their existing contract. The
+            # UAT runtime must configure before every respond, including reload.
+            return self._respond(**arguments)
+        with journal.lock:
+            selected = _validated_formowl_tool_descriptor(formowl_tool_descriptor)
+            if (journal.closed or journal.exhausted or self._journals_closed
+                    or selected["name"] not in journal.descriptors
+                    or _responses_catalog_descriptor(selected) != _responses_catalog_descriptor(
+                        journal.descriptors[selected["name"]])):
+                return self._conversation_stop()
+            journal.started = True
+            journal.turn_input_offset = len(journal.journal)
+            token = self._active_journal.set(journal)
+            try:
+                outcome = self._respond(**arguments)
+                return self._conversation_stop() if journal.closed else outcome
+            finally:
+                self._active_journal.reset(token)
+                if journal.closed:
+                    journal.journal.clear()
+                    journal.sent_input_sha256 = _responses_wire_hash([])
+                    journal.retained_bytes = 2
+
+    def _retain_conversation_input(
+        self, journal: _ResponsesConversationJournal, items: list[dict[str, Any]],
+    ) -> bool:
+        # Stage unsent tails separately. On exhaustion preserve every sent item,
+        # reject the new tail and hard-stop; never trim/rotate the sent prefix.
+        size = len(_responses_wire_json(items))
+        with self._conversation_journal_lock:
+            total = sum(j.retained_bytes for j in self._conversation_journals.values())
+            if journal.closed or journal.exhausted:
+                return False
+            if (size > _MAX_RESPONSES_JOURNAL_BYTES
+                    or total - journal.retained_bytes + size > _MAX_RESPONSES_JOURNALS_BYTES):
+                journal.exhausted = True
+                return False
+            journal.journal = list(items)
+            journal.retained_bytes = size
+            return True
+
+    def _conversation_stop(self) -> UatConversationOutcome:
+        return UatConversationOutcome(response_kind="clarification", display_format="narrative",
+            answer_text="此對話的供應端契約或保存容量已無法繼續；請建立新對話。原對話不會自動重建或輪替。",
+            model_name=self.model_name)
+
+    def _respond(
         self,
         *,
         history: Sequence[UatConversationMessage],
@@ -4232,6 +5397,7 @@ class CodexResponsesConversationModel:
             or len(safety_identifier) > 64
         ):
             raise ContractValidationError("UAT safety identifier is invalid")
+        journal = self._active_journal.get()
         turn_started = time.monotonic()
         bounded_history = history[-_MAX_HISTORY_MESSAGES:]
         for message in bounded_history:
@@ -4250,14 +5416,62 @@ class CodexResponsesConversationModel:
             Mapping,
         ):
             raise ContractValidationError("UAT authorized capabilities are invalid")
+        if _is_self_contained_text_task(_normalize_routing_text(user_text), require_supplied_input=True):
+            # Isolate this closed input, not the session: neither history nor
+            # retained source metadata may authorize unrelated citations.
+            bounded_history = ()
+            latest_evidence = None
+            if authorized_capability_summary is not None:
+                authorized_capability_summary = {
+                    key: value for key, value in authorized_capability_summary.items()
+                    if key not in {"prior_visible_answer", "conversation_reference_binding"}
+                }
+        if authorized_capability_summary is not None and not requires_workspace_evidence(user_text):
+            authorized_capability_summary = {key: value for key, value in authorized_capability_summary.items()
+                                             if key != "reviewed_annotation_catalog"}
         request_contract_binder = _UatTurnRequestContractBinder(
             user_text=user_text,
             authorized_capability_summary=authorized_capability_summary,
+            latest_evidence=latest_evidence,
         )
+        if request_contract_binder._mail_qualifier is not None or request_contract_binder._native_page is not None:
+            latest_evidence = None
+        if request_contract_binder._native_page is not None:
+            authorized_capability_summary = {
+                key: value for key, value in (authorized_capability_summary or {}).items()
+                if key not in {"prior_visible_answer", "conversation_reference_binding"}
+            }
+        local_scope_outcome = request_contract_binder.source_scope_preflight(latest_evidence)
+        if local_scope_outcome is not None:
+            return local_scope_outcome
 
-        response_input: list[dict[str, Any]] = [
+        if (
+            latest_evidence is not None
+            and protected_reference_identifiers(user_text)
+            and requires_workspace_evidence(user_text)
+        ):
+            # A current explicit target needs its own governed retrieval. Prior
+            # citations are not target coverage; do not offer them for rendering
+            # or finalization. Supplied-text tasks and prior-only presentation
+            # retain their existing no-tool path.
+            latest_evidence = None
+
+        if request_contract_binder._native_page is not None:
+            bounded_history = ()  # Turn-local isolation; never mutate retained session state.
+        response_input: list[dict[str, Any]] = list(journal.journal) if journal is not None else [
             {"role": message.role, "content": message.content} for message in bounded_history
         ]
+        if journal is not None:
+            response_input.append({"role": "developer", "content": (
+                "Current server turn boundary: " + json.dumps({
+                    "selected_evidence_tool": formowl_tool_name,
+                    "closed_supplied_input": _is_self_contained_text_task(
+                        _normalize_routing_text(user_text), require_supplied_input=True),
+                    "historical_text_is_current_citation_authority": False,
+                    "prior_evidence_authority_present": latest_evidence is not None,
+                    "public_terminology": "paused_no_external_request",
+                }, ensure_ascii=False, separators=(",", ":"))
+            )})
         response_input.append(
             {
                 "role": "developer",
@@ -4341,6 +5555,23 @@ class CodexResponsesConversationModel:
             )
         else:
             prior_evidence_citeable = False
+
+        required_prior_citations: tuple[str, ...] = ()
+        if _is_retained_relative_presentation(
+            _normalize_routing_text(user_text), require_citation_preservation=True,
+        ):
+            visible = (authorized_capability_summary or {}).get("prior_visible_answer", {})
+            ids = visible.get("citation_ids", ()) if isinstance(visible, Mapping) else ()
+            if (not isinstance(visible, Mapping) or visible.get("status") not in {"complete", "partial"}
+                    or not isinstance(ids, (tuple, list)) or not 0 < len(ids) <= _MAX_RESPONSE_CITATIONS
+                    or not all(isinstance(item, str) and item.strip() for item in ids)
+                    or not set(ids).issubset(evidence_citation_ids(presented_prior_evidence))):
+                return UatConversationOutcome(
+                    response_kind="clarification", display_format="narrative",
+                    answer_text="目前無法完整保留上一則答案的引用；請提供要轉換的答案與引用。",
+                    model_name="server-prior-citation-validation",
+                )
+            required_prior_citations = tuple(ids)
         response_input.append({"role": "user", "content": user_text})
         evidence_records: list[tuple[UatEvidenceToolRequest, dict[str, Any]]] = []
         presented_evidence_results: list[dict[str, Any]] = []
@@ -4468,16 +5699,19 @@ class CodexResponsesConversationModel:
             model_name: str,
             evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
             provider_diagnostic: Mapping[str, Any] | None = None,
+            suppress_retained_citations: bool = False,
+            suppress_evidence_citations: bool = False,
         ) -> UatConversationOutcome:
             nonlocal answer_projection_result
             if answer_projection_result == "public_safety_rejected" and final_repair_attempted:
                 answer_projection_result = "recovery_exhausted"
-            retained_citation_ids = (
+            retained_citation_ids = () if suppress_retained_citations else (
                 evidence_citation_ids(presented_prior_evidence)
                 if presented_prior_evidence is not None
                 else ()
             )
             diagnostic = dict(provider_diagnostic) if provider_diagnostic is not None else {}
+            diagnostic.setdefault("stop_reason", reason)
             diagnostic = dict(_attach_loop_diagnostics(diagnostic) or {})
             if provider_phase_timings:
                 diagnostic.update(
@@ -4496,7 +5730,9 @@ class CodexResponsesConversationModel:
                 model_name=model_name,
                 evidence_records=evidence_records,
                 citation_ids=retained_citation_ids,
+                suppress_evidence_citations=suppress_evidence_citations,
                 provider_diagnostic=diagnostic or None,
+                authorized_capability_summary=authorized_capability_summary,
             )
 
         def _loop_provider_diagnostic(
@@ -4518,9 +5754,8 @@ class CodexResponsesConversationModel:
             )
             return merged
 
-        decision_schema = _decision_schema_for_prior_evidence(
-            allow_render_prior_evidence=prior_evidence_citeable,
-        )
+        typed_notes_active = self._typed_evidence_notes and (journal is not None or prior_evidence_citeable)
+        last_note_context: str | None = None
         evidence_required = requires_workspace_evidence(
             user_text,
             query_class=request_contract_binder._query_class,
@@ -4530,12 +5765,15 @@ class CodexResponsesConversationModel:
             prior_evidence_citeable=bool(evidence_citation_ids(latest_evidence)),
             prior_evidence_present=latest_evidence is not None,
         )
+        supplied_transform_identity_tokens = _quoted_transform_identity_tokens(user_text)
         auto_tools_allowed = (
             evidence_required
             and not is_ordinary_greeting(user_text)
             and not prior_evidence_citeable
         )
         while True:
+            if journal is not None and journal.closed:
+                return self._conversation_stop()
             if provider_request_count >= _MAX_PROVIDER_REQUESTS_PER_TURN:
                 return _safe_stop_outcome(
                     reason="provider_incomplete", model_name=self.model_name,
@@ -4574,7 +5812,9 @@ class CodexResponsesConversationModel:
                 and not formowl_halted
                 and formowl_attempts < _MAX_TOOL_CALLS_PER_TURN
             ):
-                tools.append(_responses_function_tool(formowl_tool))
+                tools.append(_responses_function_tool(
+                    formowl_tool, request_contract_context=request_contract_context,
+                ))
             if (
                 (evidence_required or auto_tools_allowed)
                 and not force_final
@@ -4602,6 +5842,7 @@ class CodexResponsesConversationModel:
                 and formowl_attempts < _MAX_TOOL_CALLS_PER_TURN
                 and (
                     latest_evidence_result is None
+                    or request_contract_binder.comparison_pending
                     or _evidence_requires_replan(latest_evidence_result)
                     or (
                         _evidence_is_incomplete(latest_evidence_result)
@@ -4614,11 +5855,38 @@ class CodexResponsesConversationModel:
                 if force_evidence_tool_choice
                 else "auto"
             )
+            typed_notes_active = typed_notes_active or (
+                self._typed_evidence_notes and bool(presented_evidence_results)
+            )
+            # Only this turn's accepted frozen contract defines positional labels.
+            # A retained result's old catalog is never a current contract.
+            field_request = (
+                evidence_records[-1][0] if evidence_records
+                and evidence_records[-1][0].request_contract == request_contract_binder._contract
+                else None
+            )
+            note_fields = _typed_note_fields(field_request)
+            decision_schema = _decision_schema_for_prior_evidence(
+                allow_render_prior_evidence=prior_evidence_citeable,
+                typed_evidence_notes=typed_notes_active, field_count=len(note_fields),
+            )
+            note_instructions = (
+                "\n\n" + _TYPED_EVIDENCE_NOTES_GUIDANCE + "\nCurrent frozen field catalog: "
+                + json.dumps(list(enumerate(note_fields)), ensure_ascii=False)
+                if typed_notes_active else ""
+            )
+            if journal is not None and typed_notes_active:
+                context = "Current frozen field catalog: " + json.dumps(list(enumerate(note_fields)), ensure_ascii=False)
+                if context != last_note_context:
+                    response_input.append({"role": "developer", "content": context})
+                    last_note_context = context
             provider_payload = {
                 "model": self._model,
-                "instructions": base_instructions + "\n\n" + developer_instructions,
-                "input": response_input,
-                "tools": tools,
+                "instructions": journal.instructions if journal is not None else base_instructions + "\n\n" + developer_instructions + note_instructions,
+                # Each attempt owns a snapshot; later appends cannot rewrite a
+                # prior transport payload (including legacy bridge adapters).
+                "input": deepcopy(response_input),
+                "tools": deepcopy(journal.tools) if journal is not None else tools,
                 "parallel_tool_calls": False,
                 # This turn is stateless (`store=False`).  Ask Responses for
                 # encrypted reasoning so reasoning items can be replayed with
@@ -4629,7 +5897,7 @@ class CodexResponsesConversationModel:
                         "type": "json_schema",
                         "name": "formowl_uat_decision",
                         "strict": True,
-                        "schema": decision_schema,
+                        "schema": deepcopy(journal.schema) if journal is not None else decision_schema,
                     }
                 },
                 "max_output_tokens": 4_096,
@@ -4638,6 +5906,10 @@ class CodexResponsesConversationModel:
                 "store": False,
             }
             provider_payload["tool_choice"] = tool_choice if tools else "none"
+            if journal is not None:
+                provider_payload["prompt_cache_key"] = journal.identity
+                if not self._retain_conversation_input(journal, response_input):
+                    return self._conversation_stop()
             if stream_recovery_attempted or self._stream_initial_requests:
                 provider_payload["stream"] = True
             provider_request_shape = _provider_request_shape_snapshot(
@@ -4654,10 +5926,11 @@ class CodexResponsesConversationModel:
                 continue
             provider_request_count += 1
             provider_attempt = provider_request_count
-            self._active_request_timeout_seconds = min(
-                self._timeout_seconds,
-                remaining_seconds,
-            )
+            request_timeout = min(self._timeout_seconds, remaining_seconds)
+            if journal is not None:
+                journal.request_timeout = request_timeout
+            else:
+                self._active_request_timeout_seconds = request_timeout
             try:
                 response = self._request_response(provider_payload)
             except (TimeoutError, socket.timeout):
@@ -4794,6 +6067,7 @@ class CodexResponsesConversationModel:
                                 if provider_failure_diagnostic["reason_code"]
                                 in {
                                     "http_error",
+                                    "provider_error",
                                     "provider_pre_mcp_failure",
                                     "transport_error",
                                 }
@@ -4863,6 +6137,8 @@ class CodexResponsesConversationModel:
                         "outcome": "completed",
                     }
                 )
+            if journal is not None and journal.closed:
+                return self._conversation_stop()
             if response.get("status") == "incomplete":
                 return _safe_stop_outcome(
                     reason="provider_incomplete",
@@ -4938,12 +6214,30 @@ class CodexResponsesConversationModel:
                 parsed_decision: Mapping[str, Any] | None = None
                 finalization_validated = False
                 try:
-                    parsed_decision = _parse_decision(self._response_text(response))
+                    parsed_decision = _parse_decision(
+                        self._response_text(response), typed_evidence_notes=typed_notes_active,
+                        field_request=field_request,
+                        presented_evidence=tuple(presented_evidence_results),
+                        presented_prior_evidence=presented_prior_evidence,
+                    )
+                    parsed_decision = request_contract_binder.validate_comparison_decision(parsed_decision, evidence_records)
                     _validate_evidence_bound_decision(
                         parsed_decision,
                         evidence_results=tuple(presented_evidence_results),
                         prior_evidence=presented_prior_evidence,
+                        required_prior_citations=required_prior_citations,
                     )
+                    if (
+                        supplied_transform_identity_tokens
+                        and parsed_decision.get("response_kind") == "answer"
+                        and not _preserves_supplied_transform_identity(
+                            parsed_decision["answer_text"],
+                            supplied_transform_identity_tokens,
+                        )
+                    ):
+                        raise RuntimeError(
+                            "UAT supplied transform failed identity preservation"
+                        ) from None
                     _record_finalization_validation(
                         final_citation_ids=parsed_decision["citation_ids"],
                         validation_result="passed",
@@ -4960,6 +6254,13 @@ class CodexResponsesConversationModel:
                         )
                     except ContractValidationError:
                         answer_projection_result = "public_safety_rejected"
+                        _record_private_citation_stage({
+                            "stage": "final_answer_public_safety_rejection",
+                            **private_public_safety_rejection_summary(
+                                answer_text=parsed_decision["answer_text"],
+                                coverage_note=parsed_decision["coverage_note"],
+                            ),
+                        })
                         # Never use the rejected span or exception text as repair context.
                         raise RuntimeError("UAT final answer failed public safety validation") from None
                     answer_projection_result = (
@@ -4979,22 +6280,38 @@ class CodexResponsesConversationModel:
                                 else ()
                             ),
                             validation_result=(
-                                "coverage_rejected"
-                                if reason_code == "coverage_validation_failed"
+                                "transform_identity_rejected"
+                                if reason_code == "transform_identity_failed"
                                 else (
-                                    "citation_rejected"
-                                    if reason_code == "citation_validation_failed"
-                                    else "parse_rejected"
+                                    "coverage_rejected"
+                                    if reason_code == "coverage_validation_failed"
+                                    else (
+                                        "citation_rejected"
+                                        if reason_code == "citation_validation_failed"
+                                        else "parse_rejected"
+                                    )
                                 )
                             ),
                             repair_attempted=final_repair_attempted,
                         )
-                    if not final_repair_attempted and (evidence_records or prior_evidence_citeable):
+                    # Only validated ordinary no-tool output gains this existing
+                    # one-shot slot; lookup and evidence validation stay unchanged.
+                    ordinary_no_tool_repair = (
+                        reason_code in {
+                            "answer_public_safety_failed",
+                            "transform_identity_failed",
+                        }
+                        and not evidence_required and not tools
+                        and not prior_evidence_citeable
+                        and formowl_attempts == 0 and public_term_attempts == 0
+                    )
+                    if not final_repair_attempted and (
+                        evidence_records or prior_evidence_citeable or ordinary_no_tool_repair
+                    ):
                         final_repair_attempted = True
                         force_final = True
                         stop_reason = reason_code
-                        response_input = [
-                            *response_input,
+                        response_input.extend([
                             # No rejected draft is replayed: citation/coverage failure
                             # may precede safety validation of its native output items.
                             {
@@ -5004,16 +6321,26 @@ class CodexResponsesConversationModel:
                                     evidence_results=presented_evidence_results,
                                     prior_evidence=presented_prior_evidence,
                                     reason_code=reason_code,
+                                    ordinary_no_tools=ordinary_no_tool_repair,
+                                    required_prior_citations=required_prior_citations,
                                 ),
                             },
-                        ]
+                        ])
                         continue
                     return _safe_stop_outcome(
                         reason=reason_code,
                         model_name=self.model_name,
                         evidence_records=evidence_records,
+                        suppress_evidence_citations=request_contract_binder._native_page is not None,
                     )
                 decision = dict(parsed_decision)
+                if journal is not None:
+                    # Only a validated/safe final is eligible for future replay.
+                    # Rejected raw drafts remain absent from sent history.
+                    response_input.extend(deepcopy(output_items) if output_items else [
+                        {"role": "assistant", "content": self._response_text(response)}])
+                    if not self._retain_conversation_input(journal, response_input):
+                        return self._conversation_stop()
                 return UatConversationOutcome(
                     **decision,
                     model_name=self.model_name,
@@ -5106,6 +6433,8 @@ class CodexResponsesConversationModel:
             call_ids.update(response_call_ids)
             function_call_outputs: list[dict[str, Any]] = []
             for call_id, tool_name, parsed_arguments in prepared_calls:
+                if journal is not None and journal.closed:
+                    return self._conversation_stop()
                 if tool_name == formowl_tool_name:
                     formowl_attempts += 1
                     if formowl_halted:
@@ -5114,23 +6443,38 @@ class CodexResponsesConversationModel:
                             remaining_mcp_calls=(_MAX_TOOL_CALLS_PER_TURN - formowl_attempts),
                         )
                     else:
+                        validation_stage = {"stage": "argument_schema"}
                         try:
                             request = _parse_tool_request(
                                 parsed_arguments,
                                 tool_descriptor=formowl_tool,
                                 request_contract_binder=request_contract_binder,
+                                _validation_stage=validation_stage,
                             )
-                        except (ContractValidationError, RuntimeError):
+                        except (ContractValidationError, RuntimeError) as exc:
+                            rejection = _private_planner_rejection(
+                                exc,
+                                parsed_arguments,
+                                validation_stage=validation_stage["stage"],
+                                provider_attempt=provider_attempt,
+                                tool_attempt=formowl_attempts,
+                            )
+                            _record_private_citation_stage(rejection)
                             stop_reason = "invalid_arguments"
                             if formowl_attempts >= _MAX_TOOL_CALLS_PER_TURN:
                                 formowl_halted = True
                             tool_output = _execution_control_envelope(
                                 reason="invalid_arguments",
                                 remaining_mcp_calls=(_MAX_TOOL_CALLS_PER_TURN - formowl_attempts),
+                                validation_code=rejection["rejection_code"],
                             )
                         else:
                             query_fingerprint = _tool_request_fingerprint(request)
-                            if query_fingerprint in seen_query_fingerprints:
+                            # Hint-only differences are identity metadata, not new evidence work.
+                            hard_fingerprint = _tool_request_fingerprint(
+                                request, include_field_query_hints=False,
+                            )
+                            if hard_fingerprint in seen_query_fingerprints:
                                 stop_reason = "no_progress"
                                 formowl_halted = True
                                 tool_output = _execution_control_envelope(
@@ -5140,8 +6484,10 @@ class CodexResponsesConversationModel:
                                     ),
                                 )
                             else:
-                                seen_query_fingerprints.add(query_fingerprint)
+                                seen_query_fingerprints.update((query_fingerprint, hard_fingerprint))
                                 mcp_started = time.monotonic()
+                                if journal is not None and journal.closed:
+                                    return self._conversation_stop()
                                 try:
                                     result_value = evidence_tool(request)
                                     if not isinstance(result_value, Mapping):
@@ -5187,7 +6533,10 @@ class CodexResponsesConversationModel:
                                         ),
                                     )
                                 else:
-                                    presented_result = compact_evidence_for_model(result)
+                                    compaction_diagnostic: dict[str, Any] = {}
+                                    presented_result = compact_evidence_for_model(
+                                        result, diagnostic=compaction_diagnostic,
+                                    )
                                     _append_bounded(
                                         mcp_citation_stage_diagnostics,
                                         _mcp_citation_stage_diagnostic(
@@ -5199,18 +6548,28 @@ class CodexResponsesConversationModel:
                                                 evidence_citation_ids(result),
                                                 evidence_citation_ids(presented_result),
                                             ),
+                                            compaction_diagnostic=compaction_diagnostic,
                                         ),
                                         limit=_MAX_MCP_CITATION_STAGE_DIAGNOSTICS,
                                     )
                                     evidence_records.append((request, result))
                                     presented_evidence_results.append(presented_result)
-                                    if _source_fallback_exhausted(request, result):
+                                    comparison_progress = request_contract_binder.record_comparison_result(request, result)
+                                    comparison_pending = request_contract_binder.comparison_pending
+                                    if (not comparison_pending
+                                            and _exact_capability_terminal(evidence_records, authorized_capability_summary)):
+                                        return _safe_stop_outcome(
+                                            reason="no_evidence", model_name=self.model_name,
+                                            evidence_records=evidence_records,
+                                            suppress_retained_citations=True,
+                                        )
+                                    if _source_fallback_exhausted(request, result) and not comparison_pending:
                                         return _safe_stop_outcome(
                                             reason="no_evidence",
                                             model_name=self.model_name,
                                             evidence_records=evidence_records,
                                         )
-                                    if _mail_citeable_result_finalizes_turn(request, result):
+                                    if _mail_citeable_result_finalizes_turn(request, result) and not comparison_pending:
                                         # Mail evidence is already governed and
                                         # citeable.  Do not let an autonomous
                                         # provider re-query with a second mail
@@ -5221,6 +6580,10 @@ class CodexResponsesConversationModel:
                                             remaining_after_mcp < _UAT_MIN_FINALIZATION_REMAINING_SECONDS
                                             and result.get("status") in {"partial", "incomplete"}
                                         ):
+                                            # Preserve the validated source result
+                                            # directly.  A second provider request
+                                            # cannot improve evidence and is not
+                                            # given enough time to be reliable.
                                             return _safe_stop_outcome(
                                                 reason="source_evidence_preserved",
                                                 model_name=self.model_name,
@@ -5240,6 +6603,7 @@ class CodexResponsesConversationModel:
                                     material_progress = bool(
                                         set(citations) - seen_citation_ids
                                         or field_support - seen_field_support
+                                        or (comparison_progress and citations)
                                     )
                                     seen_citation_ids.update(citations)
                                     seen_field_support.update(field_support)
@@ -5260,7 +6624,8 @@ class CodexResponsesConversationModel:
                                     if inferred_reason == "mcp_unavailable":
                                         stop_reason = inferred_reason
                                         formowl_halted = True
-                                    elif not material_progress and not repair_feedback_new:
+                                    elif (not material_progress and not repair_feedback_new
+                                          and not (comparison_progress and comparison_pending)):
                                         stop_reason = "no_progress"
                                         formowl_halted = True
                                     elif citations:
@@ -5309,11 +6674,10 @@ class CodexResponsesConversationModel:
                     }
                 )
 
-            response_input = [
-                *response_input,
-                *(dict(item) for item in output_items),
+            response_input.extend([
+                *(deepcopy(dict(item)) for item in output_items),
                 *function_call_outputs,
-            ]
+            ])
 
     def _lookup_public_terminology(
         self,
@@ -5321,6 +6685,8 @@ class CodexResponsesConversationModel:
     ) -> dict[str, Any]:
         """Run one stateless public-only hosted search without private context."""
 
+        if self._active_journal.get() is not None:
+            return {"status": "unavailable", "reason_code": "public_web_paused_conversation_contract"}
         domain = request.domain.replace("_", " ")
         try:
             response = self._request_response(
@@ -5366,17 +6732,26 @@ class CodexResponsesConversationModel:
         }
 
     def discard_conversation(self, safety_identifier: str) -> None:
-        if (
-            not isinstance(safety_identifier, str)
-            or not safety_identifier
-            or len(safety_identifier) > 64
-        ):
+        if not isinstance(safety_identifier, str) or not 0 < len(safety_identifier) <= 64:
             raise ContractValidationError("UAT safety identifier is invalid")
+        # Never wait for a network-held conversation lock. Removing the owner
+        # reference reclaims inactive state; an in-flight holder observes closed
+        # before further sends/dispatch and releases its buffers in finally.
+        with self._conversation_journal_lock:
+            journal = self._conversation_journals.pop(safety_identifier, None)
+            if journal is not None:
+                journal.closed = True
 
     def close(self) -> None:
-        return None
+        with self._conversation_journal_lock:
+            self._journals_closed = True
+            identifiers = tuple(self._conversation_journals)
+        for identifier in identifiers:
+            self.discard_conversation(identifier)
 
-    def _request_response(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+    def _request_response(
+        self, payload: Mapping[str, Any], *, offline_session_id: str | None = None,
+    ) -> dict[str, Any]:
         body = b""
         parsed: dict[str, Any] | None = None
         http_status: int | None = None
@@ -5386,7 +6761,24 @@ class CodexResponsesConversationModel:
             "_active_request_timeout_seconds",
             self._timeout_seconds,
         )
+        journal = self._active_journal.get()
+        if offline_session_id is not None:
+            try:
+                valid_offline_id = str(uuid.UUID(offline_session_id)) == offline_session_id
+            except (ValueError, TypeError, AttributeError):
+                valid_offline_id = False
+            if (not valid_offline_id or journal is not None
+                    or payload.get("prompt_cache_key") != offline_session_id
+                    or payload.get("tools") != [] or payload.get("tool_choice") != "none"
+                    or payload.get("store") is not False):
+                raise ContractValidationError("offline semantic transport affinity/contract mismatch")
+            # Do not inherit a browser turn's mutable timeout override.
+            timeout_seconds = self._timeout_seconds
+        if journal is not None and journal.request_timeout is not None:
+            timeout_seconds = journal.request_timeout
         raw_input = payload.get("input")
+        if journal is not None and isinstance(raw_input, list):
+            raw_input = raw_input[journal.turn_input_offset:]
         stream_response = payload.get("stream") is True or isinstance(raw_input, list) and any(
             isinstance(item, Mapping) and item.get("type") == "function_call_output"
             for item in raw_input
@@ -5435,8 +6827,46 @@ class CodexResponsesConversationModel:
                         "text/event-stream" if stream_response else "application/json"
                     ),
                     "Accept-Encoding": "identity",
+                    "User-Agent": _UAT_BACKEND_USER_AGENT,
+                    **({"X-Codex-Pool-Session": journal.identity} if journal is not None else {}),
+                    **({"X-Codex-Pool-Session": offline_session_id} if offline_session_id is not None else {}),
                 },
             )
+            if journal is not None:
+                if journal.closed or journal.exhausted:
+                    raise RuntimeError("UAT provider conversation retired")
+                wire = json.loads(request.data)
+                wire_input = wire["input"]
+                prefix = wire_input[:journal.sent_count]
+                input_bytes = _responses_wire_json(wire_input)
+                previous_hash = journal.sent_input_sha256
+                header = request.get_header("X-codex-pool-session")
+                cache_key = wire.get("prompt_cache_key")
+                contract = {
+                    "conversation_uuid_sha256": _responses_wire_hash(journal.identity),
+                    "header_sha256": _responses_wire_hash(header),
+                    "cache_key_sha256": _responses_wire_hash(cache_key),
+                    "uuid_valid": str(uuid.UUID(journal.identity)) == journal.identity,
+                    "affinity_equal": header == cache_key == journal.identity,
+                    "instructions_sha256": _responses_wire_hash(wire["instructions"]),
+                    "tools_sha256": _responses_wire_hash(wire["tools"]),
+                    "schema_sha256": _responses_wire_hash(wire["text"]),
+                    "input_sha256": "sha256:" + hashlib.sha256(input_bytes).hexdigest(),
+                    "input_item_count": len(wire_input),
+                    "previous_input_sha256": previous_hash,
+                    "previous_input_item_count": journal.sent_count,
+                    "prefix_sha256": _responses_wire_hash(prefix),
+                    "append_only": _responses_wire_hash(prefix) == journal.sent_input_sha256,
+                    "user_agent": request.get_header("User-agent"),
+                    "working_fields_sha256": _responses_wire_hash({k: wire.get(k) for k in (
+                        "model", "reasoning", "store", "stream", "include", "max_output_tokens")}),
+                }
+                if not contract["append_only"] or not contract["affinity_equal"]:
+                    raise RuntimeError("UAT provider conversation wire contract mismatch")
+                request_shape = {**_provider_request_shape_snapshot(wire), "conversation_contract": contract}
+                # A failed send is still an attempted send; preserve its exact prefix.
+                journal.sent_input_sha256 = contract["input_sha256"]
+                journal.sent_count = len(wire_input)
             failure_phase = "connect_headers"
             with urllib.request.build_opener(_NoResponsesRedirect()).open(
                 request,
@@ -6173,12 +7603,51 @@ def _formowl_tool_descriptor_fingerprint(descriptor: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def _responses_function_tool(tool: Mapping[str, Any]) -> dict[str, Any]:
+def _responses_function_tool(
+    tool: Mapping[str, Any], *, request_contract_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    parameters = deepcopy(tool["inputSchema"])
+    if tool["name"] in _EVIDENCE_TOOL_NAMES:
+        # Static offered copy only; the real MCP descriptor/wire keeps its pin.
+        offered = parameters.get("properties", {})
+        offered.pop("reviewed_annotation_pin", None)
+        if "required" in parameters:
+            parameters["required"] = [key for key in parameters["required"] if key != "reviewed_annotation_pin"]
+        if "reviewed_annotation_ids" in offered:
+            offered["reviewed_annotation_ids"]["description"] = (
+                "When a reviewed_annotation_catalog is available, explicitly nominate relevant IDs or [] "
+                "for source fallback. The server binds its current catalog pin; do not supply a pin. "
+                "Nonempty IDs require independently grounded exact target identity for evidence_lookup. "
+                "Select guarded original sources only; empty IDs are not annotation use or source absence."
+            )
+    if tool["name"] in _EVIDENCE_TOOL_NAMES and request_contract_context is not None:
+        # Specialize this offered copy only. These values already belong to the
+        # server turn; scope/fields remain proposals and deterministic validation
+        # and first-valid binding remain authoritative even if enums are ignored.
+        contract = parameters.get("properties", {}).get("request_contract", {})
+        if contract == {"type": "object"}:
+            # The mail descriptor exposes an opaque object for the same already
+            # validated contract. Reuse its declared schema, never a parallel one.
+            from formowl_gateway.remote import _SEMANTIC_REQUEST_CONTRACT_INPUT_SCHEMA
+
+            contract = deepcopy(_SEMANTIC_REQUEST_CONTRACT_INPUT_SCHEMA)
+            parameters["properties"]["request_contract"] = contract
+        properties = contract.get("properties", {})
+        for key in ("original_query_hash", "query_class", "maximum_claim_strength"):
+            if isinstance(properties.get(key), dict):
+                properties[key]["enum"] = [request_contract_context[key]]
+        if "native_locator" in request_contract_context:
+            # Keep object shape/required guards; specialize scalar leaves rather
+            # than an object-valued enum for provider schema compatibility.
+            locator_properties = properties["native_locator"]["properties"]
+            for key in ("kind", "page"):
+                locator_properties[key]["enum"] = [request_contract_context["native_locator"][key]]
+            contract["required"] = list(dict.fromkeys((*contract["required"], "native_locator")))
     return {
         "type": "function",
         "name": tool["name"],
         "description": tool["description"],
-        "parameters": tool["inputSchema"],
+        "parameters": parameters,
         # The real MCP schema intentionally has optional controls. OpenAI strict
         # function tools require every declared property to be required, so keep
         # the actual schema and rely on the existing deterministic validators.
@@ -6196,6 +7665,83 @@ def _without_attached_document_labels(normalized: str) -> str:
     return re.sub(r"附件(?:中|裡|里|內|内)?(?:的)?(?:文檔|文件)", "附件", reference)
 
 
+def _source_scope_constraints(
+    user_text: str, *, available_source_families: Sequence[str],
+) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
+    """Resolve exact single-family exclusions; unsupported negative objects clarify."""
+    normalized = _normalize_routing_text(user_text)
+    quoted = r'"[^"]*"|“[^”]*”|「[^」]*」|『[^』]*』|(?<!\w)\x27[^\x27]*\x27(?!\w)'
+    clauses, start = [], 0
+    # Do not turn punctuation inside literal content into a source instruction.
+    for boundary in re.finditer(quoted + r"|[,;.!?。！？]", normalized):
+        if boundary[0][0] not in '\"“「『\x27':
+            clauses.append(normalized[start:boundary.end()])
+            start = boundary.end()
+    clauses.append(normalized[start:])
+    # Same known negative-lookup prefix as the router. Only detect ambiguity
+    # inline; never discard the affirmative part of an unclosed mixed clause.
+    negative_intent = _NEGATED_TEXT_LOOKUP_TAIL.pattern.removeprefix(r"[,;.，；。]\s*").split(
+        "(?P<remainder>", 1
+    )[0]
+    # Closed prior-record objects are not source-family exclusions. Keep this
+    # grammar finite: arbitrary suffixes (archives, source qualifiers, lists)
+    # must still take the ambiguous-scope path. No IDs or field names are used.
+    record = r"(?:part|item|product|component|record|identifier|order)"
+    cjk_record = r"(?:料號|料号|識別碼|识别码|零件|產品|产品|品項|品项|紀錄|记录|訂單|订单)"
+    prior_record = (
+        rf"(?:(?:the\s+)?(?:previous|prior|earlier)\s+{record}"
+        rf"|(?:the\s+)?{record}\s+(?:that\s+)?(?:we|i|you)\s+"
+        r"(?:just|previously|earlier)\s+(?:looked up|queried|searched|discussed|mentioned)"
+        r"|(?:剛剛|剛才|刚刚|刚才|先前|之前|上次)(?:查(?:詢|询)?|提到|提及|討論|讨论)"
+        rf"(?:過|过)?的(?:(?:那|這|这)(?:個|个|筆|笔|項|项))?{cjk_record})"
+    )
+    positive, excluded, ambiguous = set(), set(), False
+    negative_continuation = False
+    for index, clause in enumerate(clauses):
+        # Keep original terminators for later numeric-target grammar only.
+        clause = clause.rstrip(",;.!?。！？").strip()
+        families = _explicit_source_families(
+            clause, available_source_families=available_source_families,
+        )
+        instruction = re.sub(quoted, lambda match: " " * len(match[0]), clause)
+        if not re.search(negative_intent, instruction):
+            # Only a clause-leading instruction ends inherited list negation.
+            action = _ADDITIONAL_TEXT_TASK_ACTION.match(";" + instruction)
+            if action and any(action[0].endswith(marker) for marker in _EVIDENCE_QUERY_ACTION_MARKERS):
+                negative_continuation = False
+            if negative_continuation and clause:
+                # Unmapped list members and other residue cannot be dropped.
+                ambiguous = True
+            else:
+                positive.update(families)
+        else:
+            if (
+                not families and not negative_continuation
+                and re.fullmatch(
+                    rf"(?:{negative_intent}\s*{prior_record}"
+                    rf"|{prior_record}\s*(?:先)?{negative_intent})", clause,
+                )
+                and any(
+                    _ADDITIONAL_TEXT_TASK_ACTION.match(";" + later.strip())
+                    and not re.search(negative_intent, later)
+                    and has_explicit_record_target(later)
+                    for later in clauses[index + 1:]
+                )
+            ):
+                # Only scope inference skips this closed entity exclusion;
+                # the original prompt, contract and literal terms are intact.
+                continue
+            negative = _NEGATED_TEXT_LOOKUP_TAIL.fullmatch("," + clause)
+            family = _required_term_source_family(negative["remainder"]) if negative else None
+            # Mentions are not coverage: prove the whole object and resolver agree.
+            if family is None or families != (family,):
+                ambiguous = True
+            else:
+                excluded.add(family)
+                negative_continuation = True
+    return tuple(sorted(positive)), tuple(sorted(excluded)), ambiguous
+
+
 def _explicit_source_families(
     user_text: str, *, available_source_families: Sequence[str] = (),
 ) -> tuple[str, ...]:
@@ -6205,7 +7751,7 @@ def _explicit_source_families(
     # Explicitly literal source-label occurrences are predicates, not source
     # scope. Remove only those occurrences; keep separate source mentions.
     labels = (
-        r"(?:mail|e-?mail|document|markdown|plain[- ]text|attachment_?table|spreadsheet|xlsx|excel|"
+        r"(?:mail|e-?mail|document|markdown|plain[- ]text|attachment_?table|attachments?|spreadsheet|xlsx|excel|"
         r"電子郵件|郵件|信件|信箱|附件|文檔|文件(?:內容)?|試算表格?)"
     )
     for left, right in (("「", "」"), ("『", "』"), ("“", "”"), ("'", "'"), ('"', '"')):
@@ -6257,9 +7803,11 @@ def _explicit_source_families(
         )
     ):
         families.add("attachment_table")
-    if attachment_mentioned and not families.intersection({"mail", "attachment_table"}):
+    if attachment_mentioned and "attachment_table" not in families:
         # A container label alone specifies neither a table nor an independent
         # document. Admit only the available attachment-bearing source families.
+        # An explicit mail mention must not hide attachments; an explicit table
+        # scope already resolved above must not acquire an implicit mail scope.
         attachment_families = set(available_source_families) & {"mail", "attachment_table"}
         families.update(attachment_families)
         if not attachment_families:
@@ -6285,6 +7833,63 @@ def _required_term_source_family(term: str) -> str | None:
     ):
         return "attachment_table"
     return None
+
+
+def _original_temporal_comparison_spans(user_text: str) -> list[tuple[int, int]]:
+    """Read explicit numeric-calendar comparisons, not dates inferred from topics.
+
+    This is role validation only: it neither normalizes source dates nor executes
+    time filtering. Date-shaped identifiers and unqualified date topics remain
+    content; explicit literal intent is checked separately by the binder.
+    """
+    month = r"(?:0?[1-9]|1[0-2])"
+    day = r"(?:0?[1-9]|[12][0-9]|3[01])"
+    calendar = (
+        rf"(?<![a-z0-9_./-])(?:[0-9]{{4}}\s*年\s*{month}\s*月(?:\s*{day}\s*日)?"
+        # A separating period is punctuation; a dot followed by identifier
+        # continuation must not admit a date prefix from that identifier.
+        rf"|[0-9]{{4}}-{month}(?:-{day})?)(?![a-z0-9_/-]|\.[a-z0-9_./-])"
+    )
+    spans: list[tuple[int, int]] = []
+    for match in re.finditer(calendar, user_text):
+        before, after = user_text[:match.start()], user_text[match.end():]
+        if (re.search(r"(?:\b(?:after|before|since|until|during|between|from)|自|從|从)\s*$", before)
+                or re.match(r"\s*(?:之[前後后]|以[前後后]|[前後后起])", after)
+                or re.search(
+                    rf"(?:\b(?:between|from)|自|從|从)\s*{calendar}\s*(?:and|to|至|到)\s*$",
+                    before,
+                )):
+            spans.append(match.span())
+    return spans
+
+
+def _original_requested_field_spans(user_text: str) -> set[str]:
+    """Read target/property syntax, without translating or guessing fields."""
+    targets = set(protected_reference_identifiers(user_text))
+    targets.update(re.findall(r"(?<![a-z0-9._-])[0-9]+(?![a-z0-9._-])", user_text))
+    fields: set[str] = set()
+    for target in targets:
+        identity = rf"(?<![a-z0-9._-]){re.escape(target)}(?![a-z0-9._-])"
+        # Quotes around an identifier do not turn its property into content.
+        surface = rf"[\"'「『“]?\s*{identity}\s*[\"'」』”]?"
+        patterns = (
+            surface + r"\s*(?:的|之|['’]s\b|:)\s*(?P<field>[^,;.!?。！？\n]+)",
+            r"\b(?:what\s+(?:is|are)|which|show|find|retrieve|get)\s+"
+            r"(?P<field>[^,;.!?。！？\n]+?)\s+(?:of|for)\s+"
+            r"(?:(?:the|order|record|item)\s+)?" + surface,
+        )
+        for pattern in patterns:
+            for match in re.finditer(pattern, user_text):
+                # Source/predicate and additional-operation clauses are not
+                # part of an output label. Explicit literals are exempted by
+                # the existing role guard, including whole composite phrases.
+                field = re.split(
+                    r"\s+\b(?:in|from|where|with|and|but|then|for)\b", match["field"],
+                    maxsplit=1,
+                )[0].strip()
+                if field:
+                    fields.add(field)
+    return fields
 
 
 def _is_explicit_literal_content_term(
@@ -6418,7 +8023,10 @@ def _parse_tool_request(
     *,
     tool_descriptor: Mapping[str, Any],
     request_contract_binder: _UatTurnRequestContractBinder,
+    _validation_stage: dict[str, str] | None = None,
 ) -> UatEvidenceToolRequest:
+    stage = _validation_stage if _validation_stage is not None else {}
+    stage["stage"] = "argument_schema"
     input_schema = tool_descriptor.get("inputSchema")
     properties = input_schema.get("properties") if isinstance(input_schema, Mapping) else None
     if (
@@ -6428,8 +8036,24 @@ def _parse_tool_request(
         or not set(arguments).issubset(properties)
     ):
         raise RuntimeError("Codex FormOwl tool arguments are invalid")
+    catalog = request_contract_binder._annotation_catalog
+    if catalog is not None:
+        stage["stage"] = "annotation_decision"
+        if "reviewed_annotation_ids" not in arguments:
+            raise ContractValidationError("UAT reviewed annotation decision is required")
+        if "reviewed_annotation_pin" not in arguments:
+            # Only the current trusted catalog supplies an omitted transport pin.
+            # Check its content seal now; ordinary scope/identity validation still
+            # runs below. Explicit caller pins are never replaced or repaired.
+            pin = catalog.get("catalog_pin")
+            validated_reviewed_annotation_selection({
+                "reviewed_annotation_ids": [], "reviewed_annotation_pin": pin,
+                "request_contract": {"query_class": "evidence_lookup"},
+            }, catalog=catalog)
+            arguments = {**arguments, "reviewed_annotation_pin": pin}
     tool_name = tool_descriptor["name"]
     if tool_name == _MAIL_EVIDENCE_TOOL_NAME:
+        stage["stage"] = "mail_selector"
         for selector_name in (
             "mail_import_session_id",
             "mail_evidence_bundle_id",
@@ -6445,15 +8069,18 @@ def _parse_tool_request(
             mail_import_session_id=arguments.get("mail_import_session_id"),
             mail_evidence_bundle_id=arguments.get("mail_evidence_bundle_id"),
         )
+        stage["stage"] = "required_terms"
         required_terms = request_contract_binder.bind_required_terms(
             arguments.get("required_terms"),
             freeze=False,
         )
+        stage["stage"] = "request_contract"
         request_contract = request_contract_binder.bind(
             arguments.get("request_contract"),
             table_query=None,
             freeze=False,
         )
+        stage["stage"] = "typed_request"
         request = UatEvidenceToolRequest(
             query_text=arguments["query_text"],
             tool_name=tool_name,
@@ -6462,7 +8089,10 @@ def _parse_tool_request(
             request_contract=request_contract,
             required_terms=required_terms,
             limit=arguments.get("limit"),
+            reviewed_annotation_ids=tuple(arguments.get("reviewed_annotation_ids", ())),
+            reviewed_annotation_pin=arguments.get("reviewed_annotation_pin"),
         )
+        stage["stage"] = "query_shape"
         request_contract_binder.validate_tool_query_shape(
             request.query_text,
             request_contract_present="request_contract" in arguments,
@@ -6474,23 +8104,36 @@ def _parse_tool_request(
                 for name in ("mail_import_session_id", "mail_evidence_bundle_id")
             ),
         )
+        stage["stage"] = "annotation_decision"
+        request_contract_binder.validate_annotation_selection(request)
+        placement = request_contract_binder.placement_for_request(request)
+        stage["stage"] = "term_roles_and_freeze"
         request_contract_binder.bind_required_terms(
             arguments.get("required_terms"),
             freeze=True,
             request_contract=request.request_contract,
         )
+        stage["stage"] = "contract_freeze"
         request_contract_binder.bind(request.request_contract, table_query=None)
-        return request
+        if request_contract_binder._comparison_targets:
+            request_contract_binder._comparison_mail_selector = (
+                request.mail_import_session_id, request.mail_evidence_bundle_id,
+            )
+        request_contract_binder._required_term_placement = placement
+        return replace(request, required_term_placement=placement)
     table_query = arguments.get("table_query")
     candidate_terms = arguments.get("required_terms")
+    stage["stage"] = "required_terms"
     required_terms = request_contract_binder.bind_required_terms(
         candidate_terms, freeze=False, allow_missing=True,
     )
+    stage["stage"] = "request_contract"
     request_contract = request_contract_binder.bind(
         arguments.get("request_contract"),
         table_query=table_query,
         freeze=False,
     )
+    stage["stage"] = "typed_request"
     request = UatEvidenceToolRequest(
         query_text=arguments["query_text"],
         tool_name=tool_name,
@@ -6499,9 +8142,15 @@ def _parse_tool_request(
         exact_field=arguments.get("exact_field"),
         page_size=arguments.get("page_size"),
         cursor=arguments.get("cursor"),
+        reviewed_annotation_ids=tuple(arguments.get("reviewed_annotation_ids", ())),
+        reviewed_annotation_pin=arguments.get("reviewed_annotation_pin"),
+        field_query_hints=validated_field_query_hints(
+            arguments, current_request_contract=request_contract,
+        ),
         request_contract=request_contract,
         required_terms=required_terms,
     )
+    stage["stage"] = "query_shape"
     request_contract_binder.validate_tool_query_shape(
         request.query_text,
         request_contract_present="request_contract" in arguments,
@@ -6510,6 +8159,10 @@ def _parse_tool_request(
         table_query=table_query,
         has_typed_selector=False,
     )
+    stage["stage"] = "annotation_decision"
+    request_contract_binder.validate_annotation_selection(request)
+    placement = request_contract_binder.placement_for_request(request)
+    stage["stage"] = "term_roles_and_freeze"
     request_contract_binder.bind_required_terms(
         candidate_terms, freeze=True, allow_missing=True,
         request_contract=(
@@ -6518,8 +8171,10 @@ def _parse_tool_request(
             else None
         ),
     )
+    stage["stage"] = "contract_freeze"
     request_contract_binder.bind(request.request_contract, table_query=table_query)
-    return request
+    request_contract_binder._required_term_placement = placement
+    return replace(request, required_term_placement=placement)
 
 
 def _parse_public_term_request(arguments: Mapping[str, Any]) -> _PublicTermRequest:
@@ -6536,7 +8191,9 @@ def _normalized_plan_text(value: str) -> str:
     return "".join(character for character in normalized if not character.isspace())
 
 
-def _tool_request_fingerprint(request: UatEvidenceToolRequest) -> str:
+def _tool_request_fingerprint(
+    request: UatEvidenceToolRequest, *, include_field_query_hints: bool = True,
+) -> str:
     value: dict[str, Any] = {
         "tool_name": request.tool_name,
         "query_text": _normalized_plan_text(request.query_text),
@@ -6576,6 +8233,13 @@ def _tool_request_fingerprint(request: UatEvidenceToolRequest) -> str:
         value["limit"] = request.limit
     if request.request_contract is not None:
         value["request_contract"] = dict(request.request_contract)
+    if request.reviewed_annotation_pin is not None:
+        value["reviewed_annotation_ids"] = list(request.reviewed_annotation_ids)
+        value["reviewed_annotation_pin"] = request.reviewed_annotation_pin
+    if request.required_term_placement is not None:
+        value["required_term_placement"] = request.required_term_placement.fingerprint
+    if include_field_query_hints and request.field_query_hints:
+        value["field_query_hints"] = list(request.field_query_hints)
     encoded = json.dumps(
         value,
         ensure_ascii=False,
@@ -6706,6 +8370,7 @@ def _execution_control_envelope(
     *,
     reason: str,
     remaining_mcp_calls: int,
+    validation_code: str | None = None,
 ) -> dict[str, Any]:
     external_replan = {
         "status": "required",
@@ -6714,8 +8379,69 @@ def _execution_control_envelope(
     if reason == "invalid_arguments":
         from formowl_gateway.jsonrpc import EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE
 
+        # Only the existing exact-message code map can specialize provider
+        # feedback. Never forward exception text, arguments or private trace.
+        code = _safe_enum_value(validation_code, frozenset(_PLANNER_REJECTION_CODES.values()))
+        if code is not None:
+            external_replan["validation_reason_code"] = code
+        specific_hint = ""
+        if code in {
+            "contract_query_hash_invalid", "contract_query_class_invalid",
+            "contract_claim_strength_invalid",
+        }:
+            specific_hint = (
+                "Submit the complete five-key request_contract. Copy original_query_hash, "
+                "query_class, and maximum_claim_strength from the server-authoritative turn context; "
+                "do not derive them from a subquery. Select source_family_scope from "
+                "required_source_family_scope and requested_fields from the original task. "
+                "Keep all valid literal constraints and any already frozen fields and terms. "
+            )
+        elif code in {"ungrounded_required_terms", "reference_identifier_unresolved"}:
+            specific_hint = (
+                "Use only verbatim identity/topic phrases from the original user request "
+                "or the server-validated retained reference anchor. Do not invent or "
+                "translate required terms; other conversation text is not an anchor. "
+            )
+        elif code == "catalog_decision_required":
+            specific_hint = (
+                "In this SAME repaired plan explicitly include reviewed_annotation_ids. The server binds its "
+                "current catalog pin; do not supply reviewed_annotation_pin. Use relevant catalog IDs and bind "
+                "the exact target independently to the original question and required_terms. If no annotation "
+                "is safely relevant, submit [] for bounded source fallback instead. "
+                "Do not force wrong IDs, change frozen terms/fields, claim ontology use for [], or seek a new "
+                "catalog/provider request. This repair consumes the existing remaining budget. "
+            )
+        elif code == "temporal_term_role_overlap":
+            specific_hint = (
+                "A temporal comparison is not a literal source-text AND constraint. "
+                "Preserve temporal meaning in query_text and requested fields; use only "
+                "grounded identities/topics and explicitly requested literal content as terms. "
+                "Submit a new proposal; the server does not silently remove constraints or "
+                "change already frozen terms. Evidence lookup is not an exact temporal filter: "
+                "compare only source-supported dates in their actual roles, disclose incomplete "
+                "time coverage, and clarify when the requested temporal claim cannot be supported. "
+            )
+        elif code == "field_term_role_overlap":
+            specific_hint = (
+                "Requested output fields are not AND predicates unless the user explicitly "
+                "requires them as literal content/value filters. Propose corrected roles "
+                "from the original task, never automatically drop constraints. "
+            )
+        elif code in {
+            "comparison_query_target_conflict", "comparison_table_target_conflict",
+            "comparison_target_arity_invalid", "comparison_target_or_shared_terms_invalid",
+            "comparison_mail_scope_changed",
+        }:
+            specific_hint = (
+                "Use exactly one admitted target per call, with the same shared literal "
+                "constraints, requested fields and source scope. Bind the query and any "
+                "table filter to that target. You must submit newly explicit one-target "
+                "proposals for pending targets within the remaining budget, preserving "
+                "shared constraints and already validated terms. The server does not "
+                "silently split arguments or drop constraints; model replanning is required. "
+            )
         external_replan["repair_hint"] = (
-            "Correct the rejected arguments from the original request. For "
+            specific_hint + "Correct the rejected arguments from the original request. For "
             "required_terms, submit the grounded anchors and explicit content/value filters; "
             "exclude source-family or action labels unless the user explicitly "
             "requested those literal words. Preserve any already validated selector "
@@ -6723,6 +8449,10 @@ def _execution_control_envelope(
             "server-provided required_source_family_scope, not a guessed modality."
             " Clarify rejected requested-field/required-term overlap from the original "
             "task, retaining genuine anchors and explicit literal/value filters."
+            " A subject-plus-requested-property phrase is not a literal content "
+            "predicate. Keep target identifiers/entities separate from output fields, "
+            "unless the user explicitly requires the whole phrase as literal content "
+            "or a value. Do not change any already validated required terms."
             + " " + EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE
         )
     return {
@@ -6815,6 +8545,8 @@ def _finalization_stop_reason(error: Exception) -> str:
     message = str(error).casefold()
     if message == "uat final answer failed public safety validation":
         return "answer_public_safety_failed"
+    if message == "uat supplied transform failed identity preservation":
+        return "transform_identity_failed"
     if "coverage" in message:
         return "coverage_validation_failed"
     if any(marker in message for marker in ("citation", "cited", "citeable")):
@@ -6828,13 +8560,43 @@ def _final_repair_context(
     evidence_results: Sequence[Mapping[str, Any]],
     prior_evidence: Mapping[str, Any] | None,
     reason_code: str | None = None,
+    ordinary_no_tools: bool = False,
+    required_prior_citations: Sequence[str] = (),
 ) -> str:
+    if ordinary_no_tools:
+        if reason_code == "transform_identity_failed":
+            return (
+                "Trusted ordinary finalization repair: the previous draft did not "
+                "preserve the exact identifiers in the user's supplied quoted text. "
+                "Answer the original transformation without tools, preserving every "
+                "supplied identifier verbatim unless the user explicitly requested its "
+                "removal. Do not invent, substitute, normalize away, or expose any "
+                "missing token or rejected draft. Keep citation_ids empty and return "
+                "the required structured decision. "
+                + _SAFE_FINAL_PROSE_GUIDANCE
+            )
+        return (
+            "Trusted ordinary finalization repair: the previous draft failed public "
+            "safety validation. Answer the original conversational task using its "
+            "supplied text or general knowledge. No tools are available; keep "
+            "citation_ids empty. Do not claim private source facts or missing data. "
+            "Keep answer_text and coverage_note free of raw filesystem, storage, "
+            "database, parser, worker and secret references; do not repeat rejected "
+            "content. Return the required structured decision. "
+            + _SAFE_FINAL_PROSE_GUIDANCE
+        )
     available = set(evidence_citation_ids(evidence_results))
     if prior_evidence is not None:
         available.update(evidence_citation_ids(prior_evidence))
     repair_reason = reason_code or _validation_stop_reason(error)
+    preservation = (
+        "For this explicit preservation request, an answer must include every prior-visible "
+        f"citation {list(required_prior_citations)}; the retained union is not the obligation. "
+        "If any required citation is unavailable, clarify instead; never fabricate authority. "
+        if required_prior_citations else ""
+    )
     return (
-        "Trusted finalization repair: the previous draft failed "
+        preservation + "Trusted finalization repair: the previous draft failed "
         f"{repair_reason}. No more tools are available. Return one concise, "
         "useful citation-bound response using only the already presented "
         "evidence and the smallest sufficient subset (at most "
@@ -6848,7 +8610,9 @@ def _final_repair_context(
         "silently omit rows while claiming complete coverage."
         " Keep answer_text and coverage_note free of raw filesystem, storage, "
         "database, parser, worker, and secret references. Describe only the "
-        "supported business facts; never repeat unsafe infrastructure details."
+        "supported business facts; never repeat unsafe infrastructure details. "
+        + _SAFE_FINAL_PROSE_GUIDANCE
+        + " " + _FIELD_ROLE_GROUNDING_GUIDANCE
     )
 
 
@@ -6866,7 +8630,8 @@ def _safe_stop_message(reason: str) -> str:
             "目前無法安全回答，且這不代表資料不存在。"
         ),
         "budget_exhausted": (
-            "本回合已達 3 次 FormOwl 查詢上限，仍沒有足夠的可引用證據，" "因此已安全停止。"
+            "本回合已達 3 次 FormOwl 查詢提案嘗試上限（包含驗證未通過的提案）；"
+            "已安全停止，最終答案未完成。這不代表來源資料不存在。"
         ),
         "mcp_unavailable": (
             "FormOwl 證據工具目前無法完成查詢，沒有產生可引用證據；"
@@ -6885,9 +8650,17 @@ def _safe_stop_message(reason: str) -> str:
             "已取得可引用的授權來源資料；因本回合剩餘時間不足，直接保留來源證據，"
             "並揭露目前涵蓋仍未完成。"
         ),
+        "incomplete_status": (
+            "GPT provider 回傳未完成的回應；這次最終答案未完成，"
+            "這不是來源資料不存在的證明。"
+        ),
         "answer_public_safety_failed": (
             "模型答案未通過公開輸出安全驗證；最終答案未完成。"
             "僅可顯示已驗證的授權來源資料，且這不代表資料不存在。"
+        ),
+        "transform_identity_failed": (
+            "模型答案未保留使用者提供文字中的必要識別字串；修正後仍未通過驗證，"
+            "因此沒有顯示可能失真的轉換結果。"
         ),
         "public_term_unavailable": (
             "公開術語查詢目前無法使用；系統沒有把未驗證的公開資訊當成"
@@ -6910,9 +8683,9 @@ def _source_evidence_fallback_text(
 ) -> str | None:
     """Render governed structured values when provider finalization stops late.
 
-    The values come only from deterministic exact output and retain their
-    citation binding.  This keeps a slow provider from hiding already
-    retrieved business fields while still reporting incomplete coverage.
+    Source-start table evidence can arrive as an exact inventory, a direct
+    table-row evidence record, or compact mail JSON carrying the same row.
+    Keep every displayed value bound to a citation from that result.
     """
     if reason not in {"provider_timeout", "provider_incomplete", "source_evidence_preserved"}:
         return None
@@ -6920,13 +8693,6 @@ def _source_evidence_fallback_text(
     seen: set[tuple[str, str, str]] = set()
 
     def table_rows(value: Any) -> tuple[tuple[Mapping[str, Any], str | None], ...]:
-        """Find bounded table rows in governed evidence containers.
-
-        Source-start table evidence may be returned directly under ``evidence``
-        or carried inside the compact mail ``snippet`` JSON.  Both forms are
-        still bound to the enclosing citation; do not inspect arbitrary answer
-        prose here.
-        """
         found: list[tuple[Mapping[str, Any], str | None]] = []
 
         def visit(item: Any, depth: int = 0) -> None:
@@ -6934,11 +8700,11 @@ def _source_evidence_fallback_text(
                 return
             if isinstance(item, Mapping):
                 row = item.get("table_row")
-                inherited_citation = item.get("citation_hash", item.get("citation_id"))
-                if not isinstance(inherited_citation, str):
-                    inherited_citation = None
+                inherited = item.get("citation_hash", item.get("citation_id"))
+                if not isinstance(inherited, str):
+                    inherited = None
                 if isinstance(row, Mapping):
-                    found.append((row, inherited_citation))
+                    found.append((row, inherited))
                 for key in ("evidence", "evidence_snippets", "results"):
                     nested = item.get(key)
                     if isinstance(nested, Sequence) and not isinstance(nested, (str, bytes)):
@@ -6959,7 +8725,8 @@ def _source_evidence_fallback_text(
         visit(value)
         return tuple(found)
 
-    def add_cell(field: Any, raw_value: Any, citation: Any, *, candidate_only: bool) -> None:
+    def add_cell(field: Any, raw_value: Any, citation: Any, *, candidate_only: bool, result_citations: set[str],
+                 reviewed_header: bool = False) -> None:
         if (
             not isinstance(field, str) or not field.strip()
             or not isinstance(raw_value, str)
@@ -6971,7 +8738,7 @@ def _source_evidence_fallback_text(
         if key in seen:
             return
         seen.add(key)
-        suffix = "（欄位結構待完整驗證）" if candidate_only else ""
+        suffix = "（欄位結構待完整驗證）" if candidate_only else "（欄位標題經審核驗證）" if reviewed_header else ""
         lines.append(f"- {field.strip()}：{raw_value}{suffix}")
 
     for _, result in reversed(tuple(evidence_records)):
@@ -6994,6 +8761,7 @@ def _source_evidence_fallback_text(
                             value.get("display_value", value.get("value")),
                             value.get("citation_hash", value.get("citation_id")),
                             candidate_only=value.get("structure_status") == "candidate_only",
+                            result_citations=result_citations,
                         )
                         if len(lines) >= 16:
                             break
@@ -7006,28 +8774,19 @@ def _source_evidence_fallback_text(
             row_citation = row.get("citation_hash", row.get("citation_id"))
             if not isinstance(row_citation, str):
                 row_citation = inherited_citation
-            if row_citation is None:
-                # The table row is commonly wrapped by an evidence item whose
-                # citation is the row hash; recover it only from the immediate
-                # governed record, never from answer text.
-                for item in (result.get("evidence") or result.get("evidence_snippets") or ()):
-                    if isinstance(item, Mapping) and item.get("table_row") is row:
-                        candidate = item.get("citation_hash", item.get("citation_id"))
-                        if isinstance(candidate, str):
-                            row_citation = candidate
-                            break
             for cell in cells[:64]:
                 if not isinstance(cell, Mapping):
                     continue
-                citation = cell.get("citation_hash", cell.get("citation_id")) or row_citation
                 add_cell(
                     cell.get("field"),
                     cell.get("display_value", cell.get("value")),
-                    citation,
+                    cell.get("citation_hash", cell.get("citation_id")) or row_citation,
                     candidate_only=(
                         cell.get("structure_status") == "candidate_only"
                         or cell.get("source_proven_field_schema") is not True
                     ),
+                    result_citations=result_citations,
+                    reviewed_header=cell.get("structure_status") == "reviewed_header",
                 )
                 if len(lines) >= 16:
                     break
@@ -7042,25 +8801,213 @@ def _source_evidence_fallback_text(
     )
 
 
+def _exact_inventory_capability_limited(
+    evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
+    capabilities: Mapping[str, Any] | None,
+) -> bool:
+    """Use server-provided capability metadata, never provider prose or hit counts."""
+    if not isinstance(capabilities, Mapping) or not evidence_records:
+        return False
+    query_contract = capabilities.get("query_contract")
+    if not (
+        isinstance(query_contract, Mapping)
+        and query_contract.get("complete_inventory_supported") is False
+        or capabilities.get("coverage_status") == "incomplete"
+    ):
+        return False
+    try:
+        families = _authorized_source_families(capabilities)
+        for request, result in evidence_records:
+            contract = validate_semantic_request_contract(
+                request.request_contract, available_source_families=families,
+            )
+            agent = result.get("query_agent")
+            agent_stop_reason = agent.get("stop_reason") if isinstance(agent, Mapping) else None
+            warnings = result.get("warnings", ())
+            explicit_binding_failure = (
+                isinstance(agent_stop_reason, str)
+                and "binding" in agent_stop_reason.casefold()
+                and any(token in agent_stop_reason.casefold() for token in (
+                    "invalid", "mismatch", "rejected", "missing",
+                ))
+            )
+            if (
+                contract["query_class"] != "exact_set_or_inventory"
+                or result.get("query_hash") != sha256_json(request.query_text)
+                or result.get("status") not in {"pending_review", "partial", "incomplete", "unsupported"}
+                or evidence_citation_ids(result)
+                or result.get("exact_inventory") is not None
+                or result.get("exact_result") is not None
+                or (isinstance(result.get("failure_reason"), str) and result["failure_reason"].strip())
+                or (isinstance(result.get("reason_code"), str) and result["reason_code"].strip())
+                or explicit_binding_failure
+                or isinstance(agent, Mapping) and agent.get("status") not in {
+                    None, "ok", "pending_review", "partial", "incomplete", "unsupported",
+                }
+                or not isinstance(warnings, Sequence)
+                or isinstance(warnings, (str, bytes))
+                or any(
+                    isinstance(warning, str)
+                    and (
+                        any(token in warning.casefold() for token in (
+                            "invalid", "ambiguous", "rejected", "permission",
+                            "denied", "not_found", "error", "failed",
+                        ))
+                        or (
+                            "binding" in warning.casefold()
+                            and any(token in warning.casefold() for token in (
+                                "mismatch", "missing", "invalid", "rejected",
+                            ))
+                        )
+                    )
+                    for warning in warnings
+                )
+            ):
+                return False
+    except (ContractValidationError, TypeError, KeyError):
+        return False
+    return _exact_capability_result_bindings_clean(evidence_records)
+
+
+def _exact_capability_terminal(
+    evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
+    capabilities: Mapping[str, Any] | None,
+) -> bool:
+    """Stricter than presentation: only an explicit trusted unsupported capability."""
+    query_contract = capabilities.get("query_contract") if isinstance(capabilities, Mapping) else None
+    if (not isinstance(query_contract, Mapping)
+            or query_contract.get("complete_inventory_supported") is not False
+            or not _exact_inventory_capability_limited(evidence_records, capabilities)):
+        return False
+    return True
+
+
+def _exact_capability_result_bindings_clean(
+    evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
+) -> bool:
+    """Shared error exclusion so a rejected terminal cannot become a late notice."""
+    for request, result in evidence_records:
+        contract = request.request_contract  # Already validated by the shared presentation guard.
+        for metadata in (result, result.get("query_agent")):
+            if metadata is None:
+                continue
+            if not isinstance(metadata, Mapping):
+                return False
+            if any(metadata.get(key) not in (None, "") for key in ("failure_reason", "reason_code")):
+                return False
+            for key, expected in (
+                ("original_query_hash", contract["original_query_hash"]),
+                ("query_hash", sha256_json(request.query_text)),
+                ("source_family_scope", contract["source_family_scope"]),
+                ("request_contract", contract),
+            ):
+                if key in metadata and metadata[key] != expected:
+                    return False
+            warnings = metadata.get("warnings", ())
+            stop = metadata.get("stop_reason", "")
+            if (not isinstance(warnings, (list, tuple))
+                    or any(not isinstance(value, str) for value in warnings)
+                    or stop is not None and not isinstance(stop, str)):
+                return False
+            for warning in (*warnings, stop or ""):
+                text = warning.casefold()
+                if any(token in text for token in (
+                    "invalid", "ambiguous", "rejected", "permission", "denied", "error", "failed",
+                )) or ("binding" in text and any(token in text for token in ("mismatch", "missing"))):
+                    return False
+    return True
+
+
+def _source_recovery_incomplete_display_eligible(
+    evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
+) -> bool:
+    """Require a bound unfinished recheck; preserve errors across the whole turn."""
+    eligible = False
+    for request, result in evidence_records:
+        if evidence_citation_ids(result):
+            return False
+        agent = result.get("query_agent")
+        context = agent.get("context_bundle") if isinstance(agent, Mapping) else None
+        recovery = context.get("source_recovery") if isinstance(context, Mapping) else None
+        for value in (result, agent, recovery):
+            if not isinstance(value, Mapping):
+                continue
+            warnings = value.get("warnings", ())
+            if (
+                (isinstance(value.get("failure_reason"), str) and value["failure_reason"].strip())
+                or (isinstance(value.get("reason_code"), str) and value["reason_code"].strip())
+                or value.get("status") in {
+                    "error", "failed", "permission_denied", "mcp_failed", "mcp_unavailable",
+                    "provider_unavailable",
+                }
+                or value.get("stop_reason") == "provider_error"
+                or not isinstance(warnings, (list, tuple))
+                or any(not isinstance(warning, str) for warning in warnings)
+            ):
+                return False
+            for warning in (*warnings, value.get("stop_reason", "")):
+                if not isinstance(warning, str):
+                    continue
+                warning = warning.casefold()
+                if any(token in warning for token in (
+                    "invalid", "ambiguous", "permission", "denied", "rejected", "failed", "error",
+                )) or ("binding" in warning and any(token in warning for token in ("mismatch", "missing"))):
+                    return False
+        scan = recovery.get("scan") if isinstance(recovery, Mapping) else None
+        if (
+            isinstance(scan, Mapping) and scan.get("complete") is False
+            and _source_fallback_exhausted(request, result)
+        ):
+            eligible = True
+    return eligible
+
+
 def _safe_stop_outcome(
     *,
     reason: str,
     model_name: str,
     evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
     citation_ids: Sequence[str] = (),
+    suppress_evidence_citations: bool = False,
     provider_diagnostic: Mapping[str, Any] | None = None,
+    authorized_capability_summary: Mapping[str, Any] | None = None,
 ) -> UatConversationOutcome:
-    message = _source_evidence_fallback_text(reason, evidence_records) or _safe_stop_message(reason)
+    message = _source_evidence_fallback_text(
+        reason, evidence_records,
+    ) or _safe_stop_message(
+        "incomplete_status" if reason == "provider_incomplete"
+        and provider_diagnostic is not None
+        and provider_diagnostic.get("reason_code") == "incomplete_status" else reason
+    )
+    # Presentation only: preserve the loop stop reason, budgets and error priority.
+    if (reason in {"no_evidence", "no_progress"} and not citation_ids
+            and not (provider_diagnostic or {}).get("reason_code")
+            and _exact_inventory_capability_limited(evidence_records, authorized_capability_summary)):
+        message = (
+            "目前來源能力或涵蓋範圍不足，無法認證完整授權範圍的精確結果或完整清單。"
+            "若請求涉及總數，本次也無法認證完整總數；不會以少量檢索結果估算完整範圍。"
+            "這不代表資料不存在。"
+        )
+    elif (
+        reason in {"no_evidence", "no_progress"}
+        and not citation_ids
+        and not (provider_diagnostic or {}).get("reason_code")
+        and _source_recovery_incomplete_display_eligible(evidence_records)
+    ):
+        message = (
+            "已嘗試在本次授權範圍內重新查核來源，但查核因時間限制或涵蓋不足而未完成；"
+            "目前結果待確認，無法安全回答。這不代表資料不存在。"
+        )
     retained_citation_ids = tuple(
         dict.fromkeys(
             citation_id
             for citation_id in (
                 *citation_ids,
-                *(
+                *(() if suppress_evidence_citations else (
                     citation
                     for _, result in evidence_records
                     for citation in evidence_citation_ids(result)
-                ),
+                )),
             )
             if isinstance(citation_id, str) and citation_id.strip()
         )
@@ -7099,7 +9046,172 @@ def _public_web_citation_count(response: Mapping[str, Any]) -> int:
     return len(found)
 
 
-def _parse_decision(final_message: str) -> dict[str, Any]:
+_FIELD_LIMITATION_REASONS = frozenset({"not_established", "ambiguous", "conflicting"})
+_FIELD_LIMITATION_SCOPES = frozenset({"presented_evidence", "unverified_requested_remainder"})
+_FIELD_LIMITATION_DESCRIPTIONS = {
+    "not_established": "就本次要求的事實範圍，尚無法從已提供的證據確立",
+    "ambiguous": "就本次要求的事實範圍，已提供的證據仍有歧義",
+    "conflicting": "就本次要求的事實範圍，已提供的證據存在衝突",
+}
+_TYPED_EVIDENCE_NOTES_GUIDANCE = (
+    "typed_evidence_notes_v2 overrides free-text coverage-note instructions: emit "
+    "coverage_note as the empty string and field_limitations as an array (at most eight). "
+    "Each item has only field_index, reason and scope, using unique zero-based current catalog "
+    "indices and not_established, ambiguous, or conflicting. These are MODEL-ASSESSED "
+    "uncertainties, not verified field coverage. Omission does not establish support. "
+    "Reasons describe the requested factual scope: not_established means it cannot "
+    "be established from the presented evidence; ambiguous means that evidence "
+    "allows unresolved interpretations; conflicting means that evidence contains "
+    "incompatible factual claims within that scope. Missing structured support "
+    "metadata is not evidence of absent or contradictory facts. Distinguish a "
+    "supported subset from unresolved broader scope and corpus completeness. "
+    "Incomplete retrieval alone does not make an evidenced field uncertain; "
+    "a supported subset alone does not establish a broader requested claim. "
+    "Explicitly set scope to presented_evidence for uncertainty within the presented evidence, "
+    "or unverified_requested_remainder only for the unverified remainder of the requested scope. "
+    "The latter requires authoritative incomplete current presented coverage and reason "
+    "not_established; unknown coverage or missing structured support alone is insufficient. "
+    "It does not deny a cited subset or assert that further records exist. Never label "
+    "unseen evidence ambiguous or conflicting. Scope is not inferred from prose or citations. "
+    "Keep field limitations consistent with the scope stated in answer_text, "
+    "preserving genuine uncertainty and supported-subset qualifications. "
+    "Use [] for clarification or an empty current catalog; never reuse retained indices. "
+    "Preserve clarification answer_text. The server renders coverage_note from presented "
+    "metadata and these typed uncertainties; do not invent source-location inventories. "
+    "This note policy does not authorize unsupported assertions in answer_text."
+)
+
+
+def _typed_note_fields(request: UatEvidenceToolRequest | None) -> tuple[str, ...]:
+    contract = request.request_contract if request is not None else None
+    return tuple(contract["requested_fields"]) if isinstance(contract, Mapping) else ()
+
+
+def _typed_note_remainder_is_incomplete(presented: Sequence[Mapping[str, Any]]) -> bool:
+    """Require positive current coverage metadata, not unknown/support-gap heuristics."""
+    for result in presented:
+        if result.get("presentation_truncated") is True:
+            return True
+        agent = result.get("query_agent")
+        metadata = [result, result.get("coverage"), result.get("exact_inventory"), agent]
+        if isinstance(agent, Mapping):
+            if agent.get("stop_reason") in {
+                "context_budget_reached", "query_budget_exhausted", "repair_budget_exhausted",
+                "time_budget_exhausted",
+            }:
+                return True
+            steps = agent.get("subqueries")
+            if isinstance(steps, (list, tuple)):
+                metadata.extend(step for step in steps if isinstance(step, Mapping)
+                                and isinstance(step.get("citation_hashes"), (list, tuple))
+                                and step["citation_hashes"])
+        if any(isinstance(value, Mapping) and (
+            value.get("status") in {"partial", "incomplete"}
+            or value.get("coverage_status") == "incomplete"
+        ) for value in metadata):
+            return True
+    return False
+
+
+def _render_typed_evidence_notes(
+    payload: Mapping[str, Any], request: UatEvidenceToolRequest | None,
+    presented: Sequence[Mapping[str, Any]],
+    presented_prior_evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    fields = _typed_note_fields(request)
+    limitations = payload["field_limitations"]
+    if (payload["coverage_note"] != "" or not isinstance(limitations, list)
+            or len(limitations) > 8
+            or not isinstance(payload["coverage_status"], str)
+            or payload["coverage_status"] not in {"complete", "incomplete", "not_applicable"}
+            or (payload["response_kind"] == "clarification" and limitations)):
+        raise RuntimeError("Codex returned invalid typed evidence notes")
+    by_index: dict[int, tuple[str, str]] = {}
+    for item in limitations:
+        if (not isinstance(item, dict) or set(item) != {"field_index", "reason", "scope"}
+                or type(item["field_index"]) is not int
+                or not 0 <= item["field_index"] < len(fields)
+                or item["field_index"] in by_index
+                or not isinstance(item["reason"], str)
+                or item["reason"] not in _FIELD_LIMITATION_REASONS
+                or not isinstance(item["scope"], str)
+                or item["scope"] not in _FIELD_LIMITATION_SCOPES
+                or (item["scope"] == "unverified_requested_remainder"
+                    and item["reason"] != "not_established")):
+            raise RuntimeError("Codex returned invalid typed evidence notes")
+        by_index[item["field_index"]] = (item["reason"], item["scope"])
+    # Retained evidence may affect retrieval notes, but never authorize a
+    # remainder limitation for this turn's field catalog.
+    if (any(scope == "unverified_requested_remainder" for _, scope in by_index.values())
+            and not _typed_note_remainder_is_incomplete(presented)):
+        raise RuntimeError("Codex returned unsupported typed remainder scope")
+
+    # Merely presenting retained evidence does not make an uncited ordinary
+    # follow-up evidence-dependent. Strict typed validation above still applies.
+    if (not presented and request is None
+            and not payload["citation_ids"] and payload["response_kind"] == "answer"
+            and payload["coverage_status"] == "not_applicable"):
+        return {key: value for key, value in payload.items() if key != "field_limitations"}
+
+    coverage_evidence = tuple(presented)
+    if presented_prior_evidence is not None:
+        prior_citations = evidence_citation_ids(presented_prior_evidence)
+        if any(citation in prior_citations for citation in payload["citation_ids"]):
+            coverage_evidence += (presented_prior_evidence,)
+    # Retained evidence affects cited retrieval coverage only, never the current
+    # field catalog or its support. No source text, locators, or model prose.
+    retrieval = "unknown"
+    # The same presented-envelope predicate used by final validation takes
+    # precedence over nested exact completeness, including subquery coverage.
+    if _evidence_results_are_incomplete(coverage_evidence):
+        retrieval = "incomplete"
+    elif coverage_evidence and all(_has_deterministic_complete_mail_coverage(r) for r in coverage_evidence):
+        retrieval = "complete"
+    retrieval_label = {"unknown": "未知", "incomplete": "不完整", "complete": "完整"}[retrieval]
+    notes = [f"檢索涵蓋範圍：{retrieval_label}（僅依已提供的受治理中繼資料判定）。"]
+    support: set[str] = set()
+    if request is not None:
+        for result in presented:
+            support.update(_validated_field_support(request, result))
+    missing = [field for field in fields if sha256_json(field) not in support]
+    exact_without_fields = (
+        request is not None and isinstance(request.request_contract, Mapping)
+        and request.request_contract["query_class"] == "exact_set_or_inventory"
+        and not fields
+    )
+    if fields:
+        if missing:
+            notes.append("尚無伺服器結構化支持佐證的欄位：" + "；".join(missing)
+                         + "。這不表示來源未載明相關事實或與答案矛盾。")
+        for index, (reason, scope) in sorted(by_index.items()):
+            description = (
+                "僅就尚未查證的其餘請求範圍，無法確立；此項限制不否定已引用範圍的陳述，"
+                "也不宣稱其他資料存在"
+                if scope == "unverified_requested_remainder"
+                else "已提供證據內的判讀：" + _FIELD_LIMITATION_DESCRIPTIONS[reason]
+            )
+            notes.append("模型判讀的不確定性（非伺服器驗證）—" + fields[index] + "："
+                         + description + "。")
+        notes.append("未列為模型不確定項目，不代表已通過欄位支持驗證。")
+    elif exact_without_fields:
+        notes.append("本次精確查詢未要求欄位層級評估。")
+    else:
+        notes.append("整體欄位不確定性：本次查詢沒有可用的欄位目錄；"
+                     "不沿用先前證據的欄位對應。")
+    status = payload["coverage_status"]
+    if retrieval != "complete" or missing or limitations or (not fields and not exact_without_fields):
+        status = "incomplete"
+    return {key: value for key, value in payload.items() if key != "field_limitations"} | {
+        "coverage_status": status, "coverage_note": " ".join(notes),
+    }
+
+
+def _parse_decision(
+    final_message: str, *, typed_evidence_notes: bool = False,
+    field_request: UatEvidenceToolRequest | None = None,
+    presented_evidence: Sequence[Mapping[str, Any]] = (),
+    presented_prior_evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     if not isinstance(final_message, str) or not final_message.strip():
         raise RuntimeError("Codex returned no UAT answer")
     try:
@@ -7114,12 +9226,18 @@ def _parse_decision(final_message: str) -> dict[str, Any]:
         "coverage_status",
         "coverage_note",
     }
+    if typed_evidence_notes:
+        required_keys.add("field_limitations")
     if (
         not isinstance(payload, dict)
         or set(payload) != required_keys
         or not isinstance(payload["citation_ids"], list)
     ):
         raise RuntimeError("Codex returned an invalid UAT answer")
+    if typed_evidence_notes:
+        payload = _render_typed_evidence_notes(
+            payload, field_request, presented_evidence, presented_prior_evidence,
+        )
     outcome = UatConversationOutcome(
         response_kind=payload["response_kind"],
         answer_text=payload["answer_text"],
@@ -7144,6 +9262,7 @@ def _validate_evidence_bound_decision(
     *,
     evidence_results: Sequence[Mapping[str, Any]],
     prior_evidence: Mapping[str, Any] | None = None,
+    required_prior_citations: Sequence[str] = (),
 ) -> None:
     citation_ids = set(decision["citation_ids"])
     prior_citations = (
@@ -7155,6 +9274,9 @@ def _validate_evidence_bound_decision(
         available_citations.update(citations)
     available_citations.update(prior_citations)
 
+    if (decision["response_kind"] != "clarification"
+            and not set(required_prior_citations).issubset(citation_ids & prior_citations)):
+        raise RuntimeError("Codex prior-answer response omitted required citations")
     if citation_ids and not citation_ids.issubset(available_citations):
         raise RuntimeError("Codex source-backed answer cited unavailable evidence")
     if decision["response_kind"] == "render_prior_evidence":
@@ -7218,13 +9340,14 @@ def _has_citeable_evidence(value: Mapping[str, Any]) -> bool:
 def _decision_schema_for_prior_evidence(
     *,
     allow_render_prior_evidence: bool,
+    typed_evidence_notes: bool = False, field_count: int = 0,
 ) -> dict[str, Any]:
     response_kinds = (
         _RESPONSE_KINDS
         if allow_render_prior_evidence
         else _RESPONSE_KINDS - {"render_prior_evidence"}
     )
-    return {
+    schema = {
         **_DECISION_SCHEMA,
         "properties": {
             **_DECISION_SCHEMA["properties"],
@@ -7234,6 +9357,24 @@ def _decision_schema_for_prior_evidence(
             },
         },
     }
+
+    if typed_evidence_notes:
+        schema["required"] = [*schema["required"], "field_limitations"]
+        schema["properties"]["coverage_note"] = {"type": "string", "enum": [""]}
+        schema["properties"]["field_limitations"] = {
+            "type": "array", "maxItems": min(8, field_count),
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["field_index", "reason", "scope"],
+                "properties": {
+                    "field_index": {"type": "integer", "minimum": 0,
+                                    "maximum": max(0, field_count - 1)},
+                    "reason": {"type": "string", "enum": sorted(_FIELD_LIMITATION_REASONS)},
+                    "scope": {"type": "string", "enum": sorted(_FIELD_LIMITATION_SCOPES)},
+                },
+            },
+        }
+    return schema
 
 
 def _evidence_is_incomplete(
@@ -7567,11 +9708,17 @@ def _mail_citeable_result_finalizes_turn(
     request: UatEvidenceToolRequest,
     result: Mapping[str, Any],
 ) -> bool:
-    """Prevent autonomous mail re-query after governed evidence is citeable.
+    """Stop provider re-query once a governed evidence result is citeable.
 
-    Mail may legitimately be incomplete, so finalization still receives the
-    cited result and must disclose that coverage.  This is intentionally
-    mail-only: graph evidence keeps its existing cited-partial/replan loop.
+    Both evidence routes can return useful, source-bound citations while a
+    field/projection or corpus-coverage marker remains incomplete.  Letting
+    the provider keep autonomously re-planning in that state can consume the
+    whole UAT turn and discard an answerable cited result.  Finalization still
+    validates the requested fields and must disclose any remaining coverage
+    limit; this is not a claim that citations prove completeness.
+
+    Exact/table terminal handling and comparison-pending handling remain
+    outside this predicate.
     """
 
     return request.tool_name in _EVIDENCE_TOOL_NAMES and _has_citeable_evidence(result)
@@ -7621,34 +9768,59 @@ def compact_evidence_for_model(
     result: Mapping[str, Any],
     *,
     item_limit: int = _MAX_MODEL_EVIDENCE_ITEMS,
+    diagnostic: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     item_limit = max(0, item_limit)
     truncated = result.get("presentation_truncated") is True
+    counts = dict.fromkeys(_COMPACTION_COUNT_KEYS, 0)
+    counts.update(byte_limit=_MAX_MODEL_EVIDENCE_BYTES, item_limit=item_limit)
+    reasons: dict[str, int] = {}
+    last_bytes = 0
 
-    def fits(value: Mapping[str, Any]) -> bool:
+    def rejected(reason: str) -> None:
+        reasons[reason] = reasons.get(reason, 0) + 1
+
+    def size(value: Mapping[str, Any]) -> int:
+        return len(json.dumps(
+            {**value, "presentation_truncated": True},
+            ensure_ascii=False, separators=(",", ":"),
+        ).encode("utf-8"))
+
+    def fits(value: Mapping[str, Any], reason: str = "metadata_byte_budget") -> bool:
+        nonlocal last_bytes
         try:
-            return (
-                len(json.dumps(
-                    {**value, "presentation_truncated": True},
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ).encode("utf-8")) <= _MAX_MODEL_EVIDENCE_BYTES
-            )
+            last_bytes = size(value)
         except (TypeError, ValueError):
+            last_bytes = 0
+            rejected("serialization_rejected")
             return False
+        counts["max_candidate_bytes"] = max(counts["max_candidate_bytes"], last_bytes)
+        if last_bytes > _MAX_MODEL_EVIDENCE_BYTES:
+            rejected(reason)
+            return False
+        return True
+
+    def finish(value: dict[str, Any]) -> dict[str, Any]:
+        if diagnostic is not None:
+            counts["presented_bytes"] = size(value)
+            diagnostic.clear()
+            diagnostic.update(counts, reason_counts=dict(reasons))
+        return value
 
     compact = {
         key: result[key]
         for key in ("status", "query_hash", "coverage")
         if key in result
     }
-    if not fits(compact):
+    base_fits = fits(compact, "base_byte_budget")
+    counts["base_bytes"] = last_bytes
+    if not base_fits:
         compact = {}
         for key in ("status", "query_hash", "coverage"):
             candidate = {**compact, key: result[key]} if key in result else compact
             if fits(candidate):
                 compact = candidate
-        return {**compact, "presentation_truncated": True}
+        return finish({**compact, "presentation_truncated": True})
 
     for key in (
         "mail_import_session_id", "query_agent", "answer", "source_structure_statuses",
@@ -7685,6 +9857,7 @@ def compact_evidence_for_model(
             else:
                 truncated = True
 
+    counts["metadata_bytes"] = size(compact) - counts["base_bytes"]
     records: dict[str, list[Any]] = {}
     graph_evidence = result.get("evidence")
     graph_support = (
@@ -7708,6 +9881,11 @@ def compact_evidence_for_model(
                 value,
                 allowed_fields={
                     "content_redacted",
+                    "citation_hash",
+                    "mail_header_citation_hash",
+                    "source_context",
+                    *(('attachment_locator',) if result.get('query_agent', {}).get(
+                        'request_contract', {}).get('native_locator') is not None else ()),
                     "email_message_id",
                     "mail_import_session_id",
                     "matched_terms",
@@ -7750,6 +9928,8 @@ def compact_evidence_for_model(
         records[key] = selected
         if len(selected) != len(value):
             truncated = True
+            counts["filtered_record_count"] += len(value) - len(selected)
+            rejected("evidence_support_filtered")
         if key not in compact:
             candidate = {**compact, key: []}
             if fits(candidate):
@@ -7768,6 +9948,7 @@ def compact_evidence_for_model(
         ):
             truncated = True
             exact_rejected = True
+            rejected("exact_inventory_item_budget")
         else:
             records["exact_inventory"] = [dict(exact)]
 
@@ -7788,7 +9969,30 @@ def compact_evidence_for_model(
                         citation_hash
                     )
 
+    # Header support is its own cited source, but must travel with its matched
+    # body. Count both records against the unchanged item and byte limits.
+    mail_groups: dict[str, str] = {}
+    mail_observations: dict[str, str] = {}
+    content_records = [*records.get("evidence", ()), *records.get("evidence_snippets", ())]
+    for record in content_records:
+        header = record.get("mail_header_citation_hash")
+        citation = record.get("citation_hash")
+        if isinstance(header, str) and isinstance(citation, str):
+            mail_groups[header] = mail_groups[citation] = "mail_header:" + header
+    for record in content_records:
+        group = mail_groups.get(record.get("citation_hash"))
+        if group and isinstance(record.get("source_observation_id"), str):
+            mail_observations[record["source_observation_id"]] = group
+
     def anchor_for(collection: str, record: Any) -> str | None:
+        group = (
+            mail_groups.get(record) if isinstance(record, str) else
+            (mail_groups.get(record.get("citation_hash"))
+             or mail_observations.get(record.get("source_observation_id")))
+            if isinstance(record, Mapping) else None
+        )
+        if group:
+            return group
         if collection == "citations" and isinstance(record, str):
             return "citation:" + record
         if graph_support is not None and isinstance(record, Mapping):
@@ -7838,9 +10042,23 @@ def compact_evidence_for_model(
                 merged.setdefault(key, []).extend(values)
         groups = {"__all_evidence__": merged}
 
+    counts["group_count"] = len(groups)
     for group in groups.values():
+        content = [*group.get("evidence", ()), *group.get("evidence_snippets", ())]
+        present = {item.get("citation_hash") for item in content}
+        required = {item["mail_header_citation_hash"] for item in content if item.get("mail_header_citation_hash")}
+        required.update(
+            item["source_context"].get("anchor_citation_hash") for item in content
+            if item.get("source_context", {}).get("relationship") == "outer_message_header"
+        )
+        if not required.issubset(present):
+            truncated = True
+            counts["rejected_group_count"] += 1
+            rejected("required_context_missing")
+            continue
         if exact_rejected:
             truncated = True
+            counts["rejected_group_count"] += 1
             continue
         if any(
             len(compact.get(key, ())) + len(values) > item_limit
@@ -7848,6 +10066,8 @@ def compact_evidence_for_model(
             if key != "exact_inventory"
         ):
             truncated = True
+            counts["rejected_group_count"] += 1
+            rejected("group_item_budget")
             continue
         candidate = {key: list(value) if isinstance(value, list) else value for key, value in compact.items()}
         for key, values in group.items():
@@ -7855,14 +10075,16 @@ def compact_evidence_for_model(
                 candidate[key] = values[0]
             else:
                 candidate.setdefault(key, []).extend(values)
-        if fits(candidate):
+        if fits(candidate, "group_byte_budget"):
             compact = candidate
+            counts["accepted_group_count"] += 1
         else:
             truncated = True
+            counts["rejected_group_count"] += 1
 
     if truncated:
         compact["presentation_truncated"] = True
-    return compact
+    return finish(compact)
 
 
 def _presentation_anchor(value: Any) -> str | None:

@@ -1127,7 +1127,7 @@ def _compose_sidecar_supplement_preparation(
     prior_job_id: str,
     bound_child_failure_manifest_path: Path | None,
 ) -> dict:
-    """Nest one completed sidecar delta under the existing second root."""
+    """Append one completed sidecar delta without replacing prior authorities."""
     from formowl_contract import sha256_json, to_plain
     from formowl_ingestion.storage import (
         AssetStore,
@@ -1182,7 +1182,9 @@ def _compose_sidecar_supplement_preparation(
     if (
         base_preparation.get("job_count") != 2
         or not isinstance(base_bindings, list)
-        or len(base_bindings) != 2
+        or len(base_bindings) < 2
+        or base_preparation.get("job_authority_count", len(base_bindings)) != len(base_bindings)
+        or base_exact.get("job_count") != len(base_bindings)
         or not isinstance(delta_bindings, list)
         or len(delta_bindings) != 1
         or not isinstance(base_source, dict)
@@ -1212,7 +1214,39 @@ def _compose_sidecar_supplement_preparation(
     prior_index = prior_indexes[0]
     prior_binding = base_bindings[prior_index]
     delta_binding = delta_bindings[0]
+    base_supplements = base_preparation.get("supplement_bindings", [])
+    if (
+        not isinstance(base_supplements, list)
+        or base_source.get("supplement_bindings", []) != base_supplements
+        or any(binding.get("job_index") != index for index, binding in enumerate(base_bindings))
+        or delta_binding.get("ingestion_job_id") in {
+            binding.get("ingestion_job_id") for binding in base_bindings
+        }
+    ):
+        raise ValueError("ingestion supplement existing authority binding is invalid")
+    base_failure_binding = base_preparation.get("bound_child_failure_binding")
     failure_binding = delta_preparation.get("bound_child_failure_binding")
+    if base_source.get("bound_child_failure_binding") not in (None, base_failure_binding):
+        raise ValueError("ingestion supplement base child failure binding is inconsistent")
+    if base_failure_binding is not None and failure_binding is not None:
+        raise ValueError("combining two child failure authorities is unsupported")
+    base_failure_bytes = None
+    base_failure_manifest = None
+    if base_failure_binding is not None:
+        base_failure_bytes = (
+            base_preparation_directory / "bound-child-failure-exclusions.json"
+        ).read_bytes()
+        base_failure_manifest = json.loads(base_failure_bytes)
+        if (
+            base_failure_binding.get("manifest_byte_sha256")
+            != "sha256:" + hashlib.sha256(base_failure_bytes).hexdigest()
+            or base_failure_manifest.get("ingestion_job_id")
+            != base_failure_binding.get("ingestion_job_id")
+            or base_failure_binding.get("ingestion_job_id") not in {
+                binding.get("ingestion_job_id") for binding in base_bindings
+            }
+        ):
+            raise ValueError("ingestion supplement base child failure binding is invalid")
     failure_bytes = None
     failure_manifest = None
     if bound_child_failure_manifest_path is not None:
@@ -1247,8 +1281,20 @@ def _compose_sidecar_supplement_preparation(
             raise ValueError("ingestion supplement completed job changed")
         return authority_value
 
-    prior_authority = authority(prior_binding)
+    prior_authority = authority(
+        prior_binding,
+        base_failure_manifest
+        if prior_job_id == (base_failure_binding or {}).get("ingestion_job_id")
+        else None,
+    )
     delta_authority = authority(delta_binding, failure_manifest)
+    prior_root_indexes = [
+        index for index, job in enumerate(base_source["jobs"])
+        if job.get("job_fingerprint") == prior_authority.job_fingerprint
+    ]
+    if len(prior_root_indexes) != 1:
+        raise ValueError("ingestion supplement prior root is invalid")
+    prior_root_index = prior_root_indexes[0]
     contract_bytes = {
         name: (supplement_contract_directory / name).read_bytes()
         for name in (
@@ -1331,7 +1377,7 @@ def _compose_sidecar_supplement_preparation(
         {**delta_binding, "job_index": final_job_index},
     ]
     final_jobs = [dict(item) for item in base_source["jobs"]]
-    prior_job = dict(final_jobs[prior_index])
+    prior_job = dict(final_jobs[prior_root_index])
     prior_job["supplements"] = [
         *prior_job.get("supplements", ()),
         {
@@ -1339,7 +1385,16 @@ def _compose_sidecar_supplement_preparation(
             "supplement_binding": supplement_binding,
         },
     ]
-    final_jobs[prior_index] = prior_job
+    final_jobs[prior_root_index] = prior_job
+    if [
+        item.get("job_fingerprint")
+        for job in final_jobs
+        for item in (job, *job.get("supplements", ()))
+    ] != [binding.get("job_fingerprint") for binding in final_store_bindings]:
+        raise ValueError("ingestion supplement cannot preserve existing authority order")
+    final_supplements = [*base_supplements, supplement_binding]
+    final_failure_binding = base_failure_binding or failure_binding
+    final_failure_bytes = base_failure_bytes if base_failure_binding is not None else failure_bytes
     source_authority_fingerprint = sha256_json(
         {
             "artifact_id": "formowl_completed_ingestion_job_authority_v1",
@@ -1480,7 +1535,8 @@ def _compose_sidecar_supplement_preparation(
             "capability_status": ("incomplete_base_recovered_supplement_indexed"),
             "exact_query_capability_complete": False,
             "supplement_table_cell_count_indexed": (
-                delta_preparation["observation_type_counts"].get(
+                base_exact.get("supplement_table_cell_count_indexed", 0)
+                + delta_preparation["observation_type_counts"].get(
                     "table_cell",
                     0,
                 )
@@ -1521,7 +1577,7 @@ def _compose_sidecar_supplement_preparation(
             "jobs": final_jobs,
             "source_authority_fingerprint": source_authority_fingerprint,
             "exact_lookup_manifest_sha256": exact_sha256,
-            "supplement_bindings": [supplement_binding],
+            "supplement_bindings": final_supplements,
             "extraction_coverage": {
                 **base_coverage,
                 "scope": "declared_completed_jobs_with_root_supplement_v1",
@@ -1531,6 +1587,8 @@ def _compose_sidecar_supplement_preparation(
                 "source_completeness_certified": False,
             },
         }
+        if final_failure_binding is not None:
+            source_binding["bound_child_failure_binding"] = final_failure_binding
         snapshot = {
             "bundles": [],
             "observation_references": final_references,
@@ -1557,8 +1615,8 @@ def _compose_sidecar_supplement_preparation(
             base_preparation_directory / "sidecar-parent-binding.json",
             temporary / "sidecar-parent-binding.json",
         )
-        if failure_bytes is not None:
-            (temporary / "bound-child-failure-exclusions.json").write_bytes(failure_bytes)
+        if final_failure_bytes is not None:
+            (temporary / "bound-child-failure-exclusions.json").write_bytes(final_failure_bytes)
         type_counts = dict(base_preparation["observation_type_counts"])
         for key, value in delta_preparation["observation_type_counts"].items():
             type_counts[key] = type_counts.get(key, 0) + value
@@ -1570,8 +1628,11 @@ def _compose_sidecar_supplement_preparation(
                 [binding["store_directory"], binding["ingestion_job_id"]]
                 for binding in final_store_bindings
             ],
-            "supplemental_jobs": delta_preparation["requested_jobs"],
-            "supplement_bindings": [supplement_binding],
+            "supplemental_jobs": [
+                *base_preparation.get("supplemental_jobs", ()),
+                *delta_preparation["requested_jobs"],
+            ],
+            "supplement_bindings": final_supplements,
             "snapshot_sha256": ("sha256:" + snapshot_digest.hexdigest()),
             "snapshot_size_bytes": snapshot_size,
             "exact_lookup_manifest_sha256": exact_sha256,
@@ -1580,7 +1641,7 @@ def _compose_sidecar_supplement_preparation(
             "observation_type_counts": type_counts,
             "job_count": 2,
             "job_authority_count": len(final_store_bindings),
-            "bound_child_failure_binding": failure_binding,
+            "bound_child_failure_binding": final_failure_binding,
             "embedding_status": "not_started_operator_boundary",
         }
         preparation_path = temporary / "preparation.json"
@@ -2826,6 +2887,10 @@ def main() -> int:
     parser.add_argument("--pause-before-graph-file", type=Path)
     parser.add_argument("--ingestion-revision", type=Path)
     parser.add_argument("--ingestion-revision-sha256")
+    parser.add_argument("--reviewed-annotations", type=Path)
+    parser.add_argument("--reviewed-annotations-sha256")
+    parser.add_argument("--reviewed-headers", type=Path)
+    parser.add_argument("--reviewed-headers-sha256")
     parser.add_argument("--ingestion-projection-postgres-config", type=Path)
     parser.add_argument(
         "--seed-dense-cache-from",
@@ -2994,6 +3059,14 @@ def main() -> int:
         parser.error("ingestion revision path and sha256 must be supplied together")
     if args.ingestion_revision and not args.temporary_lan_diagnostic:
         parser.error("ingestion revision activation is temporary-LAN diagnostic only")
+    if bool(args.reviewed_annotations) != bool(args.reviewed_annotations_sha256):
+        parser.error("reviewed annotations path and sha256 must be supplied together")
+    if args.reviewed_annotations and (not args.temporary_lan_diagnostic or not args.ingestion_revision):
+        parser.error("reviewed annotations require a temporary-LAN ingestion revision")
+    if bool(args.reviewed_headers) != bool(args.reviewed_headers_sha256):
+        parser.error("reviewed headers path and sha256 must be supplied together")
+    if args.reviewed_headers and (not args.temporary_lan_diagnostic or not args.ingestion_revision):
+        parser.error("reviewed headers require a temporary-LAN ingestion revision")
     if args.temporary_access_code is not None and not args.temporary_lan_diagnostic:
         parser.error("--temporary-access-code is temporary-LAN-only")
     if bool(args.behavior_log) != args.record_raw_uat_interactions:
@@ -3039,6 +3112,7 @@ def main() -> int:
             api_key=provider_api_key,
             model=_MODEL,
             stream_initial_requests=True,
+            typed_evidence_notes=True,
         )
     if args.temporary_lan_diagnostic:
         ingestion_revision = None
@@ -3056,6 +3130,18 @@ def main() -> int:
                     else None
                 ),
             )
+            if args.reviewed_headers is not None:
+                from formowl_mail.issue56_sealed_source import bind_issue56_reviewed_headers
+
+                ingestion_revision = bind_issue56_reviewed_headers(ingestion_revision,
+                    configuration_path=args.reviewed_headers,
+                    expected_sha256=args.reviewed_headers_sha256)
+            if args.reviewed_annotations is not None:
+                from formowl_mail.issue56_sealed_source import bind_issue56_reviewed_annotations
+
+                ingestion_revision = bind_issue56_reviewed_annotations(ingestion_revision,
+                    configuration_path=args.reviewed_annotations,
+                    expected_sha256=args.reviewed_annotations_sha256)
         print(
             f"Temporary LAN diagnostic: http://{args.host}:{args.port}/",
             flush=True,
@@ -3080,6 +3166,7 @@ def main() -> int:
                     record_raw_uat_interactions=args.record_raw_uat_interactions,
                     temporary_access_enabled=args.temporary_access_code is not None,
                     provider_base_url=runtime_paths.provider_base_url,
+                    typed_evidence_notes=True,
                 ) if args.diagnostic_deployment_manifest is not None else None
             ),
         )

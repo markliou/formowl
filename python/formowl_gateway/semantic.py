@@ -428,9 +428,22 @@ class SemanticMcpGateway:
             handler_payload=self.preview_handler(input_data),
         )
 
+    @staticmethod
+    def _check_native_locator(input_data: Mapping[str, Any], handler: Any) -> None:
+        contract = input_data.get("request_contract")
+        if not isinstance(contract, Mapping) or "native_locator" not in contract:
+            return
+        from formowl_mail.semantic_plan import supports_native_attachment_page, validate_semantic_request_contract
+        validate_semantic_request_contract(contract)
+        if (not supports_native_attachment_page(getattr(handler, "authorized_capability_summary", None))
+                or any(input_data.get(key) is not None for key in (
+                    "table_query", "exact_inventory_kind", "exact_field", "cursor"))):
+            raise ContractValidationError("native attachment page is unsupported by this handler")
+
     def _query_effective_graph(self, input_data: dict[str, Any]) -> dict[str, Any]:
         if self.retrieval_handler is None:
             return _handler_not_configured("query_effective_graph_view")
+        self._check_native_locator(input_data, self.retrieval_handler)
         return _safe_handler_envelope(
             result_type="effective_graph_query",
             handler_payload=self.retrieval_handler(input_data),
@@ -439,6 +452,7 @@ class SemanticMcpGateway:
     def _query_mail_evidence(self, input_data: dict[str, Any]) -> dict[str, Any]:
         if self.mail_evidence_handler is None:
             return _handler_not_configured("query_mail_evidence")
+        self._check_native_locator(input_data, self.mail_evidence_handler)
         return _safe_handler_envelope(
             result_type="mail_evidence_query",
             handler_payload=self.mail_evidence_handler(input_data),

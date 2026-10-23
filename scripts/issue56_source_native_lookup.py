@@ -13,6 +13,7 @@ from itertools import islice
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -268,13 +269,30 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
                         with base._connection_lock:
                             if seeding:
                                 retained = _seed_prefix(base, seed_revision.source_records, records, seed_job_prefix_count)
-                            base._connection.backup(connection)
+                            base_counts = dict(base.manifest["counts"])
+                            append_only_seed = seeding and retained == base_counts["references"]
+                            if append_only_seed:
+                                # Prefix validation and the immutable source/hash proof
+                                # complete before copying; avoid SQLite backup's full
+                                # page read/write path when there is no old suffix.
+                                if (base_state != _sealed_lookup_state(base_lookup_directory)
+                                        or _file_sha256(base_lookup_directory / "source-lookup.sqlite")
+                                        != base.manifest["sqlite_sha256"]):
+                                    raise ContractValidationError("source seed lookup changed during copy")
+                                connection.close()
+                                sqlite_path.unlink()
+                                shutil.copyfile(base_lookup_directory / "source-lookup.sqlite", sqlite_path)
+                                shutil.copymode(base_lookup_directory / "source-lookup.sqlite", sqlite_path)
+                                connection = sqlite3.connect(sqlite_path)
+                            else:
+                                base._connection.backup(connection)
                         counts = dict(base.manifest["counts"])
                         if not seeding and counts.get("references") != len(references):
                             raise ContractValidationError("source lexical clone reference count mismatch")
                         base_fingerprint = base.manifest["manifest_fingerprint"]
                         if seeding and (base_state != _sealed_lookup_state(base_lookup_directory)
-                                or _file_sha256(base_lookup_directory / "source-lookup.sqlite") != base.manifest["sqlite_sha256"]):
+                                or _file_sha256(base_lookup_directory / "source-lookup.sqlite") != base.manifest["sqlite_sha256"]
+                                or append_only_seed and _file_sha256(sqlite_path) != base.manifest["sqlite_sha256"]):
                             raise ContractValidationError("source seed lookup changed during copy")
                     finally:
                         base.close()
@@ -286,7 +304,11 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
                         seed_revision = None
                     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS helpers_observation_id ON helpers(observation_id)")
                     connection.execute("CREATE TABLE IF NOT EXISTS attachment_parents (child_asset_id TEXT PRIMARY KEY, observation_hash TEXT NOT NULL UNIQUE)")
-                    if seeding:
+                    if seeding and retained == counts["references"]:
+                        # _seed_prefix validated every old row/count before the
+                        # unchanged-base backup: there is no old suffix to drop.
+                        counts["references"] = len(references)
+                    elif seeding:
                         # Delete on the private copy only. Never retain postings
                         # or native locators belonging to the replaced delta.
                         for table in ("postings", "attachment_parents", "occurrence_helpers"):

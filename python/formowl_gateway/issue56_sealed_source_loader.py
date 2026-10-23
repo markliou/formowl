@@ -7,7 +7,9 @@ gateway contract.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from email.headerregistry import HeaderRegistry
 import hashlib
@@ -44,12 +46,15 @@ from formowl_mail.exact import (
     normalize_source_occurrence_structured_surface,
 )
 from formowl_mail.issue56_sealed_source import (
+    reviewed_header_binding_key,
     APPROVER_ACTOR,
     ARTIFACT_ID as SEALED_SOURCE_LOAD_ARTIFACT_ID,
     IDENTITY_SCOPE_MODE,
     SOURCE_GRAPH_POLICY_ID,
     WORKSPACE_ID,
     _authorized_mail_selector_for_asset,
+    _attachment_mail_parent_link,
+    _validate_attachment_mail_parent,
     Issue56IngestionRevision,
     load_issue56_sealed_source,
 )
@@ -90,7 +95,10 @@ from formowl_mail.semantic_plan import (
     validate_semantic_request_contract,
 )
 from formowl_retrieval.gateway import (
-    _SOURCE_EVIDENCE_DEADLINE,
+    _SOURCE_PHASE_TRACE, _trace, _source_trace_phase,
+    _SOURCE_EVIDENCE_DEADLINE, _SOURCE_TERM_PLACEMENT, _SOURCE_OCCURRENCE_PAIR,
+    _SourceEvidenceDeadlineExceeded,
+    source_evidence_query_terms_scope,
     SOURCE_EVIDENCE_OBSERVATION_LIMIT,
     SOURCE_EVIDENCE_TIME_BUDGET_MS,
     check_source_evidence_deadline,
@@ -111,14 +119,14 @@ from .issue56_diagnostic import (
     Issue56SealedSourceDiagnosticInput,
     build_issue56_sealed_source_diagnostic_input,
 )
+from .semantic import validate_public_gateway_payload
 
 
 # Part identifiers are labelled differently across the authorized mail tables.
 # Keep the exact lookup bounded to source-declared identifier columns while
 # accepting the common English and Chinese labels used by the production
-# spreadsheets and embedded tables.  Restricting this to a small alias set is
-# important: the native row still has to verify the identifier and projection
-# never treats a guessed column as evidence.
+# spreadsheets and embedded tables.  The native row still verifies the
+# identifier before any evidence is projected.
 _PART_IDENTIFIER_FIELD_ALIASES = frozenset(
     {
         "customer pn",
@@ -154,7 +162,6 @@ def _part_identifier_schema_fields(schema_fields: Sequence[str]) -> tuple[str, .
         if normalize_source_occurrence_structured_surface(field)
         in _PART_IDENTIFIER_FIELD_ALIASES
     )
-from .semantic import validate_public_gateway_payload
 
 
 LOADER_SPEC: Final[str] = (
@@ -914,6 +921,12 @@ def _source_start_capabilities(revision: Issue56IngestionRevision) -> dict[str, 
         item.pop("source_provided_occurrence_count", None)
         item.pop("candidate_only_occurrence_count", None)
         item["coverage_status"] = "incomplete"
+    # Usable native labels precede redacted native labels and other fields.
+    # Retain manifest order within each class and all field safety flags.
+    fields.sort(key=lambda item: (
+        item["structure_status"] != "source_provided",
+        item["structure_status"] == "source_provided" and item["label_redacted"],
+    ))
     structured_supported = any(item["structure_status"] == "source_provided" and not item["label_redacted"] for item in fields)
     core.update({
         "projection_fields": fields[:128],
@@ -922,6 +935,7 @@ def _source_start_capabilities(revision: Issue56IngestionRevision) -> dict[str, 
         "listing_status": "truncated" if len(fields) > 128 else "complete",
         "providers": providers,
         "query_contract": {
+            "native_locator_kinds": ["attachment_page"] if "mail" in families else [],
             "structured_table_query_supported": structured_supported,
             "projection_labels_must_match_authorized_fields": True,
             "candidate_only_is_deterministic_exact": False,
@@ -959,6 +973,34 @@ def _source_start_capabilities(revision: Issue56IngestionRevision) -> dict[str, 
     return result
 
 
+# Source-start UAT hydrates source records plus their governed parent context.
+# This caller-owned budget does not change the shared 500ms recovery default,
+# turn deadline, read/item/byte caps, source scope or completeness claims.
+SOURCE_START_EVIDENCE_TIME_BUDGET_MS: Final[int] = 2_000
+
+
+def _exact_column_applicable(revision: Any, item: Mapping[str, Any]) -> bool:
+    """SPEC §7.5: source-provided or reviewed-header label-level exact column."""
+    return item["structure_status"] == "source_provided" or (
+        item["structure_status"] == "candidate_only"
+        and item["column_hash"] in getattr(revision, "reviewed_header_column_hashes", frozenset())
+    )
+
+
+def _effective_cell_structure_status(revision: Any, cell: Observation, row_structure: Mapping[str, Any]) -> str:
+    """Upgrade one candidate data-row cell only when its own table header is approved."""
+    status = ((cell.payload or {}).get("table_structure") or {}).get("structure_status", "unavailable")
+    approved = getattr(revision, "reviewed_header_bindings", frozenset())
+    if (
+        status == "candidate_only" and approved
+        and row_structure.get("structure_status") == "candidate_only"
+        and row_structure.get("row_role") == "data_candidate"
+        and reviewed_header_binding_key(cell) in approved
+    ):
+        return "reviewed_header"
+    return status
+
+
 def _execute_source_start_table(
     revision: Issue56IngestionRevision, *, lookup: _IngestionExactCellLookup | None,
     arguments: Mapping[str, Any], request_contract: Mapping[str, Any],
@@ -977,7 +1019,7 @@ def _execute_source_start_table(
         raise ContractValidationError("source-start evidence limit is invalid")
     if arguments.get("cursor") is not None or arguments.get("exact_inventory_kind") is not None:
         raise ContractValidationError("source-start complete inventory is unavailable")
-    deadline = time.monotonic() + SOURCE_EVIDENCE_TIME_BUDGET_MS / 1000
+    deadline = time.monotonic() + SOURCE_START_EVIDENCE_TIME_BUDGET_MS / 1000
     if source_budget is not None:
         deadline = min(deadline, source_budget["deadline"])
     inherited_deadline = _SOURCE_EVIDENCE_DEADLINE.get()
@@ -1003,7 +1045,7 @@ def _execute_source_start_table(
         return clarification()
     fields = [item for item in lookup._columns
               if ("mail" if item["inline_table"] else "attachment_table") in families
-              and item["structure_status"] == "source_provided"]
+              and _exact_column_applicable(revision, item)]
     available = {normalize_source_occurrence_structured_surface(item["field"]): item["field"] for item in fields}
     if table_query is not None:
         if (not isinstance(table_query, Mapping) or set(table_query) != {"filters", "projection_fields"}
@@ -1038,13 +1080,61 @@ def _execute_source_start_table(
     if table_query and any(normalize_source_occurrence_structured_surface(field) not in normalized_projections for field in requested):
         return clarification()
 
+    # A prefixed identifier may bind to a native numeric cell only when an
+    # authorized source schema supplies the same type prefix in its field label.
+    # The native value is kept exactly, including leading zeroes.  This is a
+    # schema binding, never a general prefix-stripping alias.
+    effective_required_terms = required_terms
+    if identifier_terms:
+        schema_fields = tuple(item["field"] for item in fields)
+        typed_bindings = bind_typed_identifier_to_source_schema(
+            identifier_terms[0], schema_fields,
+        )
+        normalized_binding_fields = {
+            normalize_source_occurrence_structured_surface(field)
+            for field, _ in typed_bindings
+        }
+        if len(normalized_binding_fields) > 1:
+            return clarification()
+        if typed_bindings:
+            bound_field, bound_value = typed_bindings[0]
+            bound_field_normalized = normalize_source_occurrence_structured_surface(bound_field)
+            if table_query is None:
+                table_query = {
+                    "filters": [{"field": bound_field, "value": bound_value}],
+                    "projection_fields": list(labels),
+                }
+                effective_required_terms = tuple(
+                    term for term in required_terms
+                    if normalize_source_occurrence_structured_surface(term)
+                    != normalize_source_occurrence_structured_surface(identifier_terms[0])
+                )
+            else:
+                matching_filters = [
+                    item for item in table_query["filters"]
+                    if normalize_source_occurrence_structured_surface(item["field"])
+                    == bound_field_normalized
+                    and normalize_source_occurrence_structured_surface(item["value"])
+                    == normalize_source_occurrence_structured_surface(bound_value)
+                ]
+                if matching_filters:
+                    effective_required_terms = tuple(
+                        term for term in required_terms
+                        if normalize_source_occurrence_structured_surface(term)
+                        != normalize_source_occurrence_structured_surface(identifier_terms[0])
+                    )
+
     def collect(group: tuple[Observation, ...]) -> None:
         native.update((item.observation_id, item) for item in group)
 
     scan = lookup.scan_source_rows(
         # The identifier selects the exact predicate, not permission to drop
         # other validated content constraints from the same native row.
-        required_terms=tuple(dict.fromkeys((*identifier_terms, *required_terms))) if table_query is None else (),
+        required_terms=(
+            tuple(dict.fromkeys((*identifier_terms, *required_terms)))
+            if table_query is None
+            else effective_required_terms
+        ),
         query_text=arguments["query_text"], source_families=families,
         mail_import_session_id=selector, max_observations=SOURCE_EVIDENCE_OBSERVATION_LIMIT,
         deadline_monotonic=deadline, evidence_by_id=evidence_by_id,
@@ -1194,6 +1284,517 @@ def _execute_source_start_table(
     return payload
 
 
+def _request_term_placement(arguments, *, mail_tool=False):
+    binding = _SOURCE_TERM_PLACEMENT.get()
+    if binding is None:
+        return None  # Public callers retain the strict legacy AND.
+    from formowl_mail.human_uat_orchestrator import _RequiredTermPlacement
+
+    placement, wire_hash = binding
+    contract = arguments.get("request_contract")
+    public_arguments = {key: value for key, value in arguments.items()
+                        if key not in {"requester_user_id", "workspace_id", "session_id"}}
+    terms = arguments.get("required_terms")
+    if (not isinstance(placement, _RequiredTermPlacement)
+            or sha256_json({"name": "query_mail_evidence" if mail_tool else "query_effective_graph_view",
+                            "arguments": public_arguments}) != wire_hash
+            or not isinstance(contract, Mapping)
+            or contract.get("original_query_hash") != placement.original_query_hash
+            or sha256_json(contract) != placement.request_contract_fingerprint
+            or contract.get("query_class") != "evidence_lookup"
+            or contract.get("source_family_scope") != ["mail"]
+            or not isinstance(terms, list)
+            or tuple(sorted(unicodedata.normalize("NFKC", term.strip()).casefold()
+                            for term in terms if isinstance(term, str))) != placement.required_terms
+            or not placement.child_terms or placement.context_term not in placement.required_terms
+            or placement.surface not in {"mail_occurrence_context", "mail_subject"}
+            or placement.predicate not in {"literal_contains", "normalized_literal_equals"}
+            or (placement.predicate == "normalized_literal_equals" and placement.surface != "mail_subject")
+            or any(arguments.get(key) is not None for key in (
+                "table_query", "exact_inventory_kind", "exact_field", "cursor",
+            ))):
+        raise ContractValidationError("source occurrence placement request binding is invalid")
+    return placement
+
+
+def _placement_initial_context(query_agent):
+    """Withhold unproved content, retaining execution/coverage diagnostics."""
+    context = dict(query_agent["context_bundle"])
+    context.update(citation_hashes=[], lineage_fingerprints=[], successful_subqueries=[
+        {**entry, "evidence": [], "exact_items": []}
+        for entry in context.get("successful_subqueries", ())
+    ])
+    context.pop("bundle_fingerprint", None)
+    context["bundle_fingerprint"] = sha256_json(context)
+    return {**query_agent, "context_bundle": context,
+            "warnings": list(dict.fromkeys((*query_agent.get("warnings", ()), "occurrence_placement_unverified")))}
+
+
+def _placement_mail_group(placement, observation, scope_id, item, *, source, protected_terms, tokenizer):
+    """All predicates on one guarded pair and the actual visible projection."""
+    pair = _SOURCE_OCCURRENCE_PAIR.get()
+    if pair is None or pair[0] is not observation:
+        return None
+    _, parent, full_key = pair
+    if (observation.observation_type != "email_body_segment" or observation.modality != "mail"
+            or _attachment_mail_parent_link(observation) is not None
+            or full_key[1:] != (observation.extractor_run_id, observation.asset_id,
+                               scope_id, observation.location.get("message_occurrence_id"))):
+        return None
+    # Reuse the existing provenance, permission, fingerprint and whole-pair
+    # projection boundary. The job component is supplied only by guarded reader.
+    grouped = _mail_header_context(observation, item, parent, source=source, scope_id=scope_id)
+    header = grouped.get("_mail_parent_header")
+    if not isinstance(header, Mapping) or grouped.get("content_redacted") or header.get("content_redacted"):
+        return None
+    def normalize(value):
+        return unicodedata.normalize("NFKC", value).casefold()
+    body = observation.text or ""
+    if not all(term in normalize(body) and term in normalize(grouped.get("snippet", ""))
+               for term in placement.child_terms):
+        return None
+    context_identifiers = {span.exact_token for span in tokenizer.analyze(placement.context_term).protected_identifiers}
+    child_identifiers = {span.exact_token for span in tokenizer.analyze(" ".join(placement.child_terms)).protected_identifiers}
+    if not ((protected_terms - context_identifiers) | child_identifiers).issubset(
+        set(tokenizer.analyze(body).tokens)
+    ):
+        return None
+    fields = [value for key in ("subject", "sent_at")
+              if isinstance(value := (parent.payload or {}).get(key), str)]
+    if placement.surface == "mail_subject":
+        fields = [(parent.payload or {}).get("subject", "")]
+    else:
+        fields.append(body)
+    term = placement.context_term
+    matches = any((normalize(value) == term if placement.predicate == "normalized_literal_equals"
+                   else term in normalize(value)) for value in fields if isinstance(value, str))
+    if not matches or not any(term in normalize(value) for value in (
+        grouped.get("snippet", ""), header.get("snippet", ""),
+    )):
+        return None
+    return grouped
+
+
+def _closed_placement_mail_handler(handler):
+    # Legacy mail bundle/revision paths cannot attest the new private pair.
+    def guarded(arguments):
+        if "native_locator" in (arguments.get("request_contract") or {}):
+            raise ContractValidationError("native attachment page requires source-start handler")
+        placement = _request_term_placement(arguments, mail_tool=True)
+        result = handler(arguments)  # Existing validation/errors keep precedence.
+        if placement is None:
+            return result
+        result = {**result, "evidence_snippets": [], "citations": [],
+                  "warnings": list(dict.fromkeys((*result.get("warnings", ()), "occurrence_placement_unverified")))}
+        if "evidence" in result:
+            result["evidence"] = []
+        if result.get("status") not in {"error", "failed", "permission_denied"}:
+            result["status"] = "pending_review"
+        if isinstance(result.get("query_agent"), Mapping):
+            result["query_agent"] = _placement_initial_context(result["query_agent"])
+        coverage = result.get("requested_field_coverage")
+        if isinstance(coverage, Mapping):
+            coverage = {**coverage, "supported_fields": [], "missing_fields": coverage["requested_fields"],
+                        "evidence_citation_hashes": [], "status": "incomplete", "absence_claim": False}
+            coverage.pop("coverage_fingerprint", None)
+            coverage["coverage_fingerprint"] = sha256_json(coverage)
+            result["requested_field_coverage"] = coverage
+        return result
+    guarded.__dict__.update(handler.__dict__)
+    return guarded
+
+
+def _mail_header_context(observation, item, parent, *, source, scope_id, attachment_parent=None):
+    """Project already-read outer headers, never infer them from quoted bodies."""
+    attachment_context = {}
+    if attachment_parent is not None:
+        # Validate child -> attachment separately from attachment -> outer mail.
+        # Child document asset/run coordinates are deliberately not mail keys.
+        _attachment_child_lineages({
+            observation.observation_id: observation,
+            attachment_parent.observation_id: attachment_parent,
+        })[observation.observation_id]
+        attachment_context = {
+            "parent_attachment_observation_id": attachment_parent.observation_id,
+            "parent_attachment_observation_hash": sha256_json(attachment_parent.to_dict()),
+        }
+        item = {**item, "source_context": {
+            "relationship": "attachment_parent", **attachment_context,
+            "outer_header_status": "not_present_in_current_context",
+        }}
+        observation = attachment_parent
+    else:
+        if observation.observation_type != "email_body_segment":
+            return item
+        item = {**item, "snippet": "[mail body; quoted headers are not outer message headers] " + item["snippet"]}
+    if parent is None:
+        return item
+    explicit_link = _attachment_mail_parent_link(observation)
+    if explicit_link is not None:
+        _validate_attachment_mail_parent(observation, parent)
+    if (
+        parent.observation_type != "email_message" or parent.modality != "mail"
+        or parent.asset_id != observation.asset_id
+        or parent.extractor_run_id != (
+            explicit_link["parent_extractor_run_id"] if explicit_link else observation.extractor_run_id
+        )
+        or parent.location.get("message_occurrence_id") != observation.location.get("message_occurrence_id")
+        or to_plain(parent.permission_scope) != to_plain(observation.permission_scope)
+        or not authorized_permission_scope_matches(
+            parent.permission_scope, authorized_source=source,
+            source_kind=AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND,
+        )
+        or not isinstance((parent.payload or {}).get("message_fingerprint"), str)
+        or (observation.payload or {}).get("message_fingerprint") not in {
+            None, parent.payload["message_fingerprint"],
+        }
+    ):
+        raise ContractValidationError("mail outer header parent binding is invalid")
+    fields = {key: value for key in ("subject", "sent_at")
+              if isinstance(value := (parent.payload or {}).get(key), str) and value.strip()}
+    if not fields:
+        return item
+    parent_hash = sha256_json(parent.to_dict())
+    lineage = source_occurrence_lineage_from_observation(parent, authorized_source=source)
+    header = {
+        **{key: item[key] for key in ("email_message_id", "message_occurrence_id",
+                                    "mail_import_session_id", "revision_binding") if key in item},
+        "source_type": "mail_message", "source_observation_id": parent.observation_id,
+        "message_occurrence_id": parent.location["message_occurrence_id"],
+        "email_message_id": stable_resource_contract_id(
+            "emailmsg", "EmailMessage", {"message_fingerprint": parent.payload["message_fingerprint"]},
+        ),
+        "citation_hash": parent_hash, "source_observation_hash": parent_hash,
+        "occurrence_lineage_fingerprint": lineage.lineage_fingerprint,
+        "source_scope_fingerprint": sha256_json(scope_id),
+        "snippet": "[outer message headers; same occurrence]\n" + "\n".join(
+            f"{key}: {value}" for key, value in fields.items()
+        ),
+        "source_context": {"relationship": "outer_message_header",
+                           "anchor_citation_hash": item["citation_hash"], **attachment_context},
+    }
+    if attachment_context:
+        item = {**item, "source_context": {**item["source_context"], "outer_header_status": "present"}}
+    # This private staging member is expanded only with its admitted body. Both
+    # source records retain their own hashes and consume the existing item cap.
+    return {**item, "_mail_parent_header": _safe_snippet(header)}
+
+
+def _bounded_mail_header_groups(items, *, limit, byte_limit=16 * 1024):
+    if not any("_mail_parent_header" in item for item in items):
+        return list(items), False
+    evidence, seen, truncated = [], set(), False
+    for item in items:
+        body = {key: value for key, value in item.items() if key != "_mail_parent_header"}
+        header = item.get("_mail_parent_header")
+        if header is not None:
+            body["mail_header_citation_hash"] = header["citation_hash"]
+        group = [body] + ([header] if header is not None else [])
+        group = [record for record in group if record["citation_hash"] not in seen]
+        candidate = [
+            header if header is not None and record["citation_hash"] == header["citation_hash"] else record
+            for record in evidence
+        ] + group
+        if len(candidate) > limit or len(json.dumps(candidate, ensure_ascii=False).encode("utf-8")) > byte_limit:
+            truncated = True
+            continue
+        evidence = candidate
+        seen.update(record["citation_hash"] for record in group)
+    return evidence, truncated
+
+
+def _ordinary_presentation_unit(item):
+    """Only independent text and plain mail's own header; no native/neighbor chain."""
+    context = item.get("source_context", {})
+    if context.get("annotation_pin"):
+        context = {key: value for key, value in context.items()
+                   if key not in {"annotation_pin", "candidate_ids", "exact_field_proof"}}
+    if context and (context.get("relationship") != "outer_message_header"
+                    or any(key.startswith("parent_attachment") for key in context)):
+        return False
+    if (item.get("source_type") not in {"mail_body_segment", "mail_message", "mail_header"}
+            and item.get("document_locator", {}).get("block_type") not in {"heading", "paragraph"}):
+        return False
+    header = item.get("_mail_parent_header")
+    return not any(key in item for key in ("table_locator", "structured_values")) and (
+        header is None or _ordinary_presentation_unit(header)
+    )
+
+
+def _soft_unit_utility(hits):
+    # Field/token relevance is NOT validated field support.
+    return len({field for field, _ in hits}), len(hits)
+
+
+def _admit_source_model_envelope(payload, *, staged_items, limit, deadline, deferred_items=(),
+                                 selection_hits=None, overflow_hashes=()):
+    """Re-admit cached validated units against the unchanged complete presentation."""
+    trace = _SOURCE_PHASE_TRACE.get()
+    envelope_cell = _trace(trace, "phase", "envelope", before=len(payload.get("evidence_snippets", payload.get("evidence", ()))))
+
+    def observed(result):
+        _trace(envelope_cell, "finish", after=len(result.get("evidence_snippets", result.get("evidence", ()))))
+        return result
+
+    if deferred_items:
+        agent = payload.get("query_agent", {})
+        recovery = agent.get("context_bundle", {}).get("source_recovery", {})
+        # Only the new cached suffix is gated here; no-cache compaction is legacy.
+        # Invalid source/drain exceptions never return to this presentation path.
+        for metadata in (payload, agent, recovery):
+            if (metadata.get("status") in {"error", "failed", "permission_denied", "mcp_failed", "mcp_unavailable", "provider_unavailable"}
+                    or any(metadata.get(key) not in (None, "") for key in ("failure_reason", "reason_code"))
+                    or metadata.get("stop_reason") == "provider_error"):
+                return observed(payload)
+    if (payload.get("deterministic_exact") or payload.get("exact_result") is not None
+            or "exact_inventory" in payload
+            or payload.get("query_agent", {}).get("request_contract", {}).get("query_class") == "exact_set_or_inventory"
+            or time.monotonic() >= deadline):
+        return observed(payload)
+    from formowl_mail.human_uat_orchestrator import compact_evidence_for_model, evidence_citation_ids
+
+    content_key = "evidence_snippets" if "evidence_snippets" in payload else "evidence"
+
+    def fits(value, diagnostic=None):
+        records = value.get(content_key, ())
+        citations = {item["citation_hash"] for item in records}
+        required = {item["mail_header_citation_hash"] for item in records if item.get("mail_header_citation_hash")}
+        required.update(item["source_context"]["anchor_citation_hash"] for item in records
+                        if item.get("source_context", {}).get("anchor_citation_hash"))
+        compact = compact_evidence_for_model(value, diagnostic=diagnostic)
+        if len(records) > limit or not required.issubset(citations):
+            return False
+        return (set(evidence_citation_ids(compact)) == citations
+                and (content_key != "evidence" or
+                     Counter(json.dumps(item, sort_keys=True) for item in compact.get("evidence", ()))
+                     == Counter(json.dumps(item, sort_keys=True) for item in records)))
+
+    diagnostic = {}
+    payload_fits = fits(payload, diagnostic)
+    overflow = set(overflow_hashes)
+    reselect = bool(overflow and selection_hits
+                    and all(item["citation_hash"] in selection_hits for item in (*staged_items, *deferred_items))
+                    and all(
+        _ordinary_presentation_unit(item)
+        for item in (*staged_items, *deferred_items, *payload.get(content_key, ()))
+    ))
+    # Overflow-only units must never slip into the legacy append-only suffix.
+    cached_candidates = deferred_items
+    deferred_items = tuple(item for item in deferred_items if item["citation_hash"] not in overflow)
+    if payload_fits and not deferred_items and not reselect:
+        return observed(payload)
+    # Selection repairs only a proved full-envelope byte loss, not existing
+    # representation filtering or a harmless regrouping of unchanged records.
+    byte_loss = bool(diagnostic.get("reason_counts", {}).get("group_byte_budget"))
+    if not payload_fits and not byte_loss:
+        return observed(payload)
+
+    def compose(evidence, *, truncated=True):
+        # Copy only containers we update; immutable evidence/provenance and
+        # unknown coverage metadata are neither recopied nor modified.
+        result = dict(payload)
+        result[content_key] = evidence
+        citations = sorted(item["citation_hash"] for item in evidence)
+        lineages = sorted(item["occurrence_lineage_fingerprint"] for item in evidence)
+        result["citations"] = ([_citation_for_snippet(item) for item in evidence]
+                               if content_key == "evidence_snippets" else citations)
+        result["status"] = "partial" if evidence else "pending_review"
+        if truncated:
+            result["presentation_truncated"] = True
+        if truncated and "warnings" in result:
+            result["warnings"] = sorted(set((*result["warnings"], "context_limit")))
+        agent = dict(result.get("query_agent", {}))
+        if "query_agent" in result:
+            result["query_agent"] = agent
+        contract = agent.get("request_contract", {})
+        fields = contract.get("requested_fields", result.get("requested_field_coverage", {}).get("requested_fields", ()))
+        supported = source_evidence_supported_requested_fields(
+            fields, exact_result=None, answer_citation_hashes=tuple(citations),
+            verified_citation_lineages=tuple((item["citation_hash"], item["occurrence_lineage_fingerprint"])
+                                            for item in evidence),
+        )
+        missing = [field for field in fields if field not in supported]
+        field_coverage = result.get("requested_field_coverage")
+        if isinstance(field_coverage, dict):
+            field_coverage = result["requested_field_coverage"] = dict(field_coverage)
+            field_coverage.update(supported_fields=list(supported), missing_fields=missing,
+                                  evidence_citation_hashes=citations,
+                                  status="incomplete" if missing else "verified")
+            field_coverage.pop("coverage_fingerprint", None)
+            field_coverage["coverage_fingerprint"] = sha256_json(field_coverage)
+        context = agent.get("context_bundle")
+        if isinstance(context, dict):
+            context = agent["context_bundle"] = dict(context)
+            if truncated:
+                agent["warnings"] = sorted(set((*agent.get("warnings", ()), "context_limit")))
+            context.update(citation_hashes=citations, lineage_fingerprints=lineages,
+                           missing_field_hashes=[sha256_json(field) for field in missing])
+            recovery = context.get("source_recovery")
+            if isinstance(recovery, dict):
+                recovery = context["source_recovery"] = dict(recovery)
+                recovery.update(evidence=evidence, citation_hashes=citations,
+                                lineage_fingerprints=lineages)
+                if truncated:
+                    recovery["warnings"] = sorted(set((*recovery.get("warnings", ()), "context_limit")))
+                recovery.pop("recovery_fingerprint", None)
+                recovery["recovery_fingerprint"] = sha256_json(recovery)
+            context.pop("bundle_fingerprint", None)
+            context["bundle_fingerprint"] = sha256_json(context)
+            if isinstance(result.get("answer"), dict):
+                result["answer"] = dict(result["answer"])
+                result["answer"].update(status=result["status"], citation_count=len(citations),
+                                        answer_hash=sha256_json(recovery))
+                if not evidence:
+                    result["answer"]["text"] = ""
+        if "redaction_counts" in result:
+            result["redaction_counts"] = dict(result["redaction_counts"])
+            result["redaction_counts"]["redacted_value_count"] = sum(
+                item.get("content_redacted") is True for item in evidence
+            )
+        return result
+
+    selected = payload
+    if not payload_fits:
+        admitted = []
+        selected = compose([])
+        # Every trial includes the real final limitation metadata. A later rejection
+        # cannot grow that metadata and evict an earlier accepted complete unit.
+        # Staging has the existing 128-item source bound. Rejected candidates do
+        # not consume published slots or prevent later independent units fitting.
+        for item in staged_items[:128]:
+            if time.monotonic() >= deadline:
+                break
+            records, truncated = _bounded_mail_header_groups([*admitted, item], limit=limit)
+            if truncated:
+                continue
+            candidate = compose(records)
+            accepted = fits(candidate)
+            if time.monotonic() >= deadline:
+                break
+            if accepted:
+                admitted.append(item)
+                selected = candidate
+    if reselect:
+        pool, seen_candidates = [], set()
+        for item in (*staged_items, *cached_candidates):
+            if item["citation_hash"] not in seen_candidates and len(pool) < 128:
+                pool.append(item)
+                seen_candidates.add(item["citation_hash"])
+        chosen, covered = [], set()
+        proposal = compose([])
+        while pool and time.monotonic() < deadline:
+            # Stable max: staged order first, then stable reservoir order.
+            best = max(range(len(pool)), key=lambda index: _soft_unit_utility(
+                selection_hits.get(pool[index]["citation_hash"], set()) - covered,
+            ))
+            item = pool.pop(best)
+            records, truncated = _bounded_mail_header_groups([*chosen, item], limit=limit)
+            if truncated:
+                continue
+            trial = compose(records)
+            if fits(trial) and time.monotonic() < deadline:
+                chosen.append(item)
+                covered.update(selection_hits.get(item["citation_hash"], ()))
+                proposal = trial
+        old_hits = set().union(*(selection_hits.get(item["citation_hash"], set())
+                                for item in selected.get(content_key, ())))
+        if time.monotonic() < deadline and _soft_unit_utility(covered) > _soft_unit_utility(old_hits):
+            return observed(proposal)
+    # Only the caller can supply same-turn, pre-deadline validated cache units.
+    # This is final presentation, not a callback/replay or a new source budget.
+    content = list(selected.get(content_key, ()))
+    seen = {item["citation_hash"] for item in content}
+    for item in deferred_items[:max(0, 128 - len(staged_items))]:
+        if time.monotonic() >= deadline:
+            break
+        if item["citation_hash"] in seen:
+            continue
+        records, truncated = _bounded_mail_header_groups([*content, item], limit=limit)
+        if truncated:
+            continue
+        candidate = compose(records, truncated=byte_loss)
+        accepted = fits(candidate)
+        if time.monotonic() >= deadline:
+            break
+        if accepted:
+            content = records
+            seen.update(record["citation_hash"] for record in records)
+            selected = candidate
+    return observed(selected)
+
+
+def _select_reviewed_annotation_sources(revision, *, arguments, catalog, deadline):
+    """Semantic nomination selects originals; identity and literals remain independent."""
+    from formowl_mail.human_uat_orchestrator import validated_reviewed_annotation_selection
+    if not arguments.get("reviewed_annotation_ids") and arguments.get("reviewed_annotation_pin") is None:
+        return (), (), None
+    if catalog is None:
+        raise ContractValidationError("UAT reviewed annotation catalog is unavailable")
+    original_text = None
+    if len(revision.reviewed_source_annotations) > 128:
+        from formowl_mail.issue56_sealed_source import (
+            current_reviewed_annotation_query_binding, issue56_reviewed_annotation_catalog,
+            reviewed_annotation_request_fingerprint,
+        )
+        binding = current_reviewed_annotation_query_binding()
+        if (binding is None or binding.request_fingerprint != reviewed_annotation_request_fingerprint(arguments)):
+            raise ContractValidationError("UAT reviewed annotation query view binding mismatch")
+        check_source_evidence_deadline(deadline)
+        catalog = issue56_reviewed_annotation_catalog(revision, user_text=binding.original_text)
+        check_source_evidence_deadline(deadline)
+        if catalog != json.loads(binding.catalog_json):
+            raise ContractValidationError("UAT reviewed annotation query view is stale or changed")
+        original_text = binding.original_text
+        if arguments.get("request_contract", {}).get("original_query_hash") != catalog["original_query_hash"]:
+            raise ContractValidationError("UAT reviewed annotation original query changed")
+    target = validated_reviewed_annotation_selection(arguments, catalog=catalog, user_text=original_text)
+    if (catalog["source_revision_sha256"] != revision.safe_binding["source_revision_sha256"]
+            or catalog["reviewed_annotation_pin"] != revision.reviewed_annotation_pin):
+        raise ContractValidationError("UAT reviewed annotation source pin mismatch")
+    selected_ids = set(arguments["reviewed_annotation_ids"])
+    # A model nomination is a hint, not an exclusive source filter.  When the
+    # server has already bound the original query to one exact reviewed
+    # identity, include every public catalog entry carrying that same identity.
+    # This keeps annotation-guided selection additive and prevents provider
+    # sampling from silently dropping a sibling row for the requested target.
+    if (target is not None and catalog.get("view_mode") == "original_exact_identity_v1"
+            and catalog.get("view_status") == "matched"):
+        from formowl_mail.issue56_sealed_source import (
+            _reviewed_identity_descriptors, _reviewed_identity_matches,
+        )
+        descriptors = _reviewed_identity_descriptors(catalog.get("entries", ()))
+        selected_ids.update(
+            annotation_id for annotation_id, identities in descriptors.items()
+            if any(_reviewed_identity_matches(target, identity) for identity in identities)
+        )
+    matched = []
+    for item in revision.reviewed_source_annotations:
+        check_source_evidence_deadline(deadline)
+        if item["candidate_atom_id"] in selected_ids:
+            matched.append(item)
+    hashes = tuple(dict.fromkeys(key for item in matched for key in item["source_hashes"]))
+    if len(hashes) > 128:
+        raise ContractValidationError("UAT reviewed annotation source selection exceeds bound")
+    return tuple(item["candidate_atom_id"] for item in matched), hashes, target
+
+
+def _reviewed_annotation_literals_match(observation, *, required_terms, target, protected_terms, tokenizer, deadline):
+    """Only a validated identity is linked; genuine additional predicates stay literal."""
+    check_source_evidence_deadline(deadline)
+    terms = tuple(term for term in required_terms if term != target)
+    protected = protected_terms - set(tokenizer.analyze(target).tokens)
+    if observation.modality == "mail":
+        # Empty tuple is an explicit vacuous AND, not the legacy no-term query.
+        return _source_mail_observation_match(
+            observation, query_terms=set(), required_terms=terms,
+            protected_query_tokens=protected, tokenizer_profile=tokenizer,
+            deadline_monotonic=deadline) is not None
+    text = observation.text or observation.caption or ""
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return (all(term in normalized for term in terms)
+            and (not protected or protected.issubset(tokenizer.analyze(text).tokens)))
+
+
 def _build_source_start_semantic_handler(
     revision: Issue56IngestionRevision,
     *,
@@ -1206,6 +1807,8 @@ def _build_source_start_semantic_handler(
         raise ContractValidationError("source-start composition binding is invalid")
     tokenizer = load_issue56_target_mail_tokenizer_profile()
     capabilities = _source_start_capabilities(revision)
+    from formowl_mail.issue56_sealed_source import issue56_reviewed_annotation_catalog
+    annotation_catalog = issue56_reviewed_annotation_catalog(revision)
     available_families = tuple(capabilities["source_families"])
     exact_lookup = (
         _IngestionExactCellLookup(revision) if revision.exact_lookup_manifest else None
@@ -1219,6 +1822,7 @@ def _build_source_start_semantic_handler(
     )
 
     def handler(arguments: dict[str, Any]) -> dict[str, Any]:
+        trace = _SOURCE_PHASE_TRACE.get()
         if not isinstance(arguments, Mapping):
             raise ContractValidationError("source-start arguments are invalid")
         required = {"query_text", "requester_user_id", "workspace_id", "session_id"}
@@ -1275,18 +1879,6 @@ def _build_source_start_semantic_handler(
             request_contract, available_source_families=available_families,
         )
         query_class = request_contract["query_class"]
-        if query_class == "exact_set_or_inventory" and arguments.get("table_query") is None:
-            payload = {
-                "status": "pending_review",
-                "query_hash": sha256_json(query_text),
-                "citations": [],
-                "evidence": [],
-                "warnings": ["retrieval_projection_unavailable", "skipped_exact"],
-            }
-            if mail_tool:
-                payload["mail_import_session_id"] = selector
-                payload["evidence_snippets"] = []
-            return payload
         raw_terms = arguments.get("required_terms")
         if raw_terms is None:
             required_terms: tuple[str, ...] = ()
@@ -1303,7 +1895,33 @@ def _build_source_start_semantic_handler(
             ))
             if len(set(required_terms)) != len(required_terms):
                 raise ContractValidationError("source-start required terms are invalid")
+        # The runtime may use one identifier as the bounded mail anchor when
+        # an occurrence is split across body segments.  Native table rows are
+        # a separate, row-level surface: retain every protected identifier
+        # from the original query there so an item row cannot be admitted from
+        # an unrelated PO.
+        native_required_terms = required_terms
+        query_identifiers = tuple(
+            span.exact_token for span in tokenizer.analyze(query_text).protected_identifiers
+        )
+        if len(required_terms) == 1 and len(query_identifiers) > 1:
+            native_required_terms = tuple(sorted(set(query_identifiers)))
+        from formowl_mail.human_uat_orchestrator import validated_field_query_hints
+
+        field_query_hints = validated_field_query_hints(
+            {**arguments, "request_contract": request_contract, "required_terms": required_terms},
+            tool_name="query_mail_evidence" if mail_tool else "query_effective_graph_view",
+            available_source_families=available_families,
+        )
+        placement = _request_term_placement(arguments, mail_tool=mail_tool)
         requested_fields = tuple(request_contract["requested_fields"])
+        native_locator = request_contract.get("native_locator")
+        if native_locator is not None and (
+            not required_terms or placement is not None
+            or any(arguments.get(key) is not None for key in (
+                "table_query", "exact_inventory_kind", "exact_field", "cursor"))
+        ):
+            raise ContractValidationError("native attachment page requires ordinary child lookup")
         table_query = arguments.get("table_query")
         # Typed predicates are explicit. For identifier-plus-field lookup, only
         # an identifier actually present in the validated query may start exact
@@ -1315,42 +1933,64 @@ def _build_source_start_semantic_handler(
             if term in unicodedata.normalize("NFKC", query_text).casefold()
             and (term.isdecimal() or tokenizer.analyze(term).protected_identifiers)
         )
-        # Mail may use one identifier as a bounded occurrence anchor, while a
-        # native table row must still satisfy every identifier from the query.
-        native_required_terms = required_terms
-        query_identifiers = tuple(
-            span.exact_token for span in tokenizer.analyze(query_text).protected_identifiers
-        )
-        if len(required_terms) == 1 and len(query_identifiers) > 1:
-            native_required_terms = tuple(sorted(set(query_identifiers)))
+        if query_class == "exact_set_or_inventory" and table_query is None and (
+            request_contract["source_family_scope"] != ["mail"]
+            or len(set(identifier_terms)) != 1
+            or not tokenizer.analyze(identifier_terms[0]).protected_identifiers
+            or arguments.get("cursor") is not None
+            or arguments.get("exact_inventory_kind") is not None
+        ):
+            payload = {
+                "status": "pending_review",
+                "query_hash": sha256_json(query_text),
+                "citations": [],
+                "evidence": [],
+                "warnings": ["retrieval_projection_unavailable", "skipped_exact"],
+            }
+            if mail_tool:
+                payload["mail_import_session_id"] = selector
+                payload["evidence_snippets"] = []
+            return payload
         source_budget = {
-            "deadline": time.monotonic() + SOURCE_EVIDENCE_TIME_BUDGET_MS / 1000,
+            "deadline": time.monotonic() + SOURCE_START_EVIDENCE_TIME_BUDGET_MS / 1000,
             "reads": 0, "evidence": 0, "context_bytes": 0,
         }
-        if _SOURCE_EVIDENCE_DEADLINE.get() is not None:
-            source_budget["deadline"] = min(source_budget["deadline"], _SOURCE_EVIDENCE_DEADLINE.get())
+        # Runtime scopes the absolute TURN deadline; the read/recheck phase
+        # separately retains its bounded UAT cap. Cached presentation does not read.
+        presentation_deadline = _SOURCE_EVIDENCE_DEADLINE.get()
+        if presentation_deadline is not None:
+            source_budget["deadline"] = min(source_budget["deadline"], presentation_deadline)
+        else:
+            presentation_deadline = source_budget["deadline"]
         applicable_fields = {
             normalize_source_occurrence_structured_surface(item["field"])
             for item in (exact_lookup._columns if exact_lookup is not None else ())
-            if item["structure_status"] == "source_provided"
+            if _exact_column_applicable(revision, item)
             and ("mail" if item["inline_table"] else "attachment_table") in request_contract["source_family_scope"]
         }
         auto_exact = (
-            query_class == "evidence_lookup" and bool(requested_fields) and len(identifier_terms) == 1
+            native_locator is None and placement is None and query_class == "evidence_lookup" and bool(requested_fields) and len(identifier_terms) == 1
             and any(normalize_source_occurrence_structured_surface(field) in applicable_fields for field in requested_fields)
         )
+        cell = _trace(trace, "phase", "applicability", auto_exact=auto_exact,
+                      explicit_exact=table_query is not None, requested_fields=len(requested_fields),
+                      hints=len(field_query_hints), query_class=query_class)
+        _trace(cell, "finish")
         if table_query is not None:
-            return _execute_source_start_table(
-                revision, lookup=exact_lookup, arguments=arguments,
-                request_contract=request_contract, mail_tool=mail_tool,
-                selector=selector, identifier_terms=identifier_terms,
-            )
+            with _source_trace_phase(trace, "exact_engine"):
+                return _execute_source_start_table(
+                    revision, lookup=exact_lookup, arguments=arguments,
+                    request_contract=request_contract, mail_tool=mail_tool,
+                    selector=selector, identifier_terms=identifier_terms,
+                    required_terms=required_terms,
+                )
         if auto_exact:
-            exact_payload = _execute_source_start_table(
-                revision, lookup=exact_lookup, arguments=arguments, request_contract=request_contract,
-                mail_tool=mail_tool, selector=selector, identifier_terms=identifier_terms,
-                required_terms=required_terms, automatic=True, source_budget=source_budget,
-            )
+            with _source_trace_phase(trace, "exact_engine"):
+                exact_payload = _execute_source_start_table(
+                    revision, lookup=exact_lookup, arguments=arguments, request_contract=request_contract,
+                    mail_tool=mail_tool, selector=selector, identifier_terms=identifier_terms,
+                    required_terms=required_terms, automatic=True, source_budget=source_budget,
+                )
             # Partial field support must be disclosed without an automatic
             # recheck. Only a validated all-fields miss may continue, and only
             # through the existing same-scope reader and its remaining caps.
@@ -1361,7 +2001,7 @@ def _build_source_start_semantic_handler(
         protected_terms: set[str] = set()
         active_family: str | None = None
         active_selector: str | None = selector
-        message_fingerprints_by_occurrence: dict[tuple[str, str, str, str], str] = {}
+        mail_parents_by_occurrence: dict[tuple[str, str, str, str], Observation] = {}
         unresolved_parent_binding = False
         attachment_parents: dict[tuple[str, str], Observation] = {}
         last_anchor: Observation | None = None
@@ -1370,56 +2010,225 @@ def _build_source_start_semantic_handler(
         admitted_context_bytes = source_budget["context_bytes"]
         context_limit_reached = False
         admitted_hashes: set[str] = set()
+        admitted_items: list[dict[str, Any]] = []
+        reserved_native_slots = 0
+        deferred: list[tuple[Observation, str, dict[str, Any], str | None, str | None]] = []
+        presentation_cache: list[dict[str, Any]] = []
+        overflow_hashes: set[str] = set()
+        selection_hits: dict[str, set[tuple[int, str]]] = {}
+        field_terms: list[set[str]] = []
+        annotation_ids: tuple[str, ...] = ()
+        annotation_hashes: tuple[str, ...] = ()
+        annotation_target: str | None = None
 
-        def admit(observation: Observation, item: dict[str, Any]):
+        def cache_overflow(item):
+            # This seam receives a fully guarded/projected unit, never a source ref.
+            if (auto_exact or deferred or not field_terms or not _ordinary_presentation_unit(item)
+                    or time.monotonic() >= source_budget["deadline"]):
+                return
+            units = {entry["citation_hash"]: entry for entry in (*admitted_items, *presentation_cache)}
+            if item["citation_hash"] not in units and len(units) >= 128:
+                return
+            standalone, truncated = _bounded_mail_header_groups([item], limit=limit)
+            if truncated or len(json.dumps(standalone, ensure_ascii=False).encode("utf-8")) > 16 * 1024:
+                return
+            for entry in (*admitted_items, *presentation_cache, item):
+                key = entry["citation_hash"]
+                if key not in selection_hits:
+                    if time.monotonic() >= source_budget["deadline"]:
+                        return
+                    words = set(tokenizer.analyze(entry.get("snippet", "")).tokens)
+                    selection_hits[key] = {(i, word) for i, terms in enumerate(field_terms)
+                                           for word in terms.intersection(words)}
+            pool = list(presentation_cache)
+            if item["citation_hash"] not in {entry["citation_hash"] for entry in pool}:
+                pool.append(item)
+            kept = []
+            covered = set().union(*(selection_hits.get(entry["citation_hash"], set()) for entry in admitted_items))
+            while pool and time.monotonic() < source_budget["deadline"]:
+                best = max(range(len(pool)), key=lambda i: _soft_unit_utility(
+                    selection_hits[pool[i]["citation_hash"]] - covered,
+                ))
+                entry = pool.pop(best)
+                records, truncated = _bounded_mail_header_groups([*kept, entry], limit=limit)
+                if (not truncated and len(records) <= limit
+                        and len(json.dumps(records, ensure_ascii=False).encode("utf-8")) <= 16 * 1024):
+                    kept.append(entry)
+                    covered.update(selection_hits[entry["citation_hash"]])
+            if time.monotonic() < source_budget["deadline"]:
+                presentation_cache[:] = kept
+                overflow_hashes.add(item["citation_hash"])
+            retained = {entry["citation_hash"] for entry in (*admitted_items, *presentation_cache)}
+            overflow_hashes.intersection_update(retained)
+            for key in tuple(selection_hits):
+                if key not in retained:
+                    del selection_hits[key]
+        deferred_hashes: set[str] = set()
+        deferred_families: set[str] = set()
+        deferred_replay: tuple[Observation, str, dict[str, Any]] | None = None
+
+        def admit(observation: Observation, item: dict[str, Any], scope_id: str):
             nonlocal admitted_context_bytes, context_limit_reached
             observation_hash = sha256_json(observation.to_dict())
+            if observation_hash in annotation_hashes:
+                item["source_context"] = {
+                    **item.get("source_context", {}),
+                    "annotation_pin": revision.reviewed_annotation_pin,
+                    "candidate_ids": [entry["candidate_atom_id"] for entry in revision.reviewed_source_annotations
+                                      if entry["candidate_atom_id"] in annotation_ids
+                                      and observation_hash in entry["source_hashes"]],
+                    "exact_field_proof": False,
+                }
+            if query_class == "evidence_lookup" and observation_hash not in admitted_hashes:
+                if observation_hash in deferred_hashes and deferred_replay is None:
+                    _trace(trace, "decision", "duplicate_deferred", observation_hash)
+                    return None
+                # Reuse final presentation's atomic body/header grouping. Charge
+                # the actual wire array, including deduplication and separators,
+                # before publishing an anchor or any of its dependent headers.
+                candidate, truncated = _bounded_mail_header_groups(
+                    [*admitted_items, item], limit=max(0, limit - source_budget["evidence"]),
+                    byte_limit=16 * 1024 - source_budget["context_bytes"],
+                )
+                size = len(json.dumps(candidate, ensure_ascii=False).encode("utf-8"))
+                if (truncated or len(candidate) > max(0, limit - source_budget["evidence"])
+                        or source_budget["context_bytes"] + size > 16 * 1024):
+                    context_limit_reached = True
+                    cache_overflow(item)
+                    _trace(trace, "decision", "context_limit", observation_hash)
+                    return None
+                if deferred_replay is None and (
+                    active_family in deferred_families
+                    or len(candidate) > max(0, limit - source_budget["evidence"] - reserved_native_slots)
+                ):
+                    # Reserve items, not a byte fraction: a large intact paragraph
+                    # may still fit when later native phases have no matches.
+                    # Keep bounded, already-validated groups, never source refs
+                    # that would require another hydration or permission lookup.
+                    buffered, buffer_truncated = _bounded_mail_header_groups(
+                        [*(entry[2] for entry in deferred), item],
+                        limit=max(0, limit - source_budget["evidence"]),
+                        byte_limit=16 * 1024 - source_budget["context_bytes"],
+                    )
+                    if (buffer_truncated or len(buffered) > max(0, limit - source_budget["evidence"])
+                            or len(json.dumps(buffered, ensure_ascii=False).encode("utf-8"))
+                            > 16 * 1024 - source_budget["context_bytes"]):
+                        context_limit_reached = True
+                        _trace(trace, "decision", "context_limit", observation_hash)
+                    else:
+                        deferred_selector = (item.get("mail_import_session_id")
+                                             if active_family in {"attachment_table", "mail_inline_table"}
+                                             else active_selector)
+                        deferred.append((observation, scope_id, item, active_family, deferred_selector))
+                        if (not auto_exact and active_family in {"mail", "document_text"}
+                                and time.monotonic() < source_budget["deadline"]):
+                            # Original reservation cache wins; never evict it for new overflow.
+                            if overflow_hashes:
+                                presentation_cache.clear()
+                                overflow_hashes.clear()
+                                selection_hits.clear()
+                            presentation_cache.append(item)
+                        deferred_hashes.add(observation_hash)
+                        _trace(trace, "decision", "deferred", observation_hash)
+                    # Later selectors/candidates in this family cannot overtake
+                    # the deferred prefix when the unused slots are returned.
+                    deferred_families.add(active_family)
+                    return None
+                admitted_items.append(item)
+                # Reserve the combined candidate bound even if later units fit normally.
+                while overflow_hashes and len(admitted_items) + len(presentation_cache) > 128:
+                    dropped = presentation_cache.pop()
+                    overflow_hashes.discard(dropped["citation_hash"])
+                    selection_hits.pop(dropped["citation_hash"], None)
+                admitted_hashes.add(observation_hash)
+                admitted_context_bytes = source_budget["context_bytes"] + size
+                _trace(trace, "decision", "admitted", observation_hash)
+                return observation_hash, item
             size = len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
             if observation_hash not in admitted_hashes:
                 if admitted_context_bytes + size > 16 * 1024:
                     context_limit_reached = True
+                    _trace(trace, "decision", "context_limit", observation_hash)
                     return None
                 admitted_hashes.add(observation_hash)
                 admitted_context_bytes += size
+            _trace(trace, "decision", "admitted", observation_hash)
             return observation_hash, item
 
         def begin(deadline: float) -> None:
-            nonlocal query_terms, protected_terms
+            nonlocal query_terms, protected_terms, annotation_ids, annotation_hashes, annotation_target
             check_source_evidence_deadline(deadline)
 
             analysis = tokenizer.analyze(query_text)
             query_terms = set(analysis.tokens)
             protected_terms = {item.exact_token for item in analysis.protected_identifiers}
-            # The runtime may enter a split mail occurrence with one
-            # validated item anchor. Keep this guard aligned with that
-            # bounded entry condition; sibling PO segments are admitted only
-            # by the same-occurrence context walk below.
+            # The UAT agent may enter a multi-identifier mail occurrence with
+            # one validated PO anchor so that the source reader can expand its
+            # same-occurrence siblings.  Keep the anchor's protected-token
+            # guard aligned with that bounded entry condition; otherwise the
+            # later all-identifiers veto rejects the very anchor selected for
+            # the governed context walk.
             if required_terms and len(required_terms) == 1 and len(protected_terms) > 1:
                 protected_terms = set(required_terms)
+            if arguments.get("reviewed_annotation_ids") or arguments.get("reviewed_annotation_pin") is not None:
+                if query_class != "evidence_lookup" or auto_exact or placement is not None or native_locator is not None:
+                    raise ContractValidationError("UAT reviewed annotation route is unsupported")
+                annotation_ids, annotation_hashes, annotation_target = _select_reviewed_annotation_sources(
+                    revision, arguments={**arguments, "request_contract": request_contract,
+                                         "required_terms": required_terms},
+                    catalog=annotation_catalog, deadline=deadline)
+                cell = _trace(trace, "phase", "project", reviewed_annotation_selection=True,
+                              selected_count=len(annotation_ids), source_count=len(annotation_hashes),
+                              annotation_pin=revision.reviewed_annotation_pin)
+                _trace(cell, "finish")
             # A Query Agent may add presentation instructions to query_text.
             # Rank source candidates by the validated evidence constraints, not
             # those instruction words. Multiword constraints use the same frozen
             # profile as the source postings; the full matcher remains unchanged.
             lookup_terms = set()
-            for term in required_terms:
+            for term in (placement.child_terms if placement is not None else required_terms):
                 check_source_evidence_deadline(deadline)
                 lookup_terms.update(tokenizer.analyze(term).tokens)
             project.source_lookup_terms = tuple(sorted(
                 lookup_terms if required_terms else query_terms
             ))
+            if query_class == "evidence_lookup" and not auto_exact:
+                for field in requested_fields:
+                    check_source_evidence_deadline(deadline)
+                    field_terms.append(set(tokenizer.analyze(field).tokens))
             preferred_terms: set[str] = set()
-            for field in requested_fields if required_terms else ():
+            for field in (*requested_fields, *(hint["text"] for hint in field_query_hints)) if required_terms else ():
                 check_source_evidence_deadline(deadline)
                 preferred_terms.update(tokenizer.analyze(field).tokens)
             project.source_lookup_preferred_terms = tuple(sorted(preferred_terms))
+            cell = _trace(trace, "phase", "lookup_terms", required_term_count=len(project.source_lookup_terms),
+                          preferred_term_count=len(project.source_lookup_preferred_terms))
+            _trace(cell, "finish")
             check_source_evidence_deadline(deadline)
 
         def project(observation: Observation, scope_id: str, deadline: float):
             nonlocal unresolved_parent_binding, last_anchor
             check_source_evidence_deadline(deadline)
-            if observation.observation_id in table_evidence:
-                return admit(observation, table_evidence[observation.observation_id])
             last_anchor = None
+            semantic_hash = sha256_json(observation.to_dict()) if annotation_hashes else None
+            semantic_match = semantic_hash in annotation_hashes
+            if semantic_match:
+                # Only the reviewed identity anchor may be source-linked rather
+                # than repeated in a child paragraph. ALL other literals survive.
+                if not _reviewed_annotation_literals_match(
+                    observation, required_terms=required_terms, target=annotation_target,
+                    protected_terms=protected_terms, tokenizer=tokenizer, deadline=deadline,
+                ):
+                    return None
+            if deferred_replay is not None:
+                cached_observation, cached_scope, item = deferred_replay
+                if observation is not cached_observation or scope_id != cached_scope:
+                    raise ContractValidationError("source-start deferred binding is invalid")
+                return admit(observation, item, scope_id)
+            if placement is not None and (active_family != "mail" or observation.observation_type != "email_body_segment"):
+                return None
+            if observation.observation_id in table_evidence:
+                return admit(observation, table_evidence[observation.observation_id], scope_id)
 
             def public_text(value: str) -> str:
                 # A native PDF page can be one paragraph. Literal field/anchor
@@ -1446,29 +2255,38 @@ def _build_source_start_semantic_handler(
                         child_id = payload.get("child_asset_id")
                         if isinstance(child_id, str) and child_id:
                             attachment_parents[(scope_id, child_id)] = observation
+                        _trace(trace, "count", "parent_context")
                         return None  # Parent binding is not a child text match.
                     # The reader emits the hash-checked parent first, counting
                     # hydration against this same scan's read/time limits.
                     parent = attachment_parents.get((scope_id, observation.asset_id))
                     if parent is None:
                         unresolved_parent_binding = True
+                        _trace(trace, "count", "parent_unresolved")
                         return None
                     lineage = _attachment_child_lineages({
                         parent.observation_id: parent, observation.observation_id: observation,
                     })[observation.observation_id]
+                    if native_locator is not None and (
+                        type(location.get("page")) is not int or location["page"] != native_locator["page"]
+                    ):
+                        return None
                     text = observation.text or observation.caption or ""
                     normalized = unicodedata.normalize("NFKC", text).casefold()
-                    if required_terms:
+                    if semantic_match:
+                        pass  # Reviewed identity/field binding; source guards above still apply.
+                    elif required_terms:
                         if not all(term in normalized for term in required_terms):
                             return None
                     elif not query_terms.issubset(set(tokenizer.analyze(text).tokens)):
                         return None
-                    if protected_terms and not protected_terms.issubset(set(tokenizer.analyze(text).tokens)):
+                    if not semantic_match and protected_terms and not protected_terms.issubset(set(tokenizer.analyze(text).tokens)):
                         return None
                     parent_payload = parent.payload or {}
                     message_fingerprint = parent_payload.get("message_fingerprint")
                     if not isinstance(message_fingerprint, str) or not message_fingerprint:
                         unresolved_parent_binding = True
+                        _trace(trace, "count", "parent_unresolved")
                         return None
                     snippet_payload = {
                         "source_type": "mail_attachment_text",
@@ -1500,7 +2318,15 @@ def _build_source_start_semantic_handler(
                     if active_selector is not None:
                         snippet_payload["mail_import_session_id"] = active_selector
                     check_source_evidence_deadline(deadline)
-                    return admit(observation, _safe_snippet(snippet_payload))
+                    snippet = _mail_header_context(
+                        observation, _safe_snippet(snippet_payload),
+                        mail_parents_by_occurrence.get((
+                            scope_id, parent.asset_id,
+                            (_attachment_mail_parent_link(parent) or {}).get("parent_extractor_run_id", parent.extractor_run_id),
+                            lineage.message_occurrence_id,
+                        )), source=source, scope_id=scope_id, attachment_parent=parent,
+                    )
+                    return admit(observation, snippet, scope_id)
                 occurrence_id = location.get("message_occurrence_id")
                 message_fingerprint = payload.get("message_fingerprint")
                 if (
@@ -1514,6 +2340,7 @@ def _build_source_start_semantic_handler(
                         source_kind=AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND,
                     )
                 ):
+                    _trace(trace, "count", "scope_rejected")
                     return None
                 lineage = source_occurrence_lineage_from_observation(
                     observation, authorized_source=source,
@@ -1523,12 +2350,14 @@ def _build_source_start_semantic_handler(
                     and isinstance(message_fingerprint, str)
                     and isinstance(occurrence_id, str)
                 ):
-                    message_fingerprints_by_occurrence[(
+                    mail_parents_by_occurrence[(
                         scope_id, observation.asset_id, observation.extractor_run_id, occurrence_id,
                     )] = (
-                        message_fingerprint
+                        observation
                     )
-                if context_anchor is None and (
+                if native_locator is not None:
+                    return None  # Outer headers are dependent metadata, never a page hit.
+                if not semantic_match and placement is None and context_anchor is None and (
                     _source_mail_observation_match(
                         observation,
                         query_terms=query_terms,
@@ -1538,13 +2367,19 @@ def _build_source_start_semantic_handler(
                         deadline_monotonic=deadline,
                     ) is None
                 ):
+                    _trace(trace, "count", "matcher_rejected")
                     return None
                 if message_fingerprint is None and isinstance(occurrence_id, str):
-                    message_fingerprint = message_fingerprints_by_occurrence.get(
+                    parent = mail_parents_by_occurrence.get(
                         (scope_id, observation.asset_id, observation.extractor_run_id, occurrence_id)
                     )
+                    if placement is not None:
+                        pair = _SOURCE_OCCURRENCE_PAIR.get()
+                        parent = pair[1] if pair is not None and pair[0] is observation else None
+                    message_fingerprint = (parent.payload or {}).get("message_fingerprint") if parent else None
                 if not isinstance(message_fingerprint, str) or not isinstance(occurrence_id, str):
                     unresolved_parent_binding = True
+                    _trace(trace, "count", "parent_unresolved")
                     return None
                 snippet_payload = {
                     "source_type": {
@@ -1575,7 +2410,20 @@ def _build_source_start_semantic_handler(
                 }
                 if active_selector is not None:
                     snippet_payload["mail_import_session_id"] = active_selector
-                snippet = _safe_snippet(snippet_payload)
+                if placement is not None:
+                    snippet = _placement_mail_group(
+                        placement, observation, scope_id, _safe_snippet(snippet_payload), source=source,
+                        protected_terms=protected_terms, tokenizer=tokenizer,
+                    )
+                    if snippet is None:
+                        return None
+                else:
+                    snippet = _mail_header_context(
+                        observation, _safe_snippet(snippet_payload),
+                        mail_parents_by_occurrence.get((
+                            scope_id, observation.asset_id, observation.extractor_run_id, occurrence_id,
+                        )), source=source, scope_id=scope_id,
+                    )
             elif active_family == "document_text":
                 if (
                     observation.modality != "text"
@@ -1592,7 +2440,7 @@ def _build_source_start_semantic_handler(
                 if not text:
                     return None
                 normalized = unicodedata.normalize("NFKC", text).casefold()
-                if context_anchor is not None:
+                if semantic_match or context_anchor is not None:
                     pass  # Reader already revalidated this neighbor against the matched anchor.
                 elif required_terms:
                     if not all(term in normalized for term in required_terms):
@@ -1602,7 +2450,7 @@ def _build_source_start_semantic_handler(
                     if not query_terms.intersection(source_tokens):
                         return None
                 source_tokens = set() if context_anchor is not None else set(tokenizer.analyze(text).tokens)
-                if context_anchor is None and protected_terms and not protected_terms.issubset(source_tokens):
+                if not semantic_match and context_anchor is None and protected_terms and not protected_terms.issubset(source_tokens):
                     return None
                 lineage = source_occurrence_lineage_from_observation(
                     observation, authorized_source=source,
@@ -1647,17 +2495,35 @@ def _build_source_start_semantic_handler(
                     f"anchor citation {anchor_hash}; "
                     "not an identifier hit or exact field proof] " + snippet["snippet"]
                 )
-            else:
+            if query_class == "exact_set_or_inventory":
+                # Exact membership proves native textual occurrence, not that
+                # the current author made a new assertion at the outer date.
+                # Quoted history remains evidence, never an authored event.
+                snippet["source_context"] = {
+                    "relationship": "native_identifier_occurrence",
+                    "authored_assertion_verified": False, "event_date_verified": False,
+                }
+                snippet["snippet"] = (
+                    "[native identifier occurrence; not proof of an authored update or event date] "
+                    + snippet["snippet"]
+                )
+            projected = admit(observation, snippet, scope_id)
+            if projected is not None and context_anchor is None:
                 last_anchor = observation
-            return admit(observation, snippet)
+            return projected
 
         def read_source(**kwargs: Any) -> RevisionOwnedMailSourceScan:
             nonlocal active_family, active_selector, context_anchor
+            nonlocal reserved_native_slots, deferred_replay, context_limit_reached
             def consume(observation: Observation, scope: str) -> bool:
-                return kwargs["observation_callback"](observation, scope) and not context_limit_reached
+                return kwargs["observation_callback"](observation, scope) and (
+                    query_class == "evidence_lookup" or not context_limit_reached
+                )
 
             def consume_context(anchor: Observation, neighbor: Observation, scope: str) -> bool:
                 nonlocal context_anchor
+                if sha256_json(anchor.to_dict()) not in admitted_hashes:
+                    return True
                 context_anchor = anchor
                 try:
                     return consume(neighbor, scope)
@@ -1670,21 +2536,89 @@ def _build_source_start_semantic_handler(
                 family for family in request_contract["source_family_scope"]
                 if family in available_families
             ]
-            if "mail" in families and exact_lookup is not None and revision.exact_lookup_manifest.get(
+            if native_locator is None and query_class != "exact_set_or_inventory" and "mail" in families and exact_lookup is not None and revision.exact_lookup_manifest.get(
                 "counts", {}
             ).get("inline_authorized_row", 0):
                 families.append("mail_inline_table")
+            # Reviewed hashes are already pinned to the source revision. Use
+            # only their sealed helper metadata to prioritize the corresponding
+            # family; the normal authority/hash/permission reader remains the
+            # sole hydration path. This avoids spending an ordinary family's
+            # fractional slice on a preferred mail parent before its child can
+            # be emitted, without changing the shared deadline or read cap.
+            preferred_families: set[str] = set()
+            helper_for_hash = getattr(records.runtime_store, "helper_for_hash", None)
+            if annotation_hashes and callable(helper_for_hash):
+                for observation_hash in annotation_hashes:
+                    helper = helper_for_hash(observation_hash)
+                    if isinstance(helper, Mapping):
+                        family = helper.get("retrieval_source_family")
+                        if family == "mail" and "mail" in families:
+                            preferred_families.add("mail")
+                        elif family == "document_text" and "document_text" in families:
+                            preferred_families.add("document_text")
+            native_counts = revision.exact_lookup_manifest.get("counts", {})
+            pending_native = {
+                family for family in families
+                if native_locator is None and query_class == "evidence_lookup" and exact_lookup is not None
+                and native_counts.get({
+                    "attachment_table": "attachment_authorized_row",
+                    "mail_inline_table": "inline_authorized_row",
+                }.get(family), 0) > 0
+            }
+            # Do not invert starvation at tiny limits: leave the first ordinary
+            # representation room for its atomic mail pair (or nonmail item).
+            reservation_limit = max(0, limit - source_budget["evidence"] - (2 if "mail" in families else 1))
+            # Combine adjacent native engines, never authorization families or
+            # their admission slots. Interleaved scopes retain the legacy path.
+            engines = [(family,) for family in families]
+            for index in range(len(families) - 1):
+                pair = tuple(families[index:index + 2])
+                if (len(pending_native) == 2 and set(pair) == pending_native
+                        and set(pair) != {"attachment_table", "mail_inline_table"}):
+                    engines[index:index + 2] = [pair]
+                    break
+            def preferred_engine(engine: tuple[str, ...]) -> bool:
+                return any(item in preferred_families or item == "attachment_table"
+                           for item in engine)
+            # When mail and attachment tables share a turn, the mail reader
+            # can consume the bounded source budget before the native table
+            # engine starts. Give the attachment table its first bounded
+            # slice so a native PO/item row is not starved by body context.
+            engines.sort(key=lambda engine: (
+                not preferred_engine(engine),
+                not any(item == "attachment_table" for item in engine),
+            ))
+
+            def begin_native_family(family: str) -> None:
+                nonlocal active_family, reserved_native_slots
+                active_family = "mail_inline_table" if family == "mail" else family
+                pending_native.discard(active_family)
+                reserved_native_slots = min(len(pending_native), reservation_limit)
+
             incomplete_reason: str | None = None
-            for family_index, family in enumerate(families):
+            for family_index, engine in enumerate(engines):
+                family = engine[0]
+                if native_locator is not None and family != "mail":
+                    incomplete_reason = "unsupported_native_locator"
+                    continue
                 active_family = family
+                pending_native.discard(family)
+                reserved_native_slots = min(len(pending_native), reservation_limit)
                 selectors = (
                     (selector,) if family == "mail" and mail_tool
                     else (selector_ids or (None,)) if family == "mail"
                     else (None,)
                 )
-                family_left = len(families) - family_index
                 family_remaining = remaining - scanned
-                family_limit = family_remaining // family_left
+                preferred = preferred_engine(engine)
+                ordinary_engines_left = sum(
+                    not preferred_engine(candidate) for candidate in engines[family_index:]
+                )
+                family_left = ordinary_engines_left if not preferred else 1
+                family_limit = family_remaining if preferred else (
+                    family_remaining // max(1, ordinary_engines_left)
+                )
                 if family_limit <= 0:
                     incomplete_reason = "observation_limit"
                     break
@@ -1692,23 +2626,46 @@ def _build_source_start_semantic_handler(
                 # Every authorized family gets a share of the same absolute
                 # deadline, including mail/document-only requests. An earlier
                 # slow family must not spend a later family's allocation.
-                family_deadline = now + max(0, kwargs["deadline_monotonic"] - now) / family_left
+                family_deadline = (
+                    kwargs["deadline_monotonic"] if preferred else
+                    now + max(0, kwargs["deadline_monotonic"] - now) / max(1, family_left)
+                )
+                engine_cell = _trace(trace, "phase", "engine", families=engine,
+                                     max_reads=family_limit, deadline=family_deadline,
+                                     reserved_slots=reserved_native_slots)
                 if family in {"attachment_table", "mail_inline_table"}:
+                    native_metrics = ({f"native_{stage}_{measure}": 0
+                                       for stage in ("terms", "values", "rows")
+                                       for measure in ("attempted", "completed", "wall_ms", "cpu_ms")}
+                                      if engine_cell is not None else None)
                     scan = exact_lookup.scan_source_rows(
                         required_terms=native_required_terms,
                         query_text=query_text,
-                        source_families=("mail" if family == "mail_inline_table" else "attachment_table",),
+                        source_families=tuple("mail" if item == "mail_inline_table" else item for item in engine),
                         mail_import_session_id=selector if mail_tool else None,
                         max_observations=family_limit,
                         deadline_monotonic=family_deadline,
                         observation_callback=consume,
                         evidence_by_id=table_evidence,
+                        _phase_metrics=native_metrics,
+                        **({"begin_family": begin_native_family} if len(engine) == 2 else {}),
                     )
+                    _trace(engine_cell, "finish", scanned=scan.scanned_observation_count,
+                           complete=scan.complete, stop=scan.stop_reason, **(native_metrics or {}))
                     scanned += scan.scanned_observation_count
                     if not scan.complete:
-                        incomplete_reason = "context_limit" if context_limit_reached else scan.stop_reason
-                        if incomplete_reason in {"callback", "context_limit"} or time.monotonic() >= kwargs["deadline_monotonic"]:
+                        incomplete_reason = (
+                            "context_limit" if context_limit_reached and query_class != "evidence_lookup"
+                            else scan.stop_reason
+                        )
+                        if incomplete_reason == "callback" or time.monotonic() >= kwargs["deadline_monotonic"]:
                             return RevisionOwnedMailSourceScan((), scanned, False, incomplete_reason)
+                        if incomplete_reason == "context_limit":
+                            # A native row exhausted its reader-local context,
+                            # not the shared ordinary-item capacity. Stop all
+                            # further reads, retaining incomplete, and let the
+                            # original callback govern cached-only backfill.
+                            break
                     continue
                 family_start_scanned = scanned
                 for selector_index, family_selector in enumerate(selectors):
@@ -1720,6 +2677,8 @@ def _build_source_start_semantic_handler(
                         break
                     now = time.monotonic()
                     selector_deadline = now + max(0, family_deadline - now) / selectors_left
+                    selector_cell = _trace(trace, "phase", "selector", selector_index=selector_index,
+                                           _binding=(family_selector,), max_reads=left, deadline=selector_deadline)
                     scan = records.scan_authorized_observations(
                         source_family=family, source_scope_ids=(
                             source.source_scope_ids if family == "document_text" else ()
@@ -1728,20 +2687,53 @@ def _build_source_start_semantic_handler(
                         max_observations=left,
                         deadline_monotonic=selector_deadline,
                         observation_callback=consume,
-                        context_anchor_callback=lambda item, scope: item is last_anchor,
+                        context_anchor_callback=lambda item, scope: query_class != "exact_set_or_inventory" and item is last_anchor,
                         context_callback=consume_context,
+                        _allow_parallel_hydration=query_class == "evidence_lookup",
+                        **({"preferred_observation_hashes": annotation_hashes} if annotation_hashes else {}),
                     )
                     if not isinstance(scan, RevisionOwnedMailSourceScan):
                         raise ContractValidationError("source-start scan result is invalid")
+                    _trace(selector_cell, "finish", scanned=scan.scanned_observation_count,
+                           complete=scan.complete, stop=scan.stop_reason)
                     scanned += scan.scanned_observation_count
                     if not scan.complete:
-                        incomplete_reason = "context_limit" if context_limit_reached else scan.stop_reason or "deadline"
+                        incomplete_reason = (
+                            "context_limit" if context_limit_reached and query_class != "evidence_lookup"
+                            else scan.stop_reason or "deadline"
+                        )
                         if incomplete_reason in {"callback", "context_limit"} or time.monotonic() >= kwargs["deadline_monotonic"]:
+                            _trace(engine_cell, "finish", scanned=scanned - family_start_scanned,
+                                   complete=False, stop=incomplete_reason)
                             return RevisionOwnedMailSourceScan(
                                 (), scanned, False, incomplete_reason,
                             )
+                _trace(engine_cell, "finish", scanned=scanned - family_start_scanned,
+                       complete=incomplete_reason is None, stop=incomplete_reason)
+            reserved_native_slots = 0
+            for entry in deferred:
+                if time.monotonic() >= kwargs["deadline_monotonic"]:
+                    incomplete_reason = "deadline"
+                    break
+                # Re-enter the original publisher, not a reader. Its callback
+                # count and absolute deadline still govern cached backfill, even
+                # though the candidate was already charged/validated on arrival.
+                active_family, active_selector = entry[3:]
+                deferred_replay = entry[:3]
+                try:
+                    _trace(trace, "count", "replayed")
+                    keep_scanning = kwargs["observation_callback"](entry[0], entry[1])
+                finally:
+                    deferred_replay = None
+                if not keep_scanning:
+                    incomplete_reason = "callback"
+                    break
+            if deferred_hashes - admitted_hashes:
+                context_limit_reached = True
             active_family = None
             active_selector = selector
+            if context_limit_reached and incomplete_reason not in {"deadline", "observation_limit", "callback"}:
+                incomplete_reason = "context_limit"
             if incomplete_reason is None and unresolved_parent_binding:
                 incomplete_reason = "source_parent_binding_unresolved"
             return RevisionOwnedMailSourceScan(
@@ -1751,6 +2743,144 @@ def _build_source_start_semantic_handler(
         limit = arguments.get("limit" if mail_tool else "page_size", 5 if mail_tool else 10)
         if type(limit) is not int or not 1 <= limit <= 128:
             raise ContractValidationError("source-start evidence limit is invalid")
+        if query_class == "exact_set_or_inventory":
+            # Primary native execution, not the evidence-lookup automatic
+            # recheck. Keep the original exact request and all its constraints.
+            native: dict[str, Observation] = {}
+            matches: dict[str, dict[str, Any]] = {}
+            deadline = source_budget["deadline"]
+            scan = RevisionOwnedMailSourceScan((), 0, False, "deadline")
+            callbacks = 0
+
+            def collect_exact(observation: Observation, scope: str) -> bool:
+                nonlocal callbacks
+                check_source_evidence_deadline(deadline)
+                if callbacks >= SOURCE_EVIDENCE_OBSERVATION_LIMIT:
+                    return False
+                callbacks += 1
+                # This existing provider supports native mail occurrences only;
+                # attachments/documents must never masquerade as mail members.
+                if (observation.modality != "mail"
+                        or observation.observation_type not in REVISION_SOURCE_FALLBACK_OBSERVATION_TYPES):
+                    return True
+                projected = project(observation, scope, deadline)
+                if projected is not None and identifier_terms[0] in {
+                    span.exact_token for span in tokenizer.analyze(observation.text or "").protected_identifiers
+                }:
+                    citation, item = projected
+                    native[citation] = observation
+                    matches[citation] = item
+                check_source_evidence_deadline(deadline)
+                return len(matches) < min(limit, 100)
+
+            exact_result = None
+            evidence: list[dict[str, Any]] = []
+            header_groups_truncated = False
+            try:
+                begin(deadline)
+                with source_evidence_query_terms_scope(
+                    project.source_lookup_terms,
+                    preferred_terms=project.source_lookup_preferred_terms,
+                ):
+                    scan = read_source(
+                        max_observations=SOURCE_EVIDENCE_OBSERVATION_LIMIT,
+                        deadline_monotonic=deadline, observation_callback=collect_exact,
+                    )
+                check_source_evidence_deadline(deadline)
+                evidence, header_groups_truncated = _bounded_mail_header_groups(
+                    tuple(matches.values()), limit=min(limit, 100),
+                )
+                visible = {item["citation_hash"] for item in evidence}
+                observations = tuple(item for key, item in native.items() if key in visible)
+                if observations:
+                    hashes = tuple(sorted((item.observation_id, sha256_json(item.to_dict())) for item in observations))
+                    lineages = normalized_authorized_observation_lineages(
+                        observations, authorized_source=source,
+                        occurrence_lineages=tuple(source_occurrence_lineage_from_observation(item, authorized_source=source)
+                                                  for item in observations),
+                    )
+                    provider_input = SimpleNamespace(
+                        authorized_observations=observations, authorized_observation_hashes=hashes,
+                        occurrence_lineages=lineages, requester_user_id=arguments["requester_user_id"],
+                        workspace_id=arguments["workspace_id"], authorized_source_scope_ids=source.source_scope_ids,
+                        source_session_binding_fingerprint=revision.safe_binding["source_session_binding_fingerprint"],
+                        index=SimpleNamespace(_runtime_components=SimpleNamespace(tokenizer_profile=tokenizer)),
+                    )
+                    providers = _build_ingestion_source_occurrence_providers(provider_input, include_table_providers=False)
+                    provider = next(item for item in providers
+                                    if item.normalized_field == "message_occurrence.direct_source_identifier_v1")
+                    # A query-keyed bounded sample cannot prove a complete set,
+                    # total, latest state or absence, even if its reader finished.
+                    provider = replace(provider, source_asset_reason_counts=(("unresolved", 1),))
+                    plan = SemanticQueryPlan(
+                        query_hash=sha256_json(query_text), query_class="exact_set_or_inventory",
+                        source_kind=source.source_kind, source_scope_ids=source.source_scope_ids,
+                        workspace_id=arguments["workspace_id"], requester_user_id=arguments["requester_user_id"],
+                        required_permissions=("read",), user_graph_revision_id="unavailable",
+                        canonical_graph_revision_id="unavailable", ontology_revision_id="unavailable",
+                        assembly_policy_id="source_start", allowed_paths=(), seed_node_ids=(), max_hops=0,
+                        max_fanout=0, candidate_limit=0, result_limit=min(limit, 100), evidence_budget=128,
+                        time_budget_ms=SOURCE_EVIDENCE_TIME_BUDGET_MS, repair_budget=0, repair_attempt_count=0,
+                        claim_strength="cited_evidence", exact_operation="inventory_with_count",
+                        exact_inventory_kind=provider.resource_kind, exact_normalized_field=provider.normalized_field,
+                        exact_predicate=provider.predicate, exact_operator=provider.operator,
+                        exact_source_occurrence_provider_fingerprint=provider.provider_fingerprint,
+                        exact_identifier_term_hashes=(sha256_json(identifier_terms[0]),),
+                    )
+                    check_source_evidence_deadline(deadline)
+                    exact_result = execute_deterministic_source_occurrence_inventory(
+                        plan=plan, provider=provider, expected_authorized_scope_fingerprint=provider.authorized_scope_fingerprint,
+                        page_size=min(limit, 100), cursor=None,
+                    )
+                    check_source_evidence_deadline(deadline)
+            except _SourceEvidenceDeadlineExceeded:
+                scan = replace(scan, complete=False, stop_reason="deadline")
+                exact_result = None
+            # No exact result means no positive or negative inventory claim.
+            if exact_result is None:
+                evidence = []
+            citations = [item["citation_hash"] for item in evidence]
+            supported = source_evidence_supported_requested_fields(
+                requested_fields, exact_result=exact_result, answer_citation_hashes=tuple(citations),
+                verified_citation_lineages=tuple((item["citation_hash"], item["occurrence_lineage_fingerprint"])
+                                                for item in evidence),
+            )
+            missing = [field for field in requested_fields if field not in supported]
+            field_coverage = {
+                "request_contract_fingerprint": sha256_json(request_contract),
+                "requested_fields": list(requested_fields), "supported_fields": list(supported),
+                "missing_fields": missing, "status": "incomplete" if missing else "verified", "absence_claim": False,
+                "evidence_citation_hashes": sorted(citations),
+            }
+            field_coverage["coverage_fingerprint"] = sha256_json(field_coverage)
+            status = "partial" if evidence else "pending_review"
+            payload = {
+                "status": status, "query_hash": sha256_json(query_text), "evidence": evidence, "citations": citations,
+                "deterministic_exact": exact_result is not None,
+                "exact_result": exact_result.to_safe_dict() if exact_result else None,
+                "canonical_kg": False, "graph_hits": {"count": 0},
+                "coverage": {"status": "incomplete", "absence_claim": False,
+                             "scope": "declared_completed_ingestion_jobs", "reason": scan.stop_reason or "source_occurrence_shortlist"},
+                "requested_field_coverage": field_coverage,
+                "warnings": ["source_occurrence_shortlist_incomplete"],
+                "query_agent": {
+                    "status": "pending_review", "stop_reason": scan.stop_reason or "source_occurrence_shortlist",
+                    "original_query_hash": request_contract["original_query_hash"], "request_contract": dict(request_contract),
+                    "context_bundle": {"citation_hashes": citations, "missing_field_hashes": [sha256_json(field) for field in missing],
+                                       "source_execution": {"scanned_observation_count": scan.scanned_observation_count,
+                                                            "complete": False, "stop_reason": scan.stop_reason}},
+                },
+                **({"presentation_truncated": True} if header_groups_truncated else {}),
+            }
+            if mail_tool:
+                payload.update(mail_import_session_id=selector, evidence_snippets=evidence,
+                               citations=[_citation_for_snippet(item) for item in evidence])
+            else:
+                payload["answer"] = {"status": status, "text": "Source-backed occurrences are available; coverage is incomplete." if evidence else "",
+                                     "answer_hash": sha256_json(payload), "citation_count": len(evidence)}
+            validate_public_gateway_payload(payload)
+            return payload
+
         double_check = source_evidence_double_check(
             initial_status="pending_review",
             query_class=query_class,
@@ -1765,8 +2895,14 @@ def _build_source_start_semantic_handler(
             requested_fields=requested_fields,
             supported_requested_fields=(),
             deadline_monotonic=source_budget["deadline"],
+            time_budget_ms=SOURCE_START_EVIDENCE_TIME_BUDGET_MS,
         )
-        evidence = list(double_check.evidence)
+        evidence, header_groups_truncated = _bounded_mail_header_groups(
+            double_check.evidence, limit=max(0, limit - source_budget["evidence"]),
+        )
+        if context_limit_reached:
+            header_groups_truncated = True
+            double_check = replace(double_check, warnings=(*double_check.warnings, "context_limit"))
         supported = source_evidence_supported_requested_fields(
             requested_fields,
             exact_result=None,
@@ -1832,6 +2968,8 @@ def _build_source_start_semantic_handler(
                 "plan_fingerprint": sha256_json({
                     "source_start": True,
                     "request_contract": request_contract,
+                    **({"reviewed_annotation_pin": revision.reviewed_annotation_pin,
+                        "annotation_ids": annotation_ids} if annotation_ids else {}),
                 }),
                 "request_contract_fingerprint": sha256_json(request_contract),
             }],
@@ -1843,6 +2981,18 @@ def _build_source_start_semantic_handler(
                 "source_recovery": recovery,
             },
         }
+        if annotation_ids:
+            query_agent["reviewed_annotation_selection"] = {
+                "candidate_atom_ids": list(annotation_ids),
+                "nominated_source_observation_ids": list(dict.fromkeys(key
+                    for entry in revision.reviewed_source_annotations
+                    if entry["candidate_atom_id"] in annotation_ids
+                    for key in entry["source_observation_ids"])),
+                "admitted_source_observation_hashes": [key for key in annotation_hashes
+                    if key in recovery["citation_hashes"]],
+                "catalog_pin": annotation_catalog["catalog_pin"],
+                "exact_field_proof": False,
+            }
         if auto_exact:
             query_agent["exact_first"] = {
                 "status": exact_payload["status"],
@@ -1854,6 +3004,16 @@ def _build_source_start_semantic_handler(
             query_agent["context_bundle"]
         )
         status = double_check.status or ("ok" if evidence else "pending_review")
+        # Normal return is required: reader/drain errors never reach this path.
+        presentation_deferred = (
+            tuple(presentation_cache)
+            if query_class == "evidence_lookup" and not auto_exact
+            and double_check.scan is not None and double_check.scan.stop_reason == "deadline"
+            and not double_check.scan.complete and time.monotonic() < presentation_deadline
+            else ()
+        )
+        if overflow_hashes and double_check.scan is not None and time.monotonic() < presentation_deadline:
+            presentation_deferred = tuple(presentation_cache)
         if mail_tool:
             mail_evidence = []
             citations = []
@@ -1864,9 +3024,11 @@ def _build_source_start_semantic_handler(
                 citations.append(_citation_for_snippet(item))
             payload = {
                 "status": status,
+                **({"presentation_truncated": True} if header_groups_truncated else {}),
                 "mail_import_session_id": selector,
                 "query_hash": sha256_json(query_text),
                 "evidence_snippets": mail_evidence,
+                **({"query_agent": query_agent} if native_locator is not None else {}),
                 "citations": citations,
                 "warnings": sorted(set(
                     [*double_check.warnings]
@@ -1876,9 +3038,14 @@ def _build_source_start_semantic_handler(
             }
             if payload["requested_field_coverage"] is None:
                 payload.pop("requested_field_coverage")
-            return payload
-        return {
+            return _admit_source_model_envelope(
+                payload, staged_items=double_check.evidence, deferred_items=presentation_deferred,
+                limit=max(0, limit - source_budget["evidence"]), deadline=presentation_deadline,
+                selection_hits=selection_hits, overflow_hashes=overflow_hashes,
+            )
+        payload = {
             "status": status,
+            **({"presentation_truncated": True} if header_groups_truncated else {}),
             "answer": {
                 "status": status,
                 "text": "Source-backed evidence is available." if evidence else "",
@@ -1904,8 +3071,16 @@ def _build_source_start_semantic_handler(
                 **(dict(coverage) if isinstance(coverage, Mapping) else {}),
             },
         }
+        return _admit_source_model_envelope(
+            payload, staged_items=double_check.evidence, deferred_items=presentation_deferred,
+            limit=max(0, limit - source_budget["evidence"]), deadline=presentation_deadline,
+                selection_hits=selection_hits, overflow_hashes=overflow_hashes,
+        )
 
     handler.authorized_capability_summary = capabilities
+    handler.reviewed_annotation_catalog = annotation_catalog
+    handler.reviewed_annotation_catalog_for_query = lambda user_text: issue56_reviewed_annotation_catalog(
+        revision, user_text=user_text)
     handler._issue56_allowed_relation_types = ()
     return handler
 
@@ -2540,6 +3715,7 @@ def build_issue56_production_semantic_retrieval_handler(
             "table_query",
             "request_contract",
             "required_terms",
+            "field_query_hints",
         }:
             raise ContractValidationError("production semantic arguments are invalid")
         if (
@@ -2549,15 +3725,26 @@ def build_issue56_production_semantic_retrieval_handler(
             or not arguments["session_id"]
         ):
             raise ContractValidationError("production semantic actor binding mismatch")
+        from formowl_mail.human_uat_orchestrator import validated_field_query_hints
 
-        # The provider may omit the optional structured selector.  For a
-        # server-bound identifier-plus-field evidence lookup, run the sealed
-        # exact-cell executor first and only fall through to graph/recovery on
-        # an exact miss.  This preserves its existing hash, permission and
-        # lineage validation while leaving source-completeness flags untouched.
+        field_query_hints = validated_field_query_hints(
+            arguments, available_source_families=authorized_capabilities["source_families"],
+        )
+        if "native_locator" in (arguments.get("request_contract") or {}):
+            raise ContractValidationError("native attachment page requires source-start handler")
+        placement = _request_term_placement(arguments)
+
+        # Provider planning is allowed to omit the optional structured selector,
+        # but an identifier-plus-field evidence lookup still has a deterministic
+        # server-owned path.  Use the sealed exact-cell lookup before graph/top-k
+        # execution; a miss falls through to the existing bounded recovery path.
+        # This keeps the provider from deciding whether a native row is exact and
+        # preserves the source/permission/lineage checks in the exact executor.
         request_contract_input = arguments.get("request_contract")
+        automatic_exact_payload: dict[str, Any] | None = None
         if (
-            exact_cell_lookup is not None
+            placement is None
+            and exact_cell_lookup is not None
             and isinstance(request_contract_input, Mapping)
             and request_contract_input.get("query_class") == "evidence_lookup"
             and request_contract_input.get("requested_fields")
@@ -2567,21 +3754,24 @@ def build_issue56_production_semantic_retrieval_handler(
         ):
             profile = exact_cell_lookup._tokenizer_profile
             query_text = arguments["query_text"]
-            analysis = profile.analyze(query_text)
+            query_analysis = profile.analyze(query_text)
             identifier_terms = tuple(
-                span.exact_token for span in analysis.protected_identifiers
+                span.exact_token for span in query_analysis.protected_identifiers
             )
             raw_required_terms = arguments.get("required_terms")
-            required_terms = tuple(
-                sorted(
-                    unicodedata.normalize("NFKC", term.strip()).casefold()
-                    for term in raw_required_terms
-                    if isinstance(term, str) and term.strip()
+            if isinstance(raw_required_terms, list):
+                normalized_required_terms = tuple(
+                    sorted(
+                        unicodedata.normalize("NFKC", term.strip()).casefold()
+                        for term in raw_required_terms
+                        if isinstance(term, str) and term.strip()
+                    )
                 )
-            ) if isinstance(raw_required_terms, list) else ()
+            else:
+                normalized_required_terms = ()
             if not identifier_terms:
                 identifier_terms = tuple(
-                    term for term in required_terms
+                    term for term in normalized_required_terms
                     if term in unicodedata.normalize("NFKC", query_text).casefold()
                     and (
                         term.isdecimal()
@@ -2589,7 +3779,7 @@ def build_issue56_production_semantic_retrieval_handler(
                     )
                 )
             if identifier_terms:
-                exact_payload = _execute_source_start_table(
+                automatic_exact_payload = _execute_source_start_table(
                     ingestion_revision,
                     lookup=exact_cell_lookup,
                     arguments=arguments,
@@ -2597,16 +3787,19 @@ def build_issue56_production_semantic_retrieval_handler(
                     mail_tool=False,
                     selector=None,
                     identifier_terms=identifier_terms,
-                    required_terms=required_terms,
+                    required_terms=normalized_required_terms,
                     automatic=True,
                 )
-                if exact_payload.get("deterministic_exact") or exact_payload.get("citations"):
-                    exact_payload["query_agent"] = {
-                        **dict(exact_payload.get("query_agent", {})),
+                if (
+                    automatic_exact_payload.get("deterministic_exact")
+                    or automatic_exact_payload.get("citations")
+                ):
+                    automatic_exact_payload["query_agent"] = {
+                        **dict(automatic_exact_payload.get("query_agent", {})),
                         "authorized_capability_summary": authorized_capabilities,
                     }
-                    validate_projection(exact_payload)
-                    return exact_payload
+                    validate_projection(automatic_exact_payload)
+                    return automatic_exact_payload
         request_session = session
         request_providers = providers
         request_observations_by_hash: Mapping[
@@ -2617,7 +3810,7 @@ def build_issue56_production_semantic_retrieval_handler(
         ] = MappingProxyType({})
         request_candidate_session = request_session
         request_candidate_lookup = candidate_lookup
-        if exact_cell_lookup is not None:
+        if placement is None and exact_cell_lookup is not None:
             provider_batch = exact_cell_lookup.providers_for_request(
                 query_text=arguments["query_text"],
                 table_query=arguments.get("table_query"),
@@ -2746,7 +3939,9 @@ def build_issue56_production_semantic_retrieval_handler(
             )
             else None
         )
-        if candidate is not None:
+        if placement is not None:
+            query_agent_payload = _placement_initial_context(query_agent_payload)
+        if candidate is not None and placement is None:
             candidate_payload = {
                 **candidate.to_safe_dict(),
                 "structure_status": "candidate_only",
@@ -2784,7 +3979,7 @@ def build_issue56_production_semantic_retrieval_handler(
             }
             validate_projection(payload)
             return payload
-        if result is None:
+        if result is None or (placement is not None and result.exact_result is not None):
             payload = {
                 "status": public_replan_status or "replan_required",
                 "query_agent": query_agent_payload,
@@ -2836,6 +4031,7 @@ def build_issue56_production_semantic_retrieval_handler(
         requested_evidence_cap = arguments.get("page_size", 20)
         if type(requested_evidence_cap) is not int or requested_evidence_cap < 1:
             raise ContractValidationError("production document evidence limit is invalid")
+        header_groups_truncated = False
         evidence, redaction_count = project_evidence(
             result,
             limit=(
@@ -2857,6 +4053,7 @@ def build_issue56_production_semantic_retrieval_handler(
                 for item in evidence
             ),
         )
+        initial_evidence_count = len(evidence)
         source_recovery: dict[str, Any] | None = None
         requested_source_families = (
             request_contract_summary.get("source_family_scope", ())
@@ -2883,6 +4080,8 @@ def build_issue56_production_semantic_retrieval_handler(
             requested_fields=requested_fields,
             supported_requested_fields=supported_requested_fields,
         )
+        if placement is not None:
+            evidence = []  # No initial projection proves the private occurrence predicate.
         mail_selector_ids: tuple[str, ...] = ()
         if "mail" in requested_source_family_set and source_records is not None:
             raw_mail_selector_ids = getattr(
@@ -2972,6 +4171,8 @@ def build_issue56_production_semantic_retrieval_handler(
                 )
             )
 
+            recovery_mail_parents: dict[tuple[str, str, str, str], Observation] = {}
+
             def begin_document_source_projection(deadline: float) -> None:
                 nonlocal query_terms, protected_query_tokens
                 check_source_evidence_deadline(deadline)
@@ -2985,14 +4186,19 @@ def build_issue56_production_semantic_retrieval_handler(
                 # The family dispatcher does not directly close over query_terms.
                 # Bind the normalized hint explicitly for the shared sealed reader;
                 # shortlist hashes still require the same authority and matcher checks.
+                lookup_terms: set[str] = set()
+                for term in (placement.child_terms if placement is not None else required_terms):
+                    check_source_evidence_deadline(deadline)
+                    lookup_terms.update(tokenizer_profile.analyze(term).tokens)
                 project_source_observation.source_lookup_terms = tuple(sorted(
-                    required_terms if required_terms else query_terms
+                    lookup_terms if required_terms else query_terms
                 ))
                 preferred_terms: set[str] = set()
-                for field in requested_fields if required_terms else ():
+                for field in (*requested_fields, *(hint["text"] for hint in field_query_hints)) if required_terms else ():
                     check_source_evidence_deadline(deadline)
                     preferred_terms.update(tokenizer_profile.analyze(field).tokens)
                 project_source_observation.source_lookup_preferred_terms = tuple(sorted(preferred_terms))
+                check_source_evidence_deadline(deadline)
 
             def project_document_source_observation(
                 observation: Observation,
@@ -3082,7 +4288,11 @@ def build_issue56_production_semantic_retrieval_handler(
                     raise ContractValidationError(
                         "production mail source scope binding is invalid"
                     )
-                if (
+                parent_key = (source_scope_id, observation.asset_id, observation.extractor_run_id,
+                              observation.location.get("message_occurrence_id"))
+                if observation.observation_type == "email_message":
+                    recovery_mail_parents[parent_key] = observation
+                if placement is None and (
                     _source_mail_observation_match(
                         observation,
                         query_terms=query_terms,
@@ -3109,6 +4319,18 @@ def build_issue56_production_semantic_retrieval_handler(
                     return None
                 item, _ = projected
                 item["source_scope_fingerprint"] = sha256_json(source_scope_id)
+                if placement is not None:
+                    item = _placement_mail_group(
+                        placement, observation, source_scope_id, item, source=authorized_source,
+                        protected_terms=protected_query_tokens, tokenizer=tokenizer_profile,
+                    )
+                    if item is None:
+                        return None
+                else:
+                    item = _mail_header_context(
+                        observation, item, recovery_mail_parents.get(parent_key),
+                        source=authorized_source, scope_id=source_scope_id,
+                    )
                 check_source_evidence_deadline(deadline)
                 return observation_hash, item
 
@@ -3239,7 +4461,7 @@ def build_issue56_production_semantic_retrieval_handler(
                 query_class=str(request_query_class),
                 result_query_class=getattr(result, "query_class", None),
                 initial_warnings=result_warnings,
-                verified_evidence_count=len(evidence),
+                verified_evidence_count=initial_evidence_count,
                 evidence_limit=min(10, requested_evidence_cap),
                 sealed_coverage_complete=sealed_coverage_complete,
                 read_source=(
@@ -3255,7 +4477,12 @@ def build_issue56_production_semantic_retrieval_handler(
                 requested_fields=requested_fields,
                 supported_requested_fields=supported_requested_fields,
             )
-            recovered_evidence = list(double_check.evidence)
+            recovered_evidence, header_groups_truncated = _bounded_mail_header_groups(
+                double_check.evidence, limit=max(0, min(10, requested_evidence_cap) - len(evidence)),
+                byte_limit=max(0, 16 * 1024 - len(json.dumps(evidence, ensure_ascii=False).encode("utf-8"))),
+            )
+            if header_groups_truncated:
+                double_check = replace(double_check, warnings=(*double_check.warnings, "incomplete"))
             evidence.extend(recovered_evidence)
             redaction_count += sum(
                 item.get("content_redacted") is True
@@ -3354,6 +4581,8 @@ def build_issue56_production_semantic_retrieval_handler(
             }
         else:
             result_status = public_replan_status or result.status
+        if placement is not None and result.status in {"error", "failed", "permission_denied"}:
+            result_status = result.status  # An advisory replan cannot hide the original failure.
         evidence_result = MailEvidenceQueryResult(
             status="ok" if evidence else result_status,
             mail_import_session_id=None,
@@ -3487,6 +4716,7 @@ def build_issue56_production_semantic_retrieval_handler(
                 projected_relation_types.add(relation_type)
         payload = {
             "status": result_status,
+            **({"presentation_truncated": True} if header_groups_truncated else {}),
             "answer": {
                 "status": answer.status,
                 "text": answer.answer_text,
@@ -3504,6 +4734,15 @@ def build_issue56_production_semantic_retrieval_handler(
             },
             "redaction_counts": {"redacted_value_count": redaction_count},
         }
+        if placement is not None:
+            # Preserve the existing envelope, source-recheck metadata, failures,
+            # coverage and fingerprints. Only unproved initial answer content
+            # is withheld; cited recheck groups retain their existing payload.
+            citations = list(dict.fromkeys(item["citation_hash"] for item in evidence))
+            answer_payload = {**payload["answer"], "text": "", "citation_count": len(citations)}
+            answer_payload.pop("answer_hash", None)
+            answer_payload["answer_hash"] = sha256_json(answer_payload)
+            payload = {**payload, "answer": answer_payload, "citations": citations}
         validate_projection(payload)
         return payload
 
@@ -3662,7 +4901,7 @@ def build_issue56_production_semantic_handlers(
             bundles=(loaded.query_bundle,),
             safe_binding=loaded.safe_binding,
         )
-        return retrieval_handler, mail_evidence_handler
+        return retrieval_handler, _closed_placement_mail_handler(mail_evidence_handler)
 
     if (
         ingestion_revision.session is not None
@@ -3765,7 +5004,7 @@ def build_issue56_production_semantic_handlers(
             safe_binding=ingestion_revision.safe_binding,
             allowed_relation_types=allowed_relation_types,
         )
-    return retrieval_handler, mail_evidence_handler
+    return retrieval_handler, _closed_placement_mail_handler(mail_evidence_handler)
 
 
 def _build_ingestion_source_occurrence_providers(
@@ -3881,6 +5120,30 @@ class _OnDemandIngestionProviderBatch:
     observations_by_hash: Mapping[str, tuple[Observation, ...]]
     lineages_by_observation_id: Mapping[str, Any]
     authorized_reference_pairs: tuple[tuple[str, str], ...]
+
+
+@contextmanager
+def _native_planning_phase(metrics, stage):
+    """Aggregate existing calls only; a completed call need not find a shard."""
+    started = None
+    if metrics is not None:
+        try:
+            metrics[f"native_{stage}_attempted"] += 1
+            started = (time.monotonic(), time.thread_time())
+        except Exception:
+            metrics["native_phase_failed"] = 1
+    completed = False
+    try:
+        yield
+        completed = True
+    finally:
+        if started is not None:
+            try:
+                metrics[f"native_{stage}_wall_ms"] += round((time.monotonic() - started[0]) * 1000, 3)
+                metrics[f"native_{stage}_cpu_ms"] += round((time.thread_time() - started[1]) * 1000, 3)
+                metrics[f"native_{stage}_completed"] += int(completed)
+            except Exception:
+                metrics["native_phase_failed"] = 1
 
 
 class _IngestionExactCellLookup:
@@ -4056,6 +5319,8 @@ class _IngestionExactCellLookup:
         evidence_by_id: dict[str, dict[str, Any]],
         table_query: Mapping[str, Any] | None = None,
         native_group_callback: Callable[[tuple[Observation, ...]], None] | None = None,
+        begin_family: Callable[[str], None] | None = None,
+        _phase_metrics: dict[str, int | float] | None = None,
     ) -> RevisionOwnedMailSourceScan:
         """Use existing token/row shards; hydrate and admit only same-row evidence.
 
@@ -4068,6 +5333,7 @@ class _IngestionExactCellLookup:
         if source is None:
             raise ContractValidationError("source table authority is unavailable")
         scanned = 0
+        read_start = 0
         context_bytes = 0
 
         class Stopped(Exception):
@@ -4080,7 +5346,7 @@ class _IngestionExactCellLookup:
         def load(job_index: int, observation_id: str, observation_hash: str) -> Observation:
             nonlocal scanned
             check()
-            if scanned >= max_observations:
+            if scanned - read_start >= max_observations:
                 raise Stopped("observation_limit")
             if (type(job_index) is not int or not 0 <= job_index < len(revision.job_authorities)
                     or not isinstance(observation_id, str) or not _is_sha256(observation_hash)):
@@ -4099,127 +5365,18 @@ class _IngestionExactCellLookup:
                 raise ContractValidationError("source table permission is denied")
             return item
 
-        try:
-            check()
-            terms = () if table_query is not None else tuple(required_terms) or tuple(
-                span.exact_token for span in self._tokenizer_profile.analyze(query_text).protected_identifiers
-            )
-            if not terms and table_query is None:
-                return RevisionOwnedMailSourceScan((), 0, False, "source_table_anchor_unresolved")
-            hashes = set()
-            typed_hashes = set()
-            # A business identifier may carry the source column's type prefix
-            # (for example ``PO470002002``) while the native cell stores only
-            # its numeric value (``470002002``).  Resolve that representation
-            # through the sealed source schema, never by a global alias or by
-            # stripping arbitrary user text.  Keep the original term as a
-            # matcher below so an unbound identifier remains a normal literal.
-            typed_term_bindings: dict[str, tuple[tuple[str, str], ...]] = {}
-            for term in terms:
-                check()
-                normalized_term = unicodedata.normalize("NFKC", term).casefold()
-                if table_query is None:
-                    # Candidate-only attachment tables can still contain a
-                    # native numeric value for a typed identifier (for
-                    # example PO470002002 -> 470002002). Use the sealed
-                    # candidate schema to locate that row; hydration keeps
-                    # candidate_only status and cannot promote it to exact.
-                    schema_fields = tuple(item["field"] for item in self._columns)
-                    if re.match(r"po[0-9]+$", normalized_term):
-                        po_fields = tuple(
-                            field for field in schema_fields
-                            if re.search(r"(?<![a-z0-9])po(?![a-z0-9])", field.casefold())
-                            and re.search(r"(?<![a-z0-9])(no|number)(?![a-z0-9])", field.casefold())
-                        )
-                        if po_fields:
-                            header_po_fields = tuple(
-                                field for field in po_fields
-                                if normalize_source_occurrence_structured_surface(field)
-                                == "header po no."
-                            )
-                            schema_fields = header_po_fields or po_fields
-                    elif re.fullmatch(r"[0-9]+\.[a-z0-9][a-z0-9._-]*", normalized_term):
-                        schema_fields = _part_identifier_schema_fields(schema_fields)
-                    bindings = bind_typed_identifier_to_source_schema(term, schema_fields)
-                    if not bindings and re.fullmatch(
-                            r"[0-9]+\.[a-z0-9][a-z0-9._-]*", normalized_term):
-                        bindings = tuple((field, term) for field in schema_fields)
-                    if bindings:
-                        typed_term_bindings[term] = bindings
-                        for field, value in bindings:
-                            normalized_field = normalize_source_occurrence_structured_surface(field)
-                            attachment_column_hashes = tuple(dict.fromkeys(
-                                item["column_hash"] for item in self._columns
-                                if normalize_source_occurrence_structured_surface(item["field"])
-                                == normalized_field and not item["inline_table"]
-                            ))
-                            if source_families == ("attachment_table",):
-                                column_hashes = attachment_column_hashes
-                            elif source_families == ("mail",):
-                                inline_column_hashes = tuple(dict.fromkeys(
-                                    item["column_hash"] for item in self._columns
-                                    if normalize_source_occurrence_structured_surface(item["field"])
-                                    == normalized_field and item["inline_table"]
-                                ))
-                                column_hashes = inline_column_hashes or self._normalized_columns.get(
-                                    normalized_field, ()
-                                )
-                            else:
-                                column_hashes = attachment_column_hashes or self._normalized_columns.get(
-                                    normalized_field, ()
-                                )
-                            for column_hash in column_hashes:
-                                value_hash = source_occurrence_exact_cell_value_hash(column_hash, value)
-                                typed_hashes.add(value_hash)
-                                hashes.add(value_hash)
-                if term not in typed_term_bindings:
-                    hashes.update(
-                        sha256_json(token)
-                        for token in self._tokenizer_profile.analyze(term).tokens
-                    )
-            if (
-                table_query is None
-                and source_families == ("attachment_table",)
-                and len(typed_term_bindings) >= 2
-            ):
-                terms = tuple(sorted(typed_term_bindings))
-                hashes = typed_hashes
-            if table_query is not None:
-                # Resolve literal source-cell predicates through the existing
-                # sealed value shards, independently of tokenizer protection.
-                for predicate in table_query["filters"]:
-                    column_hashes = self._normalized_columns.get(
-                        normalize_source_occurrence_structured_surface(predicate["field"]), (),
-                    )
-                    hashes.update(source_occurrence_exact_cell_value_hash(column, predicate["value"])
-                                  for column in column_hashes)
-            if not hashes:
-                return RevisionOwnedMailSourceScan((), 0, False, "source_table_anchor_unresolved")
-            row_keys: dict[str, bool] = {}
-            for shard in sorted({key[7:9] for key in hashes}):
-                records = self._read_matching_shard_records(
-                    "value", shard, matching_keys=hashes, check=check,
-                    maximum_matching_records=max_observations,
-                )
-                if records is None:
-                    raise Stopped("observation_limit")
-                for _, row_key, inline in records:
-                    family = "mail" if inline else "attachment_table"
-                    if family in source_families:
-                        if row_key in row_keys and row_keys[row_key] != inline:
-                            raise ContractValidationError("source table family is ambiguous")
-                        row_keys[row_key] = inline
-                        if len(row_keys) > max_observations:
-                            raise Stopped("observation_limit")
+        def hydrate() -> None:
+            nonlocal context_bytes
             def matched_rows():
                 # Seal one shard, emit its verified rows, then proceed. A later
                 # deadline cannot discard already admitted same-row evidence.
                 for shard in sorted({key[7:9] for key in row_keys}):
                     local_keys = {key for key in row_keys if key[7:9] == shard}
-                    records = self._read_matching_shard_records(
-                        "row", shard, matching_keys=local_keys, check=check,
-                        maximum_matching_records=max_observations,
-                    )
+                    with _native_planning_phase(_phase_metrics, "rows"):
+                        records = self._read_matching_shard_records(
+                            "row", shard, matching_keys=local_keys, check=check,
+                            maximum_matching_records=max_observations,
+                        )
                     if records is None:
                         raise Stopped("observation_limit")
                     by_row: dict[str, list[Any]] = {key: [] for key in local_keys}
@@ -4254,6 +5411,19 @@ class _IngestionExactCellLookup:
                         and normalize_source_occurrence_structured_surface(cell.text or "")
                         == normalize_source_occurrence_structured_surface(predicate["value"])
                         for cell in cells) for predicate in table_query["filters"])
+                    if matches and terms:
+                        normalized_cells = [
+                            unicodedata.normalize("NFKC", cell.text or "").casefold()
+                            for cell in cells
+                        ]
+                        matches = all(
+                            any(
+                                re.search(rf"(?<!\w){re.escape(term)}(?!\w)", cell_text)
+                                if term.isdecimal() else term in cell_text
+                                for cell_text in normalized_cells
+                            )
+                            for term in terms
+                        )
                 else:
                     def term_matches(term: str) -> bool:
                         bindings = typed_term_bindings.get(term)
@@ -4275,8 +5445,10 @@ class _IngestionExactCellLookup:
                                 for cell in cells
                             )
                         normalized_term = unicodedata.normalize("NFKC", term).casefold()
-                        return any(normalized_term in unicodedata.normalize("NFKC", cell.text or "").casefold()
-                                   for cell in cells)
+                        return any(
+                            normalized_term in unicodedata.normalize("NFKC", cell.text or "").casefold()
+                            for cell in cells
+                        )
 
                     matches = all(term_matches(term) for term in terms)
                 if not matches:
@@ -4325,7 +5497,8 @@ class _IngestionExactCellLookup:
                     if cell.permission_scope != row.permission_scope or cell.extractor_run_id != row.extractor_run_id:
                         raise ContractValidationError("source table cell scope mismatch")
                     structure = (cell.payload or {}).get("table_structure", {})
-                    structure_status = structure.get("structure_status", "unavailable")
+                    row_structure = (row.payload or {}).get("table_structure", {})
+                    structure_status = _effective_cell_structure_status(self._revision, cell, row_structure)
                     field = structure.get("column_name") or f"column_{cell.location.get('cell_index')}"
                     value, redacted = redact_public_raw_references(cell.text or "")
                     safe_field, field_redacted = redact_public_raw_references(field)
@@ -4341,8 +5514,11 @@ class _IngestionExactCellLookup:
                         "value_truncated": len(value) > 400,
                         "structure_status": structure_status,
                         "source_proven_field_schema": (
-                            structure_status == "source_provided"
-                            and (row.payload or {}).get("table_structure", {}).get("structure_status") == "source_provided"
+                            (
+                                (structure_status == "source_provided"
+                                 and row_structure.get("structure_status") == "source_provided")
+                                or structure_status == "reviewed_header"
+                            )
                             and not redacted and not field_redacted and len(field) <= 120 and len(value) <= 400
                         ),
                     }
@@ -4415,6 +5591,154 @@ class _IngestionExactCellLookup:
                     native_group_callback((parent, *subset))
                 if not observation_callback(row, row.permission_scope["scope_id"]):
                     raise Stopped("callback")
+
+        try:
+            check()
+            with _native_planning_phase(_phase_metrics, "terms"):
+                terms = tuple(required_terms) or (() if table_query is not None else tuple(
+                    span.exact_token for span in self._tokenizer_profile.analyze(query_text).protected_identifiers
+                ))
+                if not terms and table_query is None:
+                    return RevisionOwnedMailSourceScan((), 0, False, "source_table_anchor_unresolved")
+                hashes = set()
+                typed_hashes = set()
+                typed_term_bindings: dict[str, tuple[tuple[str, str], ...]] = {}
+                for term in terms:
+                    check()
+                    normalized_term = unicodedata.normalize("NFKC", term).casefold()
+                    if table_query is None:
+                        # Candidate-only attachment tables can still contain a
+                        # native numeric value for a typed identifier (for
+                        # example PO470002002 -> 470002002). Use the sealed
+                        # candidate schema to locate that row; hydration keeps
+                        # candidate_only status and cannot promote it to exact.
+                        schema_fields = tuple(item["field"] for item in self._columns)
+                        if re.match(r"po[0-9]+$", normalized_term):
+                            po_fields = tuple(
+                                field for field in schema_fields
+                                if re.search(r"(?<![a-z0-9])po(?![a-z0-9])", field.casefold())
+                                and re.search(r"(?<![a-z0-9])(no|number)(?![a-z0-9])", field.casefold())
+                            )
+                            if po_fields:
+                                header_po_fields = tuple(
+                                    field for field in po_fields
+                                    if normalize_source_occurrence_structured_surface(field)
+                                    == "header po no."
+                                )
+                                schema_fields = header_po_fields or po_fields
+                        elif re.fullmatch(r"[0-9]+\.[a-z0-9][a-z0-9._-]*", normalized_term):
+                            schema_fields = _part_identifier_schema_fields(schema_fields)
+                        bindings = bind_typed_identifier_to_source_schema(
+                            term, schema_fields,
+                        )
+                        if not bindings and re.fullmatch(
+                                r"[0-9]+\.[a-z0-9][a-z0-9._-]*", normalized_term):
+                            bindings = tuple((field, term) for field in schema_fields)
+                        if bindings:
+                            typed_term_bindings[term] = bindings
+                            for field, value in bindings:
+                                normalized_field = normalize_source_occurrence_structured_surface(field)
+                                attachment_column_hashes = tuple(dict.fromkeys(
+                                    item["column_hash"] for item in self._columns
+                                    if normalize_source_occurrence_structured_surface(item["field"])
+                                    == normalized_field and not item["inline_table"]
+                                ))
+                            if source_families == ("attachment_table",):
+                                column_hashes = attachment_column_hashes
+                            elif source_families == ("mail",):
+                                inline_column_hashes = tuple(dict.fromkeys(
+                                    item["column_hash"] for item in self._columns
+                                    if normalize_source_occurrence_structured_surface(item["field"])
+                                    == normalized_field and item["inline_table"]
+                                ))
+                                column_hashes = inline_column_hashes or self._normalized_columns.get(
+                                    normalized_field, ()
+                                )
+                            else:
+                                column_hashes = attachment_column_hashes or self._normalized_columns.get(
+                                    normalized_field, ()
+                                )
+                            for column_hash in column_hashes:
+                                value_hash = source_occurrence_exact_cell_value_hash(column_hash, value)
+                                typed_hashes.add(value_hash)
+                                hashes.add(value_hash)
+                    if term not in typed_term_bindings:
+                        hashes.update(
+                            sha256_json(token)
+                            for token in self._tokenizer_profile.analyze(term).tokens
+                        )
+                # If the attachment query has two independent native schema
+                # bindings (the part identifier and its PO), those bindings
+                # already define the same-row anchor. Do not spend the
+                # bounded attachment slice on auxiliary protected tokens
+                # from the surrounding Chinese request; mail text keeps the
+                # ordinary token path in its separate engine.
+                if (
+                    table_query is None
+                    and source_families == ("attachment_table",)
+                    and len(typed_term_bindings) >= 2
+                ):
+                    terms = tuple(sorted(typed_term_bindings))
+                    hashes = typed_hashes
+                if table_query is not None:
+                    # Resolve literal source-cell predicates through the existing
+                    # sealed value shards, independently of tokenizer protection.
+                    for predicate in table_query["filters"]:
+                        column_hashes = self._normalized_columns.get(
+                            normalize_source_occurrence_structured_surface(predicate["field"]), (),
+                        )
+                        hashes.update(source_occurrence_exact_cell_value_hash(column, predicate["value"])
+                                      for column in column_hashes)
+            if not hashes:
+                return RevisionOwnedMailSourceScan((), 0, False, "source_table_anchor_unresolved")
+            row_keys: dict[str, bool] = {}
+            prefilter_count = 0
+            for shard in sorted({key[7:9] for key in hashes}):
+                with _native_planning_phase(_phase_metrics, "values"):
+                    records = self._read_matching_shard_records(
+                        "value", shard, matching_keys=hashes, check=check,
+                        maximum_matching_records=max_observations,
+                    )
+                if records is None:
+                    raise Stopped("observation_limit")
+                prefilter_count = max(prefilter_count, len(records))
+                for _, row_key, inline in records:
+                    family = "mail" if inline else "attachment_table"
+                    if family in source_families:
+                        if row_key in row_keys and row_keys[row_key] != inline:
+                            raise ContractValidationError("source table family is ambiguous")
+                        row_keys[row_key] = inline
+                        if len(row_keys) > max_observations:
+                            raise Stopped("observation_limit")
+            if begin_family is None:
+                hydrate()
+            else:
+                # Discovery is complete and sealed before any family turn.
+                # Full pre-filter multiplicity still governs each local cap.
+                engine_limit, engine_deadline = max_observations, deadline_monotonic
+                discovered = row_keys
+                reason = "source_table_shortlist"
+                for index, family in enumerate(source_families):
+                    left = len(source_families) - index
+                    read_start = scanned
+                    max_observations = (engine_limit - scanned) // left
+                    now = time.monotonic()
+                    deadline_monotonic = now + max(0, engine_deadline - now) / left
+                    row_keys = {key: inline for key, inline in discovered.items()
+                                if ("mail" if inline else "attachment_table") == family}
+                    context_bytes = 0
+                    try:
+                        check()
+                        begin_family(family)
+                        if (max_observations <= 0 or prefilter_count > max_observations
+                                or len(row_keys) > max_observations):
+                            raise Stopped("observation_limit")
+                        hydrate()
+                    except Stopped as exc:
+                        reason = str(exc)
+                        if reason in {"callback", "context_limit"} or time.monotonic() >= engine_deadline:
+                            break
+                return RevisionOwnedMailSourceScan((), scanned, False, reason)
             # Token shortlists and native XML values never certify completeness.
             return RevisionOwnedMailSourceScan((), scanned, False, "source_table_shortlist")
         except Stopped as exc:
@@ -4837,13 +6161,36 @@ class _IngestionExactCellLookup:
             with path.open("rb") as stream:
                 # Native index records hold IDs/hashes, not source content.
                 # Bound a corrupt unterminated line as well as retained records.
-                for line in iter(lambda: stream.readline(16 * 1024 + 1), b""):
+                def sealed_lines():
+                    pending = b""
+                    # Batch I/O and hashing, not validation or deadline polling.
+                    # The partial line plus new bytes never exceeds the old
+                    # bounded readline size; split only on LF, like readline.
+                    while chunk := stream.read(16 * 1024 + 1 - len(pending)):
+                        digest.update(chunk)
+                        block = pending + chunk
+                        if b"\r" in block:
+                            # bytes.splitlines also splits bare CR; readline
+                            # does not. Keep the exact LF-only fallback.
+                            lines = block.split(b"\n")
+                            pending = lines.pop()
+                            for item in lines:
+                                yield item + b"\n"
+                        else:
+                            lines = block.splitlines(keepends=True)
+                            pending = b"" if block.endswith(b"\n") else lines.pop()
+                            yield from lines
+                        if len(pending) > 16 * 1024:
+                            raise ContractValidationError("ingestion exact cell lookup record is oversized")
+                    if pending:
+                        yield pending
+
+                for line in sealed_lines():
                     if len(line) > 16 * 1024:
                         raise ContractValidationError("ingestion exact cell lookup record is oversized")
                     if check is not None and (record_count % 128 == 0 or size - checked_size >= 64 * 1024):
                         check()
                         checked_size = size
-                    digest.update(line)
                     size += len(line)
                     record_count += 1
                     if size > binding["size_bytes"]:
