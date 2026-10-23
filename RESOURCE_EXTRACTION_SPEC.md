@@ -490,7 +490,8 @@ row/column or record key, export/query revision, source-system timestamps,
 types/precision/units and explicit blank/null semantics. Raw values, formulas,
 cached results and formatted display are distinct evidence; a cached XML value
 does not prove a freshly calculated formula result. Keep merged/header paths
-and same-row association; inferred headers remain candidates until validated.
+and same-row association; inferred headers remain candidates until validated
+through the reviewed header validation contract in SPEC.md §7.5.
 
 Deterministic lookup, filtering, joins, sorting, aggregation and counts use
 validated native rows/cells/schema or a faithful revision-bound projection with

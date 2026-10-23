@@ -1973,6 +1973,32 @@ context budgets; partial support and source-backed blanks do not trigger recheck
 Native date/display/formula/merged-header limitations remain explicit. A bounded
 exact shortlist never certifies complete inventory or source absence.
 
+Reviewed header validation (2026-10-23, **待實作／待測**) is the only path by
+which an inferred spreadsheet/attachment header (`candidate_only`) may become
+applicable requested-field schema. It is generic over every admitted table; it
+never targets a question, field name, identifier or UAT case.
+
+1. Proposal: an offline, resumable, bounded batch reads each candidate header
+   region (header path plus a bounded sample of its own data rows) and proposes,
+   per column, `header_confirmed`, `not_header` or `ambiguous`. Proposers may be
+   deterministic structural checks or an LLM; output is a candidate only and is
+   bound to source content hash, sheet/table fingerprint, header row index,
+   column hash and the native header text. Proposals never rename, translate,
+   alias or merge labels; the native label stays the field identity.
+2. Review: a sealed review receipt (same contract shape as reviewed UAT
+   annotations: sealed configuration plus receipt SHA-256, approver identity,
+   decision and a versioned acceptance policy) approves or rejects proposals.
+   Approval is never inferred at query time and never comes from the answer model.
+3. Effect: an approved column is exposed as `reviewed_header`, distinct from
+   `source_provided`, with its receipt fingerprint. Automatic binding and
+   deterministic same-row lookup may use `source_provided` or `reviewed_header`
+   columns; answers disclose reviewed-header provenance. Requested-field matching
+   remains normalized native-label equality.
+4. Limits: `ambiguous`, duplicate or redacted labels, unresolved merged/multi-level
+   paths, and source revisions that change the bound hash remain `candidate_only`.
+   Header validation does not certify row, table, workbook or source completeness;
+   exact set/count/inventory/negative claims keep every existing completeness rule.
+
 Projection-independent mail-occurrence execution (2026-10-16, **待測**) is a
 primary exact route, not an exception to the automatic recheck exclusion. A
 validated mail-only exact request with one unambiguous native protected identifier

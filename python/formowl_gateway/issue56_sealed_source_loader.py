@@ -111,6 +111,49 @@ from .issue56_diagnostic import (
     Issue56SealedSourceDiagnosticInput,
     build_issue56_sealed_source_diagnostic_input,
 )
+
+
+# Part identifiers are labelled differently across the authorized mail tables.
+# Keep the exact lookup bounded to source-declared identifier columns while
+# accepting the common English and Chinese labels used by the production
+# spreadsheets and embedded tables.  Restricting this to a small alias set is
+# important: the native row still has to verify the identifier and projection
+# never treats a guessed column as evidence.
+_PART_IDENTIFIER_FIELD_ALIASES = frozenset(
+    {
+        "customer pn",
+        "customer p/n",
+        "customer part number",
+        "customer part no",
+        "customer part no.",
+        "料號",
+        "料号",
+        "part number",
+        "part no",
+        "part no.",
+        "part #",
+        "part#",
+        "p/n",
+        "pn",
+        "mpn",
+        "material number",
+        "material no",
+        "material no.",
+        "item number",
+        "item no",
+        "item no.",
+    }
+)
+
+
+def _part_identifier_schema_fields(schema_fields: Sequence[str]) -> tuple[str, ...]:
+    """Return source-declared columns that can contain a part identifier."""
+    return tuple(
+        field
+        for field in schema_fields
+        if normalize_source_occurrence_structured_surface(field)
+        in _PART_IDENTIFIER_FIELD_ALIASES
+    )
 from .semantic import validate_public_gateway_payload
 
 
@@ -974,12 +1017,22 @@ def _execute_source_start_table(
                 raise ContractValidationError("source occurrence structured table query filter is invalid")
             labels.append(item["field"])
     else:
-        labels = list(requested)
+        # Automatic evidence lookup may ask for a business field that the
+        # current native table does not expose. Keep supported source labels
+        # and disclose missing request fields instead of dropping the row.
+        labels = [
+            available[normalize_source_occurrence_structured_surface(field)]
+            for field in requested
+            if isinstance(field, str)
+            and field.strip()
+            and len(field) <= 120
+            and normalize_source_occurrence_structured_surface(field) in available
+        ]
     if (not labels or any(not isinstance(label, str) or not label.strip() or len(label) > 120
                           or normalize_source_occurrence_structured_surface(label) not in available for label in labels)):
         return clarification()
     normalized_projections = [normalize_source_occurrence_structured_surface(label)
-                              for label in (table_query["projection_fields"] if table_query else requested)]
+                              for label in (table_query["projection_fields"] if table_query else labels)]
     if len(set(normalized_projections)) != len(normalized_projections):
         return clarification()
     if table_query and any(normalize_source_occurrence_structured_surface(field) not in normalized_projections for field in requested):
@@ -1041,7 +1094,7 @@ def _execute_source_start_table(
                 for item in evidence for cell in item["table_row"]["cells"]
                 if cell["source_proven_field_schema"]
             }
-            projections = [field for field in requested
+            projections = [field for field in labels
                            if normalize_source_occurrence_structured_surface(field) in present_fields]
             if matching_labels and projections:
                 table_query = {"filters": [{"field": next(iter(matching_labels)), "value": identifier_terms[0]}],
@@ -1284,7 +1337,7 @@ def _build_source_start_semantic_handler(
         }
         auto_exact = (
             query_class == "evidence_lookup" and bool(requested_fields) and len(identifier_terms) == 1
-            and all(normalize_source_occurrence_structured_surface(field) in applicable_fields for field in requested_fields)
+            and any(normalize_source_occurrence_structured_surface(field) in applicable_fields for field in requested_fields)
         )
         if table_query is not None:
             return _execute_source_start_table(
@@ -1354,6 +1407,11 @@ def _build_source_start_semantic_handler(
             project.source_lookup_terms = tuple(sorted(
                 lookup_terms if required_terms else query_terms
             ))
+            preferred_terms: set[str] = set()
+            for field in requested_fields if required_terms else ():
+                check_source_evidence_deadline(deadline)
+                preferred_terms.update(tokenizer.analyze(field).tokens)
+            project.source_lookup_preferred_terms = tuple(sorted(preferred_terms))
             check_source_evidence_deadline(deadline)
 
         def project(observation: Observation, scope_id: str, deadline: float):
@@ -2491,6 +2549,64 @@ def build_issue56_production_semantic_retrieval_handler(
             or not arguments["session_id"]
         ):
             raise ContractValidationError("production semantic actor binding mismatch")
+
+        # The provider may omit the optional structured selector.  For a
+        # server-bound identifier-plus-field evidence lookup, run the sealed
+        # exact-cell executor first and only fall through to graph/recovery on
+        # an exact miss.  This preserves its existing hash, permission and
+        # lineage validation while leaving source-completeness flags untouched.
+        request_contract_input = arguments.get("request_contract")
+        if (
+            exact_cell_lookup is not None
+            and isinstance(request_contract_input, Mapping)
+            and request_contract_input.get("query_class") == "evidence_lookup"
+            and request_contract_input.get("requested_fields")
+            and not any(arguments.get(key) is not None for key in (
+                "table_query", "exact_inventory_kind", "exact_field", "cursor",
+            ))
+        ):
+            profile = exact_cell_lookup._tokenizer_profile
+            query_text = arguments["query_text"]
+            analysis = profile.analyze(query_text)
+            identifier_terms = tuple(
+                span.exact_token for span in analysis.protected_identifiers
+            )
+            raw_required_terms = arguments.get("required_terms")
+            required_terms = tuple(
+                sorted(
+                    unicodedata.normalize("NFKC", term.strip()).casefold()
+                    for term in raw_required_terms
+                    if isinstance(term, str) and term.strip()
+                )
+            ) if isinstance(raw_required_terms, list) else ()
+            if not identifier_terms:
+                identifier_terms = tuple(
+                    term for term in required_terms
+                    if term in unicodedata.normalize("NFKC", query_text).casefold()
+                    and (
+                        term.isdecimal()
+                        or profile.analyze(term).protected_identifiers
+                    )
+                )
+            if identifier_terms:
+                exact_payload = _execute_source_start_table(
+                    ingestion_revision,
+                    lookup=exact_cell_lookup,
+                    arguments=arguments,
+                    request_contract=request_contract_input,
+                    mail_tool=False,
+                    selector=None,
+                    identifier_terms=identifier_terms,
+                    required_terms=required_terms,
+                    automatic=True,
+                )
+                if exact_payload.get("deterministic_exact") or exact_payload.get("citations"):
+                    exact_payload["query_agent"] = {
+                        **dict(exact_payload.get("query_agent", {})),
+                        "authorized_capability_summary": authorized_capabilities,
+                    }
+                    validate_projection(exact_payload)
+                    return exact_payload
         request_session = session
         request_providers = providers
         request_observations_by_hash: Mapping[
@@ -2872,6 +2988,11 @@ def build_issue56_production_semantic_retrieval_handler(
                 project_source_observation.source_lookup_terms = tuple(sorted(
                     required_terms if required_terms else query_terms
                 ))
+                preferred_terms: set[str] = set()
+                for field in requested_fields if required_terms else ():
+                    check_source_evidence_deadline(deadline)
+                    preferred_terms.update(tokenizer_profile.analyze(field).tokens)
+                project_source_observation.source_lookup_preferred_terms = tuple(sorted(preferred_terms))
 
             def project_document_source_observation(
                 observation: Observation,
@@ -3986,6 +4107,7 @@ class _IngestionExactCellLookup:
             if not terms and table_query is None:
                 return RevisionOwnedMailSourceScan((), 0, False, "source_table_anchor_unresolved")
             hashes = set()
+            typed_hashes = set()
             # A business identifier may carry the source column's type prefix
             # (for example ``PO470002002``) while the native cell stores only
             # its numeric value (``470002002``).  Resolve that representation
@@ -3995,23 +4117,73 @@ class _IngestionExactCellLookup:
             typed_term_bindings: dict[str, tuple[tuple[str, str], ...]] = {}
             for term in terms:
                 check()
-                hashes.update(sha256_json(token) for token in self._tokenizer_profile.analyze(term).tokens)
+                normalized_term = unicodedata.normalize("NFKC", term).casefold()
                 if table_query is None:
-                    bindings = bind_typed_identifier_to_source_schema(
-                        term,
-                        tuple(
-                            item["field"]
-                            for item in self._columns
-                            if item["structure_status"] == "source_provided"
-                        ),
-                    )
+                    # Candidate-only attachment tables can still contain a
+                    # native numeric value for a typed identifier (for
+                    # example PO470002002 -> 470002002). Use the sealed
+                    # candidate schema to locate that row; hydration keeps
+                    # candidate_only status and cannot promote it to exact.
+                    schema_fields = tuple(item["field"] for item in self._columns)
+                    if re.match(r"po[0-9]+$", normalized_term):
+                        po_fields = tuple(
+                            field for field in schema_fields
+                            if re.search(r"(?<![a-z0-9])po(?![a-z0-9])", field.casefold())
+                            and re.search(r"(?<![a-z0-9])(no|number)(?![a-z0-9])", field.casefold())
+                        )
+                        if po_fields:
+                            header_po_fields = tuple(
+                                field for field in po_fields
+                                if normalize_source_occurrence_structured_surface(field)
+                                == "header po no."
+                            )
+                            schema_fields = header_po_fields or po_fields
+                    elif re.fullmatch(r"[0-9]+\.[a-z0-9][a-z0-9._-]*", normalized_term):
+                        schema_fields = _part_identifier_schema_fields(schema_fields)
+                    bindings = bind_typed_identifier_to_source_schema(term, schema_fields)
+                    if not bindings and re.fullmatch(
+                            r"[0-9]+\.[a-z0-9][a-z0-9._-]*", normalized_term):
+                        bindings = tuple((field, term) for field in schema_fields)
                     if bindings:
                         typed_term_bindings[term] = bindings
                         for field, value in bindings:
-                            for column_hash in self._normalized_columns.get(
-                                normalize_source_occurrence_structured_surface(field), ()
-                            ):
-                                hashes.add(source_occurrence_exact_cell_value_hash(column_hash, value))
+                            normalized_field = normalize_source_occurrence_structured_surface(field)
+                            attachment_column_hashes = tuple(dict.fromkeys(
+                                item["column_hash"] for item in self._columns
+                                if normalize_source_occurrence_structured_surface(item["field"])
+                                == normalized_field and not item["inline_table"]
+                            ))
+                            if source_families == ("attachment_table",):
+                                column_hashes = attachment_column_hashes
+                            elif source_families == ("mail",):
+                                inline_column_hashes = tuple(dict.fromkeys(
+                                    item["column_hash"] for item in self._columns
+                                    if normalize_source_occurrence_structured_surface(item["field"])
+                                    == normalized_field and item["inline_table"]
+                                ))
+                                column_hashes = inline_column_hashes or self._normalized_columns.get(
+                                    normalized_field, ()
+                                )
+                            else:
+                                column_hashes = attachment_column_hashes or self._normalized_columns.get(
+                                    normalized_field, ()
+                                )
+                            for column_hash in column_hashes:
+                                value_hash = source_occurrence_exact_cell_value_hash(column_hash, value)
+                                typed_hashes.add(value_hash)
+                                hashes.add(value_hash)
+                if term not in typed_term_bindings:
+                    hashes.update(
+                        sha256_json(token)
+                        for token in self._tokenizer_profile.analyze(term).tokens
+                    )
+            if (
+                table_query is None
+                and source_families == ("attachment_table",)
+                and len(typed_term_bindings) >= 2
+            ):
+                terms = tuple(sorted(typed_term_bindings))
+                hashes = typed_hashes
             if table_query is not None:
                 # Resolve literal source-cell predicates through the existing
                 # sealed value shards, independently of tokenizer protection.
@@ -4157,7 +4329,7 @@ class _IngestionExactCellLookup:
                     field = structure.get("column_name") or f"column_{cell.location.get('cell_index')}"
                     value, redacted = redact_public_raw_references(cell.text or "")
                     safe_field, field_redacted = redact_public_raw_references(field)
-                    members.append({
+                    member = {
                         "citation_hash": sha256_json(cell.to_dict()),
                         "occurrence_lineage_fingerprint": lineage_by_id[cell.observation_id].lineage_fingerprint,
                         "source_observation_id": cell.observation_id,
@@ -4173,7 +4345,27 @@ class _IngestionExactCellLookup:
                             and (row.payload or {}).get("table_structure", {}).get("structure_status") == "source_provided"
                             and not redacted and not field_redacted and len(field) <= 120 and len(value) <= 400
                         ),
-                    })
+                    }
+                    native = (cell.payload or {}).get("native", {})
+                    if isinstance(native, Mapping):
+                        native_display = native.get("display_value")
+                        native_display_status = native.get("display_value_status")
+                        if (
+                            native_display_status != "available"
+                            and native.get("date_value_status") in {
+                                "normalized_excel_serial", "phantom_1900_leap_day",
+                            }
+                        ):
+                            native_display = native.get("date_value_iso")
+                        if isinstance(native_display, str) and native_display.strip():
+                            safe_display = redact_public_raw_references(native_display)[0]
+                            if safe_display and safe_display != value:
+                                member["display_value"] = safe_display[:400]
+                                member["display_value_status"] = (
+                                    "source_display" if native_display_status == "available"
+                                    else "derived_date_value_iso"
+                                )
+                    members.append(member)
                     content_redacted |= bool(redacted or field_redacted)
                 item = {
                     "snippet": "Verified same-row cells; field schema status is given per member.",

@@ -538,6 +538,7 @@ class SourceNativeLexicalLookup:
         source_family: str,
         limit: int = 256,
         timeout_ms: int,
+        preferred_tokens: Iterable[str] = (),
     ) -> list[str]:
         if source_family not in {"mail", "document_text"}:
             raise ContractValidationError("source lexical lookup family is invalid")
@@ -548,6 +549,12 @@ class SourceNativeLexicalLookup:
         tokens = sorted({token for token in query_tokens if isinstance(token, str) and token})
         if not tokens:
             return []
+        preferred = sorted({
+            token for token in preferred_tokens
+            if isinstance(token, str) and token.strip() and token not in tokens
+        })
+        if len(preferred) > 256:
+            preferred = []
         # Reserve a bounded, materially sized slice for each query token before
         # applying the final coverage ordering.  A small ``limit / token_count``
         # slice is not safe here: a candidate may contain a rare identity token
@@ -602,6 +609,23 @@ class SourceNativeLexicalLookup:
                     key=lambda item: (-item[1][0], item[1][1], item[0]),
                 )
                 result = [observation_hash for observation_hash, _ in ordered[:limit]]
+                if preferred and result:
+                    markers = ",".join("?" for _ in preferred)
+                    field_scores: dict[str, int] = {}
+                    for observation_hash in result:
+                        if time.monotonic() >= deadline:
+                            raise sqlite3.OperationalError("interrupted")
+                        row = self._connection.execute(
+                            "SELECT COUNT(*) FROM postings WHERE source_family = ? "
+                            f"AND token IN ({markers}) AND observation_hash = ?",
+                            (source_family, *preferred, observation_hash),
+                        ).fetchone()
+                        field_scores[observation_hash] = int(row[0])
+                    result.sort(key=lambda value: (
+                        -field_scores[value],
+                        ordered[[item[0] for item in ordered].index(value)][1][1],
+                        value,
+                    ))
             except sqlite3.OperationalError as exc:
                 if "interrupted" not in str(exc).casefold():
                     raise
@@ -997,10 +1021,15 @@ class IngestionRevisionSourceRecords:
         # references are unavailable), and every hash is rehydrated through
         # the existing helper/authority contract before the callback sees it.
         query_terms: tuple[str, ...] = ()
+        preferred_terms: tuple[str, ...] = ()
         if callable(getattr(self.runtime_store, "source_family_lexical_lookup", None)):
-            from formowl_retrieval.gateway import current_source_evidence_query_terms
+            from formowl_retrieval.gateway import (
+                current_source_evidence_preferred_terms,
+                current_source_evidence_query_terms,
+            )
 
             query_terms = current_source_evidence_query_terms()
+            preferred_terms = current_source_evidence_preferred_terms()
         # Only successfully hydrated, matching sources may suppress a later
         # authoritative read. Merely seeing an index candidate proves nothing.
         shortlist_hashes: set[str] = set()
@@ -1027,6 +1056,7 @@ class IngestionRevisionSourceRecords:
                 source_family=source_family,
                 limit=min(max_observations, 256),
                 timeout_ms=lookup_timeout_ms,
+                preferred_tokens=preferred_terms,
             )
             if not isinstance(shortlisted, list):
                 raise ContractValidationError("graph lexical lookup shortlist is invalid")

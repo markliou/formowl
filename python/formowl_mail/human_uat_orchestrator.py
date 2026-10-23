@@ -74,6 +74,10 @@ _MAX_AUTHORIZED_MAIL_SELECTORS = 128
 # for governed projection and HTTP delivery instead of racing that same cap.
 _MAX_UAT_TURN_SECONDS = 120.0
 _UAT_TURN_RETURN_MARGIN_SECONDS = 5.0
+# Do not start provider finalization when too little turn time remains.  The
+# browser projector can preserve governed evidence directly; a late second
+# request otherwise tends to time out and hide the useful source result.
+_UAT_MIN_FINALIZATION_REMAINING_SECONDS = 45.0
 _PROVIDER_STATUS_ALLOWLIST = frozenset(
     {"cancelled", "completed", "failed", "in_progress", "incomplete", "queued"}
 )
@@ -385,6 +389,9 @@ _CODEX_GRAPH_TOOL_ARGUMENT_GUIDANCE = """
   execution, never top-k inference. Missing or incomplete readers with no
   verified citations mean pending_review, not absence; not_found requires a
   complete bounded scan and sealed coverage within that authorized revision;
+- for spreadsheet cells, preserve the raw `value` as source evidence; when a
+  cell also provides `display_value`, use that source or explicitly derived
+  date presentation for a human-readable answer and do not invent a conversion;
 """.strip()
 
 _RESOLVED_REFERENCE_GUIDANCE = (
@@ -885,6 +892,7 @@ class _UatTurnRequestContractBinder:
         freeze: bool = True,
         allow_missing: bool = False,
         request_contract: Mapping[str, Any] | None = None,
+        allow_server_restored_identifiers: bool = False,
     ) -> tuple[str, ...] | None:
         """Bind grounded identity/topic phrases to this turn, including retries."""
 
@@ -936,7 +944,15 @@ class _UatTurnRequestContractBinder:
                     "UAT evidence required term is a source-family label, not content"
                 )
         if self._required_terms is not None and terms != self._required_terms:
-            raise ContractValidationError("UAT evidence required terms changed within the turn")
+            restored_identifier_scope = (
+                allow_server_restored_identifiers
+                and request_contract is not None
+                and "attachment_table" in request_contract.get("source_family_scope", ())
+                and set(protected_reference_identifiers(self._normalized_user_text)).issubset(terms)
+                and set(self._required_terms).issubset(terms)
+            )
+            if not restored_identifier_scope:
+                raise ContractValidationError("UAT evidence required terms changed within the turn")
         if request_contract is not None and request_contract["query_class"] == "evidence_lookup":
             requested_fields = {
                 unicodedata.normalize("NFKC", field.strip()).casefold()
@@ -960,6 +976,9 @@ class _UatTurnRequestContractBinder:
                 raise ContractValidationError(
                     "UAT evidence required term overlaps a requested output field; clarify field/term roles"
                 )
+        if allow_server_restored_identifiers:
+            self._required_terms = terms
+            return terms
         if freeze and self._required_terms is None:
             self._required_terms = terms
         return self._required_terms if self._required_terms is not None else terms
@@ -5197,6 +5216,22 @@ class CodexResponsesConversationModel:
                                         # provider re-query with a second mail
                                         # selector/query; finalization still
                                         # validates incomplete coverage below.
+                                        remaining_after_mcp = turn_deadline - time.monotonic()
+                                        if (
+                                            remaining_after_mcp < _UAT_MIN_FINALIZATION_REMAINING_SECONDS
+                                            and result.get("status") in {"partial", "incomplete"}
+                                        ):
+                                            return _safe_stop_outcome(
+                                                reason="source_evidence_preserved",
+                                                model_name=self.model_name,
+                                                evidence_records=evidence_records,
+                                                provider_diagnostic={
+                                                    "reason_code": "source_evidence_preserved",
+                                                    "remaining_deadline_seconds": round(
+                                                        max(0.0, remaining_after_mcp), 3,
+                                                    ),
+                                                },
+                                            )
                                         formowl_halted = True
                                         force_final = True
                                     tool_output = _model_evidence_envelope(presented_result)
@@ -6846,6 +6881,10 @@ def _safe_stop_message(reason: str) -> str:
         "provider_incomplete": (
             "GPT provider 回應未能完成安全解析或結構化驗證；" "這次最終答案未完成。"
         ),
+        "source_evidence_preserved": (
+            "已取得可引用的授權來源資料；因本回合剩餘時間不足，直接保留來源證據，"
+            "並揭露目前涵蓋仍未完成。"
+        ),
         "answer_public_safety_failed": (
             "模型答案未通過公開輸出安全驗證；最終答案未完成。"
             "僅可顯示已驗證的授權來源資料，且這不代表資料不存在。"
@@ -6865,6 +6904,144 @@ def _safe_stop_message(reason: str) -> str:
     return messages.get(reason, messages["no_evidence"])
 
 
+def _source_evidence_fallback_text(
+    reason: str,
+    evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
+) -> str | None:
+    """Render governed structured values when provider finalization stops late.
+
+    The values come only from deterministic exact output and retain their
+    citation binding.  This keeps a slow provider from hiding already
+    retrieved business fields while still reporting incomplete coverage.
+    """
+    if reason not in {"provider_timeout", "provider_incomplete", "source_evidence_preserved"}:
+        return None
+    lines: list[str] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def table_rows(value: Any) -> tuple[tuple[Mapping[str, Any], str | None], ...]:
+        """Find bounded table rows in governed evidence containers.
+
+        Source-start table evidence may be returned directly under ``evidence``
+        or carried inside the compact mail ``snippet`` JSON.  Both forms are
+        still bound to the enclosing citation; do not inspect arbitrary answer
+        prose here.
+        """
+        found: list[tuple[Mapping[str, Any], str | None]] = []
+
+        def visit(item: Any, depth: int = 0) -> None:
+            if depth > 3:
+                return
+            if isinstance(item, Mapping):
+                row = item.get("table_row")
+                inherited_citation = item.get("citation_hash", item.get("citation_id"))
+                if not isinstance(inherited_citation, str):
+                    inherited_citation = None
+                if isinstance(row, Mapping):
+                    found.append((row, inherited_citation))
+                for key in ("evidence", "evidence_snippets", "results"):
+                    nested = item.get(key)
+                    if isinstance(nested, Sequence) and not isinstance(nested, (str, bytes)):
+                        for child in nested[:32]:
+                            visit(child, depth + 1)
+                snippet = item.get("snippet")
+                if isinstance(snippet, str) and len(snippet) <= 32 * 1024:
+                    try:
+                        decoded = json.loads(snippet)
+                    except (TypeError, ValueError):
+                        decoded = None
+                    if isinstance(decoded, Mapping):
+                        visit(decoded, depth + 1)
+            elif isinstance(item, Sequence) and not isinstance(item, (str, bytes)):
+                for child in item[:32]:
+                    visit(child, depth + 1)
+
+        visit(value)
+        return tuple(found)
+
+    def add_cell(field: Any, raw_value: Any, citation: Any, *, candidate_only: bool) -> None:
+        if (
+            not isinstance(field, str) or not field.strip()
+            or not isinstance(raw_value, str)
+            or not isinstance(citation, str)
+            or citation not in result_citations
+        ):
+            return
+        key = (field.strip(), raw_value, citation)
+        if key in seen:
+            return
+        seen.add(key)
+        suffix = "（欄位結構待完整驗證）" if candidate_only else ""
+        lines.append(f"- {field.strip()}：{raw_value}{suffix}")
+
+    for _, result in reversed(tuple(evidence_records)):
+        result_citations = set(evidence_citation_ids(result))
+        exact = result.get("exact_inventory")
+        if isinstance(exact, Mapping):
+            items = exact.get("items")
+            if isinstance(items, Sequence) and not isinstance(items, (str, bytes)):
+                for item in items[:32]:
+                    if not isinstance(item, Mapping):
+                        continue
+                    values = item.get("structured_values")
+                    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+                        continue
+                    for value in values[:32]:
+                        if not isinstance(value, Mapping):
+                            continue
+                        add_cell(
+                            value.get("field"),
+                            value.get("display_value", value.get("value")),
+                            value.get("citation_hash", value.get("citation_id")),
+                            candidate_only=value.get("structure_status") == "candidate_only",
+                        )
+                        if len(lines) >= 16:
+                            break
+                    if len(lines) >= 16:
+                        break
+        for row, inherited_citation in table_rows(result.get("evidence")) + table_rows(result.get("evidence_snippets")):
+            cells = row.get("cells")
+            if not isinstance(cells, Sequence) or isinstance(cells, (str, bytes)):
+                continue
+            row_citation = row.get("citation_hash", row.get("citation_id"))
+            if not isinstance(row_citation, str):
+                row_citation = inherited_citation
+            if row_citation is None:
+                # The table row is commonly wrapped by an evidence item whose
+                # citation is the row hash; recover it only from the immediate
+                # governed record, never from answer text.
+                for item in (result.get("evidence") or result.get("evidence_snippets") or ()):
+                    if isinstance(item, Mapping) and item.get("table_row") is row:
+                        candidate = item.get("citation_hash", item.get("citation_id"))
+                        if isinstance(candidate, str):
+                            row_citation = candidate
+                            break
+            for cell in cells[:64]:
+                if not isinstance(cell, Mapping):
+                    continue
+                citation = cell.get("citation_hash", cell.get("citation_id")) or row_citation
+                add_cell(
+                    cell.get("field"),
+                    cell.get("display_value", cell.get("value")),
+                    citation,
+                    candidate_only=(
+                        cell.get("structure_status") == "candidate_only"
+                        or cell.get("source_proven_field_schema") is not True
+                    ),
+                )
+                if len(lines) >= 16:
+                    break
+        if len(lines) >= 16:
+            break
+    if not lines:
+        return None
+    return (
+        "已取得可引用的授權來源欄位（本回合涵蓋仍未完成）：\n"
+        + "\n".join(lines)
+        + "\n以上只列出已驗證的欄位，未列出的欄位不代表來源不存在。"
+    )
+
+
 def _safe_stop_outcome(
     *,
     reason: str,
@@ -6873,7 +7050,7 @@ def _safe_stop_outcome(
     citation_ids: Sequence[str] = (),
     provider_diagnostic: Mapping[str, Any] | None = None,
 ) -> UatConversationOutcome:
-    message = _safe_stop_message(reason)
+    message = _source_evidence_fallback_text(reason, evidence_records) or _safe_stop_message(reason)
     retained_citation_ids = tuple(
         dict.fromkeys(
             citation_id
@@ -7397,7 +7574,7 @@ def _mail_citeable_result_finalizes_turn(
     mail-only: graph evidence keeps its existing cited-partial/replan loop.
     """
 
-    return request.tool_name == _MAIL_EVIDENCE_TOOL_NAME and _has_citeable_evidence(result)
+    return request.tool_name in _EVIDENCE_TOOL_NAMES and _has_citeable_evidence(result)
 
 
 def _model_evidence_envelope(presented_evidence: Mapping[str, Any]) -> dict[str, Any]:

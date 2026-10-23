@@ -404,6 +404,27 @@ class SourceStartExactTests(unittest.TestCase):
         self.assertEqual(result["requested_field_coverage"]["missing_fields"], ["Capacity"])
         self.assertEqual(result["status"], "partial")
 
+    def test_automatic_lookup_keeps_supported_field_when_another_label_is_absent(self):
+        _, revision, handler, arguments = self.prepare(
+            content=_native_table_bytes(),
+            mail_text="ITEM-Q73 State is staged.",
+        )
+        arguments.pop("table_query")
+        arguments["query_text"] = "Find ITEM-Q73 State and 產地"
+        arguments["request_contract"]["original_query_hash"] = sha256_json(arguments["query_text"])
+        arguments["request_contract"]["requested_fields"] = ["State", "產地"]
+        arguments["required_terms"] = ["ITEM-Q73"]
+        with patch.object(type(revision.source_records), "scan_authorized_observations",
+                          side_effect=AssertionError("supported field must not fall back to broad recovery")):
+            result = handler(arguments)
+        self.assertTrue(result["deterministic_exact"])
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["requested_field_coverage"]["supported_fields"], ["State"])
+        self.assertEqual(result["requested_field_coverage"]["missing_fields"], ["產地"])
+        values = [value["value"] for item in result["exact_result"]["items"]
+                  for value in item["structured_values"]]
+        self.assertIn("staged", values)
+
     def test_unknown_alias_and_duplicate_labels_require_clarification(self):
         _, _, handler, arguments = self.prepare(content=_native_table_bytes(duplicate=True))
         arguments["request_contract"]["requested_fields"] = ["State"]

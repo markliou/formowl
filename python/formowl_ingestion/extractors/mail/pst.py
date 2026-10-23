@@ -1134,7 +1134,7 @@ def parse_native_pst_message_exports(
         ):
             raise ValueError("native_pst_message_export_content_hash_drift")
         try:
-            email_message = BytesParser(policy=policy.default).parsebytes(raw_message)
+            email_message = _parse_mail_bytes(raw_message)
         except Exception as exc:
             raise ValueError("native_pst_message_export_parse_failed") from exc
         if not _is_mail_message(email_message):
@@ -1793,7 +1793,7 @@ def _classify_exported_source_units(
             )
             continue
         try:
-            message = BytesParser(policy=policy.default).parsebytes(candidate.read_bytes())
+            message = _parse_mail_bytes(candidate.read_bytes())
         except Exception:
             classified.append(
                 _PstClassifiedSourceUnit(
@@ -2131,7 +2131,7 @@ def _parse_exported_messages(
                 warnings.append("pst_parser_large_message_file_skipped")
                 continue
             raw_message = candidate.read_bytes()
-            message = BytesParser(policy=policy.default).parsebytes(raw_message)
+            message = _parse_mail_bytes(raw_message)
         except Exception:
             warnings.append("pst_parser_message_file_skipped")
             continue
@@ -2551,6 +2551,59 @@ def _looks_like_unsafe_attachment_filename(value: str) -> bool:
 
 def _plain_body(message: EmailMessage) -> str:
     return "\n\n".join(part["text"] for part in _body_parts(message, warnings=[]))
+
+
+_MBOX_FROM_LINE = re.compile(r"\A>*From [^\n]*\n")
+_MAX_EMBEDDED_MESSAGE_DEPTH = 8
+
+
+def _parse_mail_bytes(raw: bytes) -> EmailMessage:
+    """Parse one exported message and repair readpst-embedded messages.
+
+    readpst writes an mbox ``From `` (or ``>From ``) separator line before an
+    attached ``message/rfc822`` message. The stdlib parser then sees no header
+    block, so the whole embedded message (headers, MIME boundaries, base64
+    attachments, RTF) became one bogus ``text/plain`` body. Only that exact
+    shape is re-parsed without the separator line; anything else is untouched.
+    """
+    message = BytesParser(policy=policy.default).parsebytes(raw)
+    _repair_embedded_mbox_from_lines(message, depth=0)
+    return message
+
+
+def _repair_embedded_mbox_from_lines(message: EmailMessage, *, depth: int) -> None:
+    if depth >= _MAX_EMBEDDED_MESSAGE_DEPTH:
+        return
+    containers = [part for part in message.walk() if part.get_content_type() == "message/rfc822"]
+    for container in containers:
+        payload = container.get_payload()
+        if not isinstance(payload, list) or len(payload) != 1:
+            continue
+        inner = payload[0]
+        if (
+            not any(type(defect).__name__ == "MissingHeaderBodySeparatorDefect" for defect in inner.defects)
+            or list(inner.keys())
+        ):
+            continue
+        body = inner.get_payload()
+        if not isinstance(body, str):
+            continue
+        body = body.replace("\r\n", "\n")
+        match = _MBOX_FROM_LINE.match(body)
+        if match is None:
+            continue
+        remainder = body[match.end():]
+        try:
+            data = remainder.encode("ascii", "surrogateescape")
+        except UnicodeEncodeError:
+            data = remainder.encode("utf-8", "surrogateescape")
+        repaired = BytesParser(policy=policy.default).parsebytes(data)
+        if not list(repaired.keys()) or any(
+            type(defect).__name__ == "MissingHeaderBodySeparatorDefect" for defect in repaired.defects
+        ):
+            continue
+        container.set_payload([repaired])
+        _repair_embedded_mbox_from_lines(repaired, depth=depth + 1)
 
 
 def _body_parts(message: EmailMessage, *, warnings: list[str]) -> list[dict[str, Any]]:

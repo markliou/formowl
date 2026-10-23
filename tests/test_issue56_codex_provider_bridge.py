@@ -28,6 +28,7 @@ import formowl_gateway.issue56_uat_runtime as uat_runtime
 import formowl_mail.human_uat_orchestrator as orchestrator
 from formowl_gateway.issue56_uat_runtime import (
     Issue56TemporaryLanQueryService,
+    _run_gpt_query_agent,
     _query_agent_runtime_context,
     _browser_projection,
     _safe_provider_diagnostic as runtime_project,
@@ -2615,6 +2616,104 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
             worker.join(timeout=5)
             self.assertFalse(worker.is_alive())
 
+    def test_attachment_scope_restores_omitted_po_identifier(self) -> None:
+        prompt = "請問PO470002002的20.QCS64G901交期"
+        citation = "citation-attachment-po-item"
+        provider = CodexResponsesConversationModel(
+            base_url="https://provider.example.test/v1",
+            api_key="synthetic-attachment-provider-key",
+        )
+        requests = []
+
+        def response(payload):
+            requests.append(copy.deepcopy(payload))
+            if len(requests) == 1:
+                return {
+                    "status": "completed",
+                    "output": [{
+                        "type": "function_call",
+                        "call_id": "call-attachment-po-item",
+                        "name": "query_effective_graph_view",
+                        "arguments": json.dumps({
+                            "query_text": "查詢授權附件中料號的交期",
+                            "required_terms": ["20.qcs64g901"],
+                            "request_contract": {
+                                "original_query_hash": "sha256:" + ("0" * 64),
+                                "query_class": "evidence_lookup",
+                                "source_family_scope": ["attachment_table", "mail"],
+                                "requested_fields": ["交期"],
+                                "maximum_claim_strength": "cited_evidence",
+                            },
+                        }, ensure_ascii=False),
+                    }],
+                }
+            return {
+                "status": "completed",
+                "output_text": _decision(
+                    answer_text="已找到同列附件資料。",
+                    citations=(citation,),
+                    coverage_status="complete",
+                ),
+            }
+
+        evidence_tool = mock.Mock(return_value={
+            "status": "complete",
+            "coverage": {"status": "complete", "coverage_status": "complete"},
+            "citations": [citation],
+        })
+        with mock.patch.object(provider, "_request_response", side_effect=response):
+            _result, _responses, outcome = _run_gpt_query_agent(
+                provider,
+                prompt=prompt,
+                history=(),
+                latest_evidence=None,
+                safety_identifier="attachment-po-item-session",
+                formowl_tool_descriptor=_actual_query_tool_descriptor(),
+                authorized_capability_summary={
+                    "source_families": ["attachment_table", "mail"],
+                },
+                mcp_call=evidence_tool,
+            )
+
+        request = evidence_tool.call_args.args[0]
+        self.assertEqual(
+            request.required_terms,
+            ("20.qcs64g901", "po470002002"),
+        )
+        self.assertEqual(
+            request.request_contract["source_family_scope"],
+            ["attachment_table", "mail"],
+        )
+        self.assertEqual(outcome.citation_ids, (citation,))
+
+    def test_attachment_scope_can_restore_identifier_after_provider_term_freeze(self) -> None:
+        prompt = "請問PO470002002的20.QCS64G901交期"
+        binder = _UatTurnRequestContractBinder(
+            user_text=prompt,
+            authorized_capability_summary={"source_families": ["mail", "attachment_table"]},
+        )
+        request = _parse_tool_request(
+            {
+                "query_text": "查詢附件表格中的料號交期",
+                "required_terms": ["20.qcs64g901"],
+                "request_contract": {
+                    "original_query_hash": "sha256:" + ("0" * 64),
+                    "query_class": "evidence_lookup",
+                    "source_family_scope": ["attachment_table", "mail"],
+                    "requested_fields": ["交期"],
+                    "maximum_claim_strength": "cited_evidence",
+                },
+            },
+            tool_descriptor=_actual_query_tool_descriptor(),
+            request_contract_binder=binder,
+        )
+        restored = binder.bind_required_terms(
+            ["20.qcs64g901", "po470002002"],
+            request_contract=request.request_contract,
+            allow_server_restored_identifiers=True,
+        )
+        self.assertEqual(restored, ("20.qcs64g901", "po470002002"))
+
     def test_direct_responses_provider_runs_one_citation_bound_tool_loop(self) -> None:
         api_key = "synthetic-direct-provider-key"
         raw_prompt = "紅色零件庫存"
@@ -3786,6 +3885,108 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
             outcome.provider_diagnostic["finalization_validation"][0]["validation_result"],
             "passed",
         )
+
+    def test_direct_provider_preserves_citeable_evidence_when_finalization_budget_is_low(self) -> None:
+        citation = "citation-preserved-before-finalization-timeout"
+        clock_value = 1_000.0
+        provider = CodexResponsesConversationModel(
+            base_url="https://provider.example.test/v1",
+            api_key="synthetic-provider-key",
+        )
+
+        def response(_payload):
+            return {
+                "status": "completed",
+                "output": [{
+                    "type": "function_call",
+                    "call_id": "call-preserve-before-finalization",
+                    "name": "query_effective_graph_view",
+                    "arguments": json.dumps({"query_text": "bounded evidence lookup"}),
+                }],
+            }
+
+        def evidence_tool(_request):
+            nonlocal clock_value
+            clock_value += 75.0
+            return {
+                "status": "partial",
+                "citations": [citation],
+                "evidence": [{"citation_id": citation, "snippet": "source-backed value"}],
+                "exact_inventory": {
+                    "status": "partial",
+                    "items": [{
+                        "structured_values": [{
+                            "field": "ETD",
+                            "value": "2026-07-13",
+                            "citation_hash": citation,
+                        }],
+                    }],
+                },
+            }
+
+        with (
+            mock.patch(
+                "formowl_mail.human_uat_orchestrator.time.monotonic",
+                side_effect=lambda: clock_value,
+            ),
+            mock.patch.object(provider, "_request_response", side_effect=response) as request_response,
+        ):
+            outcome = provider.respond(
+                history=(),
+                user_text="Retrieve the authorized evidence.",
+                latest_evidence=None,
+                safety_identifier="preserve-before-finalization-session",
+                evidence_tool=evidence_tool,
+            )
+
+        self.assertEqual(request_response.call_count, 1)
+        self.assertEqual(outcome.response_kind, "clarification")
+        self.assertEqual(outcome.citation_ids, (citation,))
+        self.assertEqual(outcome.tool_results[0]["citations"], [citation])
+        self.assertIn("可引用的授權來源欄位", outcome.answer_text)
+        self.assertIn("ETD：2026-07-13", outcome.answer_text)
+        self.assertEqual(
+            outcome.provider_diagnostic["reason_code"],
+            "source_evidence_preserved",
+        )
+
+    def test_source_timeout_fallback_renders_same_row_table_cells(self) -> None:
+        citation = "citation-same-row-table"
+        request = UatEvidenceToolRequest(query_text="查詢附件表格同列資料")
+        result = {
+            "status": "partial",
+            "citations": [citation],
+            "evidence": [{
+                "citation_hash": citation,
+                "snippet": "Verified same-row cells; field schema status is given per member.",
+                "table_row": {
+                    "cells": [
+                        {
+                            "field": "CRD",
+                            "value": "2026-03-04",
+                            "structure_status": "candidate_only",
+                            "citation_hash": citation,
+                        },
+                        {
+                            "field": "ETD",
+                            "value": "2026-07-13",
+                            "structure_status": "candidate_only",
+                            "citation_hash": citation,
+                        },
+                    ],
+                },
+            }],
+        }
+
+        text = orchestrator._source_evidence_fallback_text(
+            "provider_timeout",
+            ((request, result),),
+        )
+
+        self.assertIsNotNone(text)
+        self.assertIn("CRD：2026-03-04", text)
+        self.assertIn("ETD：2026-07-13", text)
+        self.assertIn("欄位結構待完整驗證", text)
 
     def test_public_term_lookup_is_stateless_then_uses_typed_formowl_query(
         self,

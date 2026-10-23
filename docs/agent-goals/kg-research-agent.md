@@ -1,16 +1,17 @@
 # Knowledge Graph Research Agent Goal
 
-## Current UAT checkpoint — 2026-10-20 06:50 UTC / #63 / 待測
-Live8088/r38 and rollback unchanged; actual isolated8112 browser target was r47/direct baseline, not the r49 capture label. r49/r50 remain composed, NOT deployed; root code is stale.
-r5 verified4mail/27tables/388rows/4588cells; r6d verified5attachments/36XLSX rows/432cells/4PDF text pages. Optional-null metadata omission explains r6 mismatch; native values/coordinates/hashes agree. OCR/visual/display/formula and semantic completeness remain unproved.
-r7 stopped at2provider calls:7candidates from first; second HTTP200,114410SSEbytes,120s timeout, last output_item.done/no terminal. Existing ledger inspection:annotated1/failed1/pending103. First proposal also lacks product-identity/time-role coverage; no real reviewed-native receipt or semantic correctness approval. No retry/canonical/source writes.
-r50 changes only existing candidates.py: preserve sanitized unit failure and failed-ledger ID/hash in aggregate instead of masking provider timeout as validation. Canonical2RED→6scopePASS;32reader-modulePASS. No live change, independent review or completion claim.
-Browser HOME/crashpad prerequisite fixed in existing operator runner; network-none startup-only passes despite invalid inherited HOME. DOM:chat complete; original question clarification_required/MCP1/0citations FAIL; independent-document partial/2citations NOT accepted; reset-chat complete. Reload/reset and5provider-request wire checks pass only for this run. Screenshots lack CJK fonts; fresh citation reopening/visual acceptance unproved.
-Original MCP trace: prefixed identifier remains literal; native shortlist empty/0rows attempted/0source reads, mail lexical deadline separately observed. Online provider completed; offline SSE failure is a separate blocker. Missing review/row selection never proves missing source.
-Receipts/patches:ops/browser-home-fixed-r49-review.safe.json,ops/native-semantic-r7-existing-ledger.safe.json,ops/native-semantic-r7-nonblinded-inspection.safe.json,ops/r50-scope-failure-composition.safe.json and scope-failure-r50 under the existing local ontology-uat artifact directory. Private data and earlier failures retained.
-Next: provider terminal-event investigation (14:04–14:07 Taipei), fixed-scope semantic coverage/review/native handoff, then bounded original/non-mail/chat webpage verification. No consumed r7/PST rerun or8088cutover. No active worker; completed James closed, actual tier unverified.
-Canonical authority valid=true/ready=false/errors=[],CJKtrue; host dependency failure supplemental. Feature待測/step4in-progress; all methodology/release gates, original acceptance and source500ms versus inherited2000ms discrepancy remain OPEN. Existing plan/checkboxes unchanged.
-[Lossless previous checkpoint/hash manifest](../archive/2026-10-20/browser-r50-aggregate-preedit/) preserves all earlier evidence.
+## Current UAT checkpoint — 2026-10-22/23 UTC / field-aware source shortlist repair / 待測
+Private-source use was authorized. The COO miss was traced to single-token lexical shortlist ordering: the requested field hint was not applied, so the known `COO=JAPAN` observation ranked 11th and fell outside the bounded source window. The candidate reader now applies bounded optional-field reranking while retaining the original identifier matcher and all source authority checks.
+
+UAT v16 is healthy on 8088 (`status=ok/query_service_connected=true`). Live webpage checks returned the accepted finite answers: PO470002002 / 20.QCS64G901 CRD `2026-03-04` and ETD `2026-07-13`; 470002138 delivery date `2026-05-14`; 03.80503G301 COO/origin `JAPAN`, citation `sha256:822699…`. Focused dev-container tests are 18/18 passing. Coverage remains partial and methodology/release gates remain blocked; no readiness or whole-suite claim is made.
+
+## Current UAT checkpoint — 2026-10-22 07:41 UTC / bounded finalization-budget repair / 待測
+8088 is running candidate v10 with `status=ok/query_service_connected=true`. The repair preserves governed citeable graph or mail evidence when the result is `partial`/`incomplete` and less than 45 seconds remain, avoiding a late second provider finalization request. Focused provider bridge tests are 4/4 passing; the broader 95-test module remains non-green with 11 inherited descriptor/loop failures. Deployment and source binding hashes, the v7/v9 diagnostic history, and the live-query authorization boundary are recorded in `docs/agent-goals/handoff-log.md` and the private `/tmp/herdr-bus` report. Live private-source prompts remain pending explicit provider-send confirmation. Methodology authority and release/feature acceptance remain blocked/待測.
+
+## Current UAT checkpoint — 2026-10-21 UTC / bounded delivery-query remediation / 待測
+Live 8088 UAT was restarted with manifest `sha256:14120e7388024a8e6d557a57aa944dfbc0f2304902ef93cfd3820fe3a3c04b58` (the exact active value is recorded in the handoff log). The original PO/item question now visibly returns the cited same-row dates `CRD 2026-03-04` and `ETD 2026-07-13`, not Excel serial `46216`. The provider-term and native spreadsheet display fixes are deployed; trace shows two required terms and attachment plus mail scope.
+Focused bridge/projection tests passed. Coverage is still `partial` because 交期 has no canonical source field name; methodology authority, release review, and feature acceptance remain blocked/待測.
+[Lossless pre-edit checkpoint and hashes](../archive/2026-10-21/uat-delivery-remediation-preedit/) preserve the replaced status.
 
 ## Historical assignment — 2026-10-18 publish documentation progress
 User authorized commit/push of the current progress. Publish only the reconciled
