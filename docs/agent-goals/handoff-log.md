@@ -66,8 +66,24 @@ later families; verbatim snippets via `span_label`; non-mapping annotation catal
 intended deployed behavior. Clean-worktree focused suites vs the pre-merge root:
 0 new failures, 2 fixed, 57 pre-existing (issue56: 955 run, 45 failures, 32
 errors). A read-only review request (items A1-A5, B1-B9, C1-C5) was sent to
-Codex; its answer goes to `/tmp/herdr-bus/claude-wH-p1-review.json`. 8088 still
-runs v20 from the candidate tree.
+Codex; its answer goes to `/tmp/herdr-bus/claude-wH-p1-review.json`.
+Codex review (2026-10-24): agrees A1-A5 are bugs and B1-B9 are intended; C1/C3
+modified (one complete run per PST with explicit dedupe/lineage; source inventory,
+dedupe and completeness reconciliation before any rebuild; OCR keeps native
+image/page citations; index speed is not readiness), C2/C4/C5 agreed with conditions.
+Done since: 8088 deployed from git exports (v21 at 9280444, then v22 at 4081bcb with
+`--reviewed-headers`, manifest source_binding_fingerprint d60bee…); RTF body support
+(0209b3d, 345/352 real bodies readable); embedded-message lineage (789dd38);
+reviewed headers: 360,077 approvals (327,842 structural + 32,235 LLM from 706
+label groups; user directly authorized sending ambiguous labels/samples to the
+provider), receipt in `.formowl/ontology-uat-20261019/private/reviewed-header-review/`.
+HARDWARE BLOCKER (2026-10-24): host reads are silently non-deterministic. Hashing
+the 24 GB `source-lookup.sqlite` twice gave two different SHA-256 values (only the
+first matched); a job record parsed wrong from page cache (one flipped bit,
+0x32->0x12) while an O_DIRECT read of the same bytes was correct. No EDAC/MCE
+reporting (non-ECC). Seal checks catch it, but re-ingestion/rebuild must wait for
+memory/disk diagnostics (memtest86+, SMART), otherwise corrupted reads can be sealed
+into new artifacts. v22 is up and healthy.
 
 ## Current UAT checkpoint — 2026-10-22/23 UTC / field-aware source shortlist repair / 待測
 User authorized private-source use and live UAT acceptance. Root cause for the COO miss was a bounded lexical shortlist: the validated料號 token had 21 mail postings, the known row containing `COO=JAPAN` was present at position 11, and single-token identity lookups skipped optional requested-field reranking before the source deadline. This was retrieval ordering, not missing attachment data or an authorization failure.
