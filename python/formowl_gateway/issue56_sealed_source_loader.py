@@ -1426,7 +1426,8 @@ def _mail_header_context(observation, item, parent, *, source, scope_id, attachm
     else:
         if observation.observation_type != "email_body_segment":
             return item
-        item = {**item, "snippet": "[mail body; quoted headers are not outer message headers] " + item["snippet"]}
+        # Keep the cited snippet verbatim; carry the provenance caution beside it.
+        item = {**item, "span_label": "mail body; quoted headers are not outer message headers"}
     if parent is None:
         return item
     explicit_link = _attachment_mail_parent_link(observation)
@@ -2626,8 +2627,13 @@ def _build_source_start_semantic_handler(
                 # Every authorized family gets a share of the same absolute
                 # deadline, including mail/document-only requests. An earlier
                 # slow family must not spend a later family's allocation.
+                # A preferred (native table) engine gets the larger share, but
+                # when ordinary families still follow it may use at most half of
+                # the remaining time so it cannot starve them.
                 family_deadline = (
-                    kwargs["deadline_monotonic"] if preferred else
+                    (now + max(0, kwargs["deadline_monotonic"] - now) / 2
+                     if ordinary_engines_left else kwargs["deadline_monotonic"])
+                    if preferred else
                     now + max(0, kwargs["deadline_monotonic"] - now) / max(1, family_left)
                 )
                 engine_cell = _trace(trace, "phase", "engine", families=engine,

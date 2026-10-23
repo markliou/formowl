@@ -1615,9 +1615,12 @@ def _query_agent_runtime_context(
         view_for_query = getattr(handler, "reviewed_annotation_catalog_for_query", None)
         if callable(view_for_query):
             catalog = view_for_query(user_text)
-        # Public metadata guard remains mandatory even though candidates are private.
-        validate_public_gateway_payload(catalog)
-        capability_summary = {**capability_summary, "reviewed_annotation_catalog": catalog}
+        # Only a real catalog mapping enters the trusted capability context;
+        # anything else is ignored rather than failing the whole turn.
+        if isinstance(catalog, Mapping):
+            # Public metadata guard remains mandatory even though candidates are private.
+            validate_public_gateway_payload(catalog)
+            capability_summary = {**capability_summary, "reviewed_annotation_catalog": catalog}
     tool_descriptor = descriptor.model_dump(by_alias=True, exclude_none=True)
     if descriptor.name == "query_mail_evidence":
         input_schema = dict(tool_descriptor["inputSchema"])

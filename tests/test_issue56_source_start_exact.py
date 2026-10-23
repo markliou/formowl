@@ -175,9 +175,13 @@ class SourceStartExactTests(unittest.TestCase):
                 binder = _UatTurnRequestContractBinder(
                     user_text=prompt, authorized_capability_summary=handler.authorized_capability_summary,
                 )
+                # Use the server-bound scope: mail-attachment wording also keeps
+                # attachment_table when it is available (attachments are containers).
+                scope = list(binder.trusted_context()["required_source_family_scope"])
+                self.assertIn(family, scope)
                 contract = binder.bind({
                     "original_query_hash": sha256_json(prompt), "query_class": "evidence_lookup",
-                    "source_family_scope": [family], "requested_fields": ["content"],
+                    "source_family_scope": scope, "requested_fields": ["content"],
                     "maximum_claim_strength": "cited_evidence",
                 }, table_query=None)
                 with patch.object(loader, "source_evidence_double_check",

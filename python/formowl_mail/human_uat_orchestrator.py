@@ -9894,6 +9894,7 @@ def compact_evidence_for_model(
                     "snippet",
                     "source_observation_id",
                     "source_type",
+                    "span_label",
                     "subject",
                 },
                 item_limit=len(value),
