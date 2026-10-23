@@ -77,6 +77,23 @@ class EmbeddedMboxFromLineTests(unittest.TestCase):
         inner = next(part for part in message.walk() if part.get_content_type() == "message/rfc822")
         self.assertEqual(list(inner.get_payload(0).keys()), [])
 
+    def test_embedded_spans_and_attachments_keep_their_own_identity(self):
+        from formowl_ingestion.extractors.mail.pst import _attachments, _parser_config
+
+        message = _parse_mail_bytes(_exported('>From "MAILER-DAEMON" Tue Jun 24 01:11:55 2025'))
+        parts = _body_parts(message, warnings=[])
+        outer = next(part for part in parts if "see attached" in part["text"])
+        inner = next(part for part in parts if "交期確認" in part["text"])
+        self.assertNotIn("embedded_message", outer)
+        self.assertEqual(inner["embedded_message"]["span_role"], "embedded_message")
+        self.assertEqual(inner["embedded_message"]["depth"], 1)
+        self.assertEqual(inner["embedded_message"]["subject"], "inner")
+        self.assertIn("alice@example.com", inner["embedded_message"]["sender"])
+        attachments = _attachments(message, config=_parser_config({}), warnings=[])
+        rtf = next(item for item in attachments if item.filename.endswith(".rtf"))
+        self.assertEqual(rtf.embedded_message["subject"], "inner")
+        self.assertTrue(rtf.content_hash)
+
 
 if __name__ == "__main__":
     unittest.main()

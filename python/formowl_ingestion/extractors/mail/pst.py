@@ -87,6 +87,7 @@ class _ParsedAttachment:
     content_hash: str | None = None
     size_bytes: int | None = None
     content_bytes: bytes | None = field(default=None, repr=False, compare=False)
+    embedded_message: dict[str, Any] | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -2381,7 +2382,8 @@ def _parsed_message_from_email(
             body_values.append(value)
             body_locations.append({
                 key: part[key]
-                for key in ("mime_ordinal", "parent_mime_ordinal", "content_type")
+                for key in ("mime_ordinal", "parent_mime_ordinal", "content_type", "embedded_message")
+                if key in part
             })
     if (
         config.max_body_segments_per_message is not None
@@ -2606,9 +2608,52 @@ def _repair_embedded_mbox_from_lines(message: EmailMessage, *, depth: int) -> No
         _repair_embedded_mbox_from_lines(repaired, depth=depth + 1)
 
 
+def _embedded_message_context(message: EmailMessage) -> dict[int, dict[str, Any]]:
+    """Map every MIME part inside an attached message to that message's identity.
+
+    Embedded (forwarded/attached/bounced) messages keep their own sender, date,
+    subject and Message-ID; their spans must never be attributed to the outer
+    message. The innermost container wins for nested attachments.
+    """
+    context: dict[int, dict[str, Any]] = {}
+
+    def visit(container_parent: EmailMessage, depth: int) -> None:
+        for part in container_parent.walk():
+            if part is container_parent or part.get_content_type() != "message/rfc822":
+                continue
+            payload = part.get_payload()
+            if not isinstance(payload, list) or len(payload) != 1:
+                continue
+            inner = payload[0]
+
+            def header(name: str) -> str:
+                # Malformed embedded headers must not abort the outer message.
+                try:
+                    return str(inner.get(name) or "")
+                except (AttributeError, TypeError, ValueError):
+                    return "redacted_header"
+
+            info = {
+                "span_role": "embedded_message",
+                "depth": depth,
+                "message_id": _safe_optional_header(header("message-id"), "embedded_message_id"),
+                "sender": _safe_mail_text(header("from"), "sender"),
+                "sent_at": _safe_date(header("date")),
+                "subject": _safe_mail_text(header("subject"), "subject"),
+            }
+            for inner_part in inner.walk():
+                context[id(inner_part)] = info
+            if depth < _MAX_EMBEDDED_MESSAGE_DEPTH:
+                visit(inner, depth + 1)
+
+    visit(message, 1)
+    return context
+
+
 def _body_parts(message: EmailMessage, *, warnings: list[str]) -> list[dict[str, Any]]:
     """Retain distinct MIME representations; plain text is not an HTML replacement."""
     parts = list(message.walk())
+    embedded = _embedded_message_context(message)
     ordinals = {id(part): ordinal for ordinal, part in enumerate(parts, 1)}
     parents = {
         id(child): ordinals[id(parent)]
@@ -2645,6 +2690,8 @@ def _body_parts(message: EmailMessage, *, warnings: list[str]) -> list[dict[str,
             "parent_mime_ordinal": parents.get(id(part), 0),
             "content_type": content_type,
         }
+        if id(part) in embedded:
+            lineage["embedded_message"] = embedded[id(part)]
         result.append({
             **lineage, "text": content,
             "tables": [{**table, **lineage} for table in tables],
@@ -2714,6 +2761,7 @@ def _attachments(
     warnings: list[str],
 ) -> list[_ParsedAttachment]:
     attachments: list[_ParsedAttachment] = []
+    embedded = _embedded_message_context(message) if message.is_multipart() else {}
     for part in message.walk() if message.is_multipart() else []:
         if part.is_multipart():
             continue
@@ -2751,6 +2799,7 @@ def _attachments(
                 content_hash=content_hash,
                 size_bytes=size_bytes,
                 content_bytes=payload if content_hash is not None else None,
+                embedded_message=embedded.get(id(part)),
             )
         )
     return attachments
@@ -3211,6 +3260,8 @@ def _iter_mail_observations(
                     "content_hash": attachment.content_hash,
                     "size_bytes": attachment.size_bytes,
                     "message_fingerprint": message_fingerprint,
+                    **({"embedded_message": attachment.embedded_message}
+                       if attachment.embedded_message else {}),
                 },
             }
 

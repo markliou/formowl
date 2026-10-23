@@ -1427,7 +1427,13 @@ def _mail_header_context(observation, item, parent, *, source, scope_id, attachm
         if observation.observation_type != "email_body_segment":
             return item
         # Keep the cited snippet verbatim; carry the provenance caution beside it.
-        item = {**item, "span_label": "mail body; quoted headers are not outer message headers"}
+        embedded = (observation.location or {}).get("embedded_message")
+        item = {**item, "span_label": (
+            "embedded (attached/forwarded) message; its own sender, date and subject apply, "
+            "not the outer message's"
+            if isinstance(embedded, Mapping)
+            else "mail body; quoted headers are not outer message headers"
+        )}
     if parent is None:
         return item
     explicit_link = _attachment_mail_parent_link(observation)
