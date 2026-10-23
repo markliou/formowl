@@ -93,6 +93,7 @@ class AttachmentDocumentExtractor:
         return [
             "delimited_text",
             "text",
+            "rtf",
             "xlsx",
             "xlsm",
             "xls",
@@ -163,6 +164,8 @@ def _declared_kind(mime_type: str | None, filename: str | None) -> str | None:
         "text/tab-separated-values": "delimited",
         "text/plain": "text",
         "text/markdown": "text",
+        "application/rtf": "rtf",
+        "text/rtf": "rtf",
         "text/html": "text",
     }
     if mime in by_mime:
@@ -177,6 +180,7 @@ def _declared_kind(mime_type: str | None, filename: str | None) -> str | None:
         ".docx": "docx",
         ".pptx": "pptx",
         ".txt": "text",
+        ".rtf": "rtf",
         ".md": "text",
         ".markdown": "text",
         ".csv": "delimited",
@@ -187,6 +191,8 @@ def _declared_kind(mime_type: str | None, filename: str | None) -> str | None:
 def _sniff_kind(data: bytes, *, max_bytes: int) -> str | None:
     if data.startswith(b"%PDF-"):
         return "pdf"
+    if data.lstrip()[:5] == b"{\\rtf":
+        return "rtf"
     if data.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
         return "ole"
     if is_zipfile(io.BytesIO(data)):
@@ -269,9 +275,159 @@ def _parse_content(
         return _ParsedContent(tables=[table] if table is not None else [])
     if kind == "text":
         return _text_content(data, config=config)
+    if kind == "rtf":
+        return _rtf_content(data, config=config)
     if declared_kind in {"pdf", "xls", "xlsb", "doc", "ppt"}:
         return _ParsedContent(warnings=[f"attachment_document_{declared_kind}_parser_unavailable"])
     return _ParsedContent()
+
+
+# RTF destinations whose content is not document text.
+_RTF_SKIP_DESTINATIONS = frozenset({
+    "fonttbl", "colortbl", "stylesheet", "info", "pict", "object", "objdata", "themedata",
+    "colorschememapping", "latentstyles", "datastore", "xmlnstbl", "listtable",
+    "listoverridetable", "rsidtbl", "generator", "mmathPr", "pgdsctbl", "header", "footer",
+    "headerl", "headerr", "footerl", "footerr", "fldinst", "bkmkstart", "bkmkend", "filetbl",
+    "revtbl", "protusertbl", "background", "shp", "shpinst", "nonshppict", "blipuid",
+})
+_RTF_BREAKS = {"par": "\n", "line": "\n", "sect": "\n\n", "page": "\n\n", "row": "\n",
+               "tab": "\t", "cell": "\t", "emdash": "\u2014", "endash": "\u2013",
+               "lquote": "\u2018", "rquote": "\u2019", "ldblquote": "\u201c",
+               "rdblquote": "\u201d", "bullet": "\u2022"}
+_RTF_TOKEN = re.compile(rb"\\([a-zA-Z]{1,32})(-?\d{1,10})? ?|\\'([0-9a-fA-F]{2})|\\(.)|([{}])|([^\\{}\r\n]+)|[\r\n]+",
+                        re.DOTALL)
+
+
+def _rtf_to_text(data: bytes, *, max_chars: int = 2_000_000) -> str:
+    """Bounded RTF to plain text (no formatting, no embedded objects).
+
+    Ignorable ``\\*`` destinations (including Outlook's encapsulated
+    ``\\*\\htmltag`` HTML) and non-text destinations are skipped; the visible
+    text, ``\\'hh`` bytes in the declared ANSI code page and ``\\uN`` characters
+    are kept.
+    """
+    codepage = "cp1252"
+    match = re.search(rb"\\ansicpg(\d{3,5})", data[:4096])
+    if match:
+        candidate = f"cp{int(match.group(1))}"
+        try:
+            "".encode(candidate)
+            codepage = candidate
+        except LookupError:
+            pass
+    out: list[str] = []
+    pending = bytearray()
+    stack: list[tuple[bool, int]] = []
+    skip, uc, to_skip = False, 1, 0
+    first_in_group = False
+    size = 0
+
+    def flush() -> None:
+        nonlocal size
+        if pending:
+            text = bytes(pending).decode(codepage, errors="replace")
+            pending.clear()
+            if not skip:
+                out.append(text)
+                size += len(text)
+
+    position = 0
+    while position < len(data):
+        token = _RTF_TOKEN.match(data, position)
+        if token is None:
+            position += 1
+            continue
+        position = token.end()
+        word, param, hexbyte, symbol, brace, text = token.groups()
+        if word == b"bin" and param is not None:
+            # \\binN is followed by N raw bytes (embedded objects/pictures).
+            position += max(0, int(param))
+            continue
+        if hexbyte is None:
+            flush()
+        if size > max_chars:
+            break
+        if brace == b"{":
+            stack.append((skip, uc))
+            first_in_group = True
+            continue
+        if brace == b"}":
+            skip, uc = stack.pop() if stack else (False, 1)
+            first_in_group = False
+            continue
+        was_first, first_in_group = first_in_group, False
+        if to_skip and (text or hexbyte or symbol):
+            if text:
+                consumed = min(to_skip, len(text))
+                to_skip -= consumed
+                text = text[consumed:]
+                if not text:
+                    continue
+            else:
+                to_skip -= 1
+                continue
+        if word is not None:
+            name = word.decode("ascii")
+            if name in _RTF_SKIP_DESTINATIONS and was_first:
+                skip = True
+            elif name == "uc" and param is not None:
+                uc = max(0, int(param))
+            elif name == "u" and param is not None:
+                if not skip:
+                    value = int(param)
+                    out.append(chr(value + 65536 if value < 0 else value))
+                    size += 1
+                to_skip = uc
+            elif name in _RTF_BREAKS and not skip:
+                out.append(_RTF_BREAKS[name])
+                size += 1
+            continue
+        if hexbyte is not None:
+            pending.append(int(hexbyte, 16))
+            continue
+        if symbol is not None:
+            if symbol == b"*":
+                skip = True  # ignorable destination (includes \\*\\htmltag HTML)
+            elif not skip and symbol in {b"\\", b"{", b"}"}:
+                out.append(symbol.decode("ascii"))
+            elif not skip and symbol == b"~":
+                out.append("\u00a0")
+            continue
+        if text and not skip:
+            decoded = text.decode(codepage, errors="replace")
+            out.append(decoded)
+            size += len(decoded)
+    flush()
+    joined = "".join(out).replace("\u00a0", " ").replace("\x00", "")
+    # \\uN escapes may encode UTF-16 surrogate pairs; recombine (lone halves -> U+FFFD).
+    joined = joined.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+    if b"\\fromhtml" in data[:4096]:
+        # Outlook-encapsulated HTML keeps HTML character references in its text.
+        import html
+
+        joined = html.unescape(joined)
+    joined = re.sub(r"[ \t]+\n", "\n", joined)
+    return re.sub(r"\n{3,}", "\n\n", joined).strip()
+
+
+def _rtf_text_is_unreliable(text: str) -> bool:
+    """Garbled output (e.g. a mis-decompressed RTF body) must not become evidence."""
+    if not text:
+        return False
+    noisy = sum(1 for char in text if char == "\ufffd" or (ord(char) < 32 and char not in "\n\t"))
+    return noisy / len(text) > 0.02
+
+
+def _rtf_content(data: bytes, *, config: dict[str, Any]) -> _ParsedContent:
+    text = _rtf_to_text(data)
+    if not text:
+        return _ParsedContent(warnings=["attachment_document_rtf_text_empty"])
+    if _rtf_text_is_unreliable(text):
+        return _ParsedContent(warnings=["attachment_document_rtf_text_unreliable"])
+    parsed = _text_content(text.encode("utf-8"), config=config)
+    for block in parsed.blocks:
+        block.payload["source_format"] = "rtf"
+    return parsed
 
 
 def _text_content(data: bytes, *, config: dict[str, Any]) -> _ParsedContent:
