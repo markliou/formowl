@@ -877,7 +877,7 @@ def bind_issue56_reviewed_annotations(
 REVIEWED_HEADER_CONFIG_ARTIFACT_ID = "formowl_reviewed_header_validation_v1"
 REVIEWED_HEADER_RECEIPT_ARTIFACT_ID = "formowl_reviewed_header_review_receipt_v1"
 _REVIEWED_HEADER_BINDING_VERSION = "formowl_reviewed_header_binding_v1"
-_MAX_REVIEWED_HEADER_APPROVALS = 200_000
+_MAX_REVIEWED_HEADER_APPROVALS = 1_000_000
 
 
 def reviewed_header_binding_key(observation: Observation) -> str | None:
