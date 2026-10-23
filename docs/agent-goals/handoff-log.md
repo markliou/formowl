@@ -41,6 +41,33 @@ that were never extracted before the fix; they still need embedded-message
 lineage (own sender/date/subject) before re-ingestion. Unsupported formats today:
 RTF bodies (352 top-level + 274 embedded), images without OCR (~66k png/jpg/gif
 top-level), archives (208 zip, 51 rar, 40 7z), OLE `.doc` (80), scanned PDFs.
+Full audit (both exports): 66,837 top-level + 1,126 embedded images but only
+17,850 unique; 5,961 PDFs of which 718 have no font object (likely scanned);
+300+7 archives (862 MB); 56+6 nested .msg/.eml; 83+1 legacy Office.
+Re-ingestion facts (2026-10-23): only two PST assets exist. The large one
+(21.15 GB, `asset_c312…`) was fully extracted twice — job 1 (2026-10-06,
+segment-capped, 82,232 body segments) and job 3 (2026-10-15 "fullbody",
+uncapped, 1,312,616 segments) — and the current revision includes both, so all
+28,513 of its messages and 200,627 headers are duplicated (59,724 =
+2,698 + 2 x 28,513). A new revision must keep one uncapped extraction per PST.
+Measured costs: large-PST extraction 2.1 h on the NVMe replica, attachment
+backfill 0.75 h; existing readpst exports can be reused. Dense model is the
+frozen `intfloat/multilingual-e5-small` (384-d, CPU-only torch in the image):
+~26 passages/s on 12 CPU threads; the previous strong-RAG cache held 135,372
+vectors (~1.5 h at that rate), so CPU is sufficient. `/Cache` NVMe has ~372 GB
+free and should host the new revision.
+Deployed-tree merge (2026-10-24, branch `merge/deployed-candidate-r39`, local
+only): 7c9da6f snapshots root work, 1c43002 snapshots the exact 8088 v20 tree on
+its closest ancestor cc8919f, 08b46db merges it (all five conflicts resolve to the
+deployed side), 45339fe and 2c26f52 repair five deployed-runtime regressions
+(mail-selector catalog dropped the graph tool; preferred table engine starved
+later families; verbatim snippets via `span_label`; non-mapping annotation catalog
+500; absent explicit parent job no longer fails the query) and align tests with
+intended deployed behavior. Clean-worktree focused suites vs the pre-merge root:
+0 new failures, 2 fixed, 57 pre-existing (issue56: 955 run, 45 failures, 32
+errors). A read-only review request (items A1-A5, B1-B9, C1-C5) was sent to
+Codex; its answer goes to `/tmp/herdr-bus/claude-wH-p1-review.json`. 8088 still
+runs v20 from the candidate tree.
 
 ## Current UAT checkpoint — 2026-10-22/23 UTC / field-aware source shortlist repair / 待測
 User authorized private-source use and live UAT acceptance. Root cause for the COO miss was a bounded lexical shortlist: the validated料號 token had 21 mail postings, the known row containing `COO=JAPAN` was present at position 11, and single-token identity lookups skipped optional requested-field reranking before the source deadline. This was retrieval ordering, not missing attachment data or an authorization failure.
