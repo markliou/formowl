@@ -35,6 +35,8 @@ _MIN_NONEMPTY_VALUES = 2
 _NUMERIC = re.compile(r"^[\s+\-]?[\d,]+(?:\.\d+)?\s*%?$")
 _DATE = re.compile(r"^\d{1,4}[-/.]\d{1,2}(?:[-/.]\d{1,4})?(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$")
 _GENERIC = re.compile(r"^(?:column|欄)[ _]?\d+$", re.IGNORECASE)
+# Identifier-shaped surface: alphanumeric segments joined by separators, with a digit.
+_IDENTIFIER = re.compile(r"^(?=.*\d)[A-Za-z0-9]+(?:[.\-_/#][A-Za-z0-9]+)+$")
 
 
 def _value_kind(text: str) -> str:
@@ -80,6 +82,10 @@ def decide(label: str, *, kinds: dict[str, int], values: list[str], duplicate_la
         return "not_header", ["label_is_value_shaped"]
     if not any(character.isalpha() for character in stripped):
         return "not_header", ["label_has_no_letters"]
+    if _IDENTIFIER.match(stripped) and values and sum(
+            bool(_IDENTIFIER.match(" ".join(v.split()))) for v in values) * 2 >= len(values):
+        # A data row mistaken for a header: the "label" is a value of the column.
+        return "not_header", ["label_is_identifier_like_its_values"]
     folded = stripped.casefold()
     if values and sum(" ".join(v.split()).casefold() == folded for v in values) * 2 >= len(values):
         return "not_header", ["label_repeats_as_data"]

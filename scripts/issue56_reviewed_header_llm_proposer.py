@@ -120,6 +120,33 @@ def classify_batch(items: list[dict[str, Any]], call: Callable[[dict[str, Any]],
              "model": model} for item, decision in zip(items, parse_decisions(text, items))]
 
 
+def group_items(items: list[dict[str, Any]]) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+    """Group by normalized label, dominant value kind and reasons (deterministic order).
+
+    The representative carries sample values from up to three members so one
+    decision covers columns that share the same label shape across tables.
+    """
+    import hashlib
+
+    groups: dict[tuple, list[dict[str, Any]]] = {}
+    for item in items:
+        kinds = item.get("value_kinds") or {}
+        dominant = max((k for k in kinds if k != "blank"), key=lambda k: kinds[k], default="blank")
+        key = (" ".join(str(item["label"]).split()).casefold(), dominant, tuple(sorted(item["reasons"])))
+        groups.setdefault(key, []).append(item)
+    result = []
+    for key, members in groups.items():
+        samples: list[str] = []
+        for member in members[:3]:
+            for value in member.get("sample_values", []):
+                if value not in samples and len(samples) < 5:
+                    samples.append(value)
+        representative = {**members[0], "sample_values": samples,
+                          "group_key": "sha256:" + hashlib.sha256(repr(key).encode("utf-8")).hexdigest()}
+        result.append((representative, members))
+    return result
+
+
 def _atomic_jsonl(path: Path, items: list[dict[str, Any]]) -> None:
     descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     with os.fdopen(descriptor, "wb") as stream:
@@ -130,18 +157,28 @@ def _atomic_jsonl(path: Path, items: list[dict[str, Any]]) -> None:
 
 
 def run(proposals: list[dict[str, Any]], out_dir: Path, call: Callable[[dict[str, Any]], str | None], *,
-        model: str, batch_size: int, max_batches: int | None) -> dict[str, int]:
+        model: str, batch_size: int, max_batches: int | None, group_by_label: bool = False) -> dict[str, int]:
     out_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(out_dir, 0o700)
     todo = eligible(proposals)
+    grouped = group_items(todo) if group_by_label else [(item, [item]) for item in todo]
+    representatives = [representative for representative, _ in grouped]
     done = 0
-    for number, start in enumerate(range(0, len(todo), batch_size)):
+    for number, start in enumerate(range(0, len(grouped), batch_size)):
         path = out_dir / f"batch-{number:06d}.jsonl"
         if path.is_file():
             continue
         if max_batches is not None and done >= max_batches:
             break
-        _atomic_jsonl(path, classify_batch(todo[start:start + batch_size], call, model=model))
+        decisions = classify_batch(representatives[start:start + batch_size], call, model=model)
+        expanded = []
+        for decision, (representative, members) in zip(decisions, grouped[start:start + batch_size]):
+            for member in members:
+                record = {**decision, "binding": member["binding"]}
+                if group_by_label:
+                    record.update(group_key=representative["group_key"], group_size=len(members))
+                expanded.append(record)
+        _atomic_jsonl(path, expanded)
         done += 1
     merged = [json.loads(line) for path in sorted(out_dir.glob("batch-*.jsonl"))
               for line in path.read_text(encoding="utf-8").splitlines() if line]
@@ -160,6 +197,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch-size", type=int, default=20)
     parser.add_argument("--max-batches", type=int)
     parser.add_argument("--timeout", type=float, default=240.0)
+    parser.add_argument("--group-by-label", action="store_true",
+                        help="decide once per (label, dominant value kind, reasons) group")
     args = parser.parse_args(argv)
     if not 1 <= args.batch_size <= 50:
         parser.error("batch size must be between 1 and 50")
@@ -169,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
                  if line]
     started = time.monotonic()
     summary = run(proposals, args.output_dir, call, model=args.model, batch_size=args.batch_size,
-                  max_batches=args.max_batches)
+                  max_batches=args.max_batches, group_by_label=args.group_by_label)
     print(json.dumps({**summary, "seconds": round(time.monotonic() - started, 1)}), flush=True)
     return 0
 

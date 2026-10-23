@@ -85,6 +85,25 @@ class LlmHeaderProposerTests(unittest.TestCase):
             self.assertEqual(len(calls), 3)
             self.assertEqual(second["header_confirmed"], 5)
 
+    def test_grouped_run_decides_once_per_label_shape_and_expands(self):
+        items = [_item("a"), _item("b"), {**_item("c"), "label": "ETD"}]
+        calls = []
+
+        def call(payload):
+            calls.append(payload)
+            count = payload["text"]["format"]["schema"]["properties"]["decisions"]["minItems"]
+            return _reply(*["header_confirmed"] * count)
+
+        with tempfile.TemporaryDirectory() as directory:
+            summary = llm.run(items, Path(directory), call, model="m", batch_size=10,
+                              max_batches=None, group_by_label=True)
+            merged = [json.loads(line) for line in (Path(directory) / "llm-proposals.jsonl").read_text().splitlines()]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["text"]["format"]["schema"]["properties"]["decisions"]["minItems"], 2)
+        self.assertEqual(sorted(item["binding"] for item in merged), ["a", "b", "c"])
+        self.assertEqual({item["group_size"] for item in merged if item["binding"] in {"a", "b"}}, {2})
+        self.assertEqual(summary["merged"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

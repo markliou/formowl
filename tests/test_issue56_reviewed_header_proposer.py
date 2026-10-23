@@ -35,6 +35,9 @@ class ReviewedHeaderProposerTests(unittest.TestCase):
         self.assertEqual(_decide("跟代理商購買 45000pcs-NTD 0.84 ，但因交期延誤所以改向原廠下單")[0], "not_header")
         self.assertEqual(_decide("Japan", values=("Japan", "Japan", "China"))[0], "not_header")
         self.assertEqual(_decide("2025/03/01", header_path_depth=2), ("not_header", ["label_is_value_shaped"]))
+        self.assertEqual(_decide("SP.Z6L02G004", values=("SP.Z6L07G002", "SP.Z6LS7G001", "x"))[0], "not_header")
+        self.assertEqual(_decide("Core P/N", values=("09.HSMRCG191", "43.F1E16G301"))[0], "header_confirmed")
+        self.assertEqual(_decide("CRI_PN", values=("03.00003G40Q", "02.10640G107"))[0], "header_confirmed")
 
     def test_uncertain_structure_is_ambiguous_not_rejected(self):
         self.assertEqual(_decide("COO", duplicate_label=True), ("ambiguous", ["duplicate_label_in_header_row"]))
