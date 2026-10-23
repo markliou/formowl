@@ -60,9 +60,11 @@ class _JsonRecordStore(Generic[T]):
 
     def get(self, record_id: str) -> T | None:
         path = self._record_path(record_id)
-        if not path.exists():
+        try:
+            payload = _read_json(path)
+        except FileNotFoundError:
             return None
-        return self.factory(_read_json(path))
+        return self.factory(payload)
 
     def delete(self, record_id: str) -> None:
         path = self._record_path(record_id)

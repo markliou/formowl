@@ -10,8 +10,13 @@ canonical graph state.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from builtins import BaseExceptionGroup
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field, replace
 import hashlib
+import heapq
 import json
 from pathlib import Path
 import re
@@ -19,6 +24,7 @@ import stat
 import sqlite3
 import threading
 import time
+import unicodedata
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -27,6 +33,7 @@ from formowl_contract import (
     Observation,
     PermissionScope,
     assert_no_public_raw_references,
+    redact_public_raw_references,
     sha256_json,
     stable_resource_contract_id,
     to_plain,
@@ -36,12 +43,14 @@ from formowl_core import (
     load_issue56_target_runtime_components,
 )
 from formowl_graph import EffectiveGraphView
+from formowl_graph.storage import CandidateAtomStore, SemanticMetadataStore
 from formowl_ingestion.storage import (
     AssetStore,
     ExtractorRunStore,
     JobStore,
     ObservationStore,
 )
+from formowl_ingestion.storage.records import _JsonRecordStore
 from formowl_ingestion.extractors.text import PlainTextObservationExtractor
 
 from .bundle import MailEvidenceBundle
@@ -111,6 +120,27 @@ _MAX_SAFE_BYTES = 16 * 1024 * 1024
 # Keep their JSON intake finite and separate from every generic manifest cap.
 _MAX_INGESTION_PARENT_BINDING_BYTES = 256 * 1024 * 1024
 _REVISION_TEXT_RETRIEVAL_OBSERVATION_TYPES = frozenset({"heading", "paragraph"})
+
+
+# No object-level read-only flag exists. Only these concrete, getter-only
+# implementations are eligible; injected/custom stores retain serial execution.
+_OBSERVATION_GET = ObservationStore.get
+_RECORD_GET = _JsonRecordStore.get
+_RECORD_PATH = _JsonRecordStore._record_path
+_OBSERVATION_FACTORY = Observation.from_dict
+
+
+def _parallel_file_store(authority: CompletedIngestionJobAuthority) -> bool:
+    store = getattr(authority, "observation_store", None)
+    inner = getattr(store, "_store", None)
+    return (
+        type(store) is ObservationStore and type(inner) is _JsonRecordStore
+        and "get" not in vars(store) and "get" not in vars(inner)
+        and getattr(store.get, "__func__", None) is _OBSERVATION_GET
+        and getattr(inner.get, "__func__", None) is _RECORD_GET
+        and getattr(inner._record_path, "__func__", None) is _RECORD_PATH
+        and inner.factory == _OBSERVATION_FACTORY
+    )
 
 
 def _authorized_ingestion_root_source_kinds(
@@ -200,6 +230,14 @@ class Issue56IngestionRevision:
     )
     source_records: Any | None = field(default=None, repr=False, compare=False)
     authorized_source: Any | None = field(default=None, repr=False, compare=False)
+    reviewed_source_annotations: tuple[Mapping[str, Any], ...] = field(default=(), repr=False)
+    reviewed_annotation_pin: str | None = None
+    # SPEC §7.5 reviewed header validation: approved per-table header bindings
+    # and the label-level exact column hashes they make applicable. Empty by
+    # default, which keeps every pre-existing behavior unchanged.
+    reviewed_header_bindings: frozenset[str] = field(default=frozenset(), repr=False)
+    reviewed_header_column_hashes: frozenset[str] = field(default=frozenset(), repr=False)
+    reviewed_header_pin: str | None = None
 
     @property
     def effective_graph_view(self) -> EffectiveGraphView:
@@ -382,20 +420,38 @@ class SourceNativeLexicalLookup:
         if not self.has_keyed_source_metadata:
             return []
         with self._connection_lock:
-            row = self._connection.execute(
-                "SELECT position FROM reference_locators WHERE observation_hash = ?",
+            occurrence = self._connection.execute(
+                "SELECT occurrence_id, job_index, asset_id, extractor_run_id "
+                "FROM occurrence_helpers WHERE observation_hash = ? LIMIT 2",
                 (observation_hash,),
-            ).fetchone()
-            if row is None:
-                return []
+            ).fetchall()
+            if len(occurrence) > 1:
+                raise ContractValidationError("source occurrence helper is ambiguous")
             result = []
-            for offset in (-1, 1, -2, 2, -3, 3, -4, 4):
-                reference = self._connection.execute(
-                    "SELECT job_index, observation_id, observation_hash, job_fingerprint "
-                    "FROM reference_locators WHERE position = ?", (row[0] + offset,),
+            if occurrence:
+                occurrence_id, job_index, asset_id, extractor_run_id = occurrence[0]
+                result = self._connection.execute(
+                    "SELECT h.job_index, h.observation_id, h.observation_hash, h.job_fingerprint "
+                    "FROM occurrence_helpers o JOIN helpers h ON h.observation_hash = o.observation_hash "
+                    "WHERE o.occurrence_id = ? AND o.job_index = ? AND o.asset_id = ? "
+                    "AND o.extractor_run_id = ? AND o.observation_hash != ? "
+                    "ORDER BY h.observation_id COLLATE BINARY LIMIT 64",
+                    (occurrence_id, job_index, asset_id, extractor_run_id, observation_hash),
+                ).fetchall()
+            if not result:
+                row = self._connection.execute(
+                    "SELECT position FROM reference_locators WHERE observation_hash = ?",
+                    (observation_hash,),
                 ).fetchone()
-                if reference is not None:
-                    result.append(reference)
+                if row is None:
+                    return []
+                for offset in (-1, 1, -2, 2, -3, 3, -4, 4):
+                    reference = self._connection.execute(
+                        "SELECT job_index, observation_id, observation_hash, job_fingerprint "
+                        "FROM reference_locators WHERE position = ?", (row[0] + offset,),
+                    ).fetchone()
+                    if reference is not None:
+                        result.append(reference)
         return result
 
     def helper_for_mail_parent(
@@ -520,6 +576,7 @@ class SourceNativeLexicalLookup:
         source_family: str,
         limit: int = 256,
         timeout_ms: int,
+        preferred_tokens: Iterable[str] = (),
     ) -> list[str]:
         if source_family not in {"mail", "document_text"}:
             raise ContractValidationError("source lexical lookup family is invalid")
@@ -530,6 +587,12 @@ class SourceNativeLexicalLookup:
         tokens = sorted({token for token in query_tokens if isinstance(token, str) and token})
         if not tokens:
             return []
+        preferred = sorted({
+            token for token in preferred_tokens
+            if isinstance(token, str) and token.strip() and token not in tokens
+        })
+        if len(preferred) > 256:
+            preferred = []
         # Reserve a bounded, materially sized slice for each query token before
         # applying the final coverage ordering.  A small ``limit / token_count``
         # slice is not safe here: a candidate may contain a rare identity token
@@ -538,7 +601,17 @@ class SourceNativeLexicalLookup:
         # allowing late candidates from the frozen source corpus to survive;
         # hydration, permission, lineage and source matching remain authoritative
         # after this query.  A timeout is still a miss, never source absence.
-        per_token_limit = 8192
+        # A single token is an identity/anchor lookup.  Its postings must be
+        # available even when optional field hints are expensive to score.  A
+        # provider may spell the same identifier differently (for example a
+        # prefixed business identifier versus its numeric surface); once the
+        # validated query has selected the source token, soft field hints must
+        # never turn that anchor into an index miss.
+        # For every token count, the sealed builder binds postings to helpers;
+        # avoid helper-table I/O here. The reader validates selected helpers
+        # and their permission/job/source bindings before returning evidence.
+        single_token = len(tokens) == 1
+        per_token_limit = limit if single_token else 8192
         deadline = time.monotonic() + timeout_ms / 1000
         with self._connection_lock:
             self._connection.execute(f"PRAGMA busy_timeout = {min(timeout_ms, 2000)}")
@@ -546,6 +619,7 @@ class SourceNativeLexicalLookup:
                 lambda: 1 if time.monotonic() >= deadline else 0,
                 1000,
             )
+            cursors: list[sqlite3.Cursor] = []
             try:
                 # Query the token-leading primary-key range separately.  A
                 # window over the union of all token postings can scan the
@@ -555,26 +629,98 @@ class SourceNativeLexicalLookup:
                 # Python merge preserves the same coverage/best-rank ordering
                 # without widening the artifact or retaining source text.
                 scores: dict[str, list[int]] = {}
-                for token in tokens:
-                    rows = self._connection.execute(
-                        "SELECT p.observation_hash FROM postings p "
-                        "JOIN helpers h ON h.observation_hash = p.observation_hash "
-                        "WHERE p.source_family = ? AND p.token = ? "
-                        "ORDER BY p.observation_hash COLLATE BINARY LIMIT ?",
-                        (source_family, token, per_token_limit),
-                    ).fetchall()
-                    for token_rank, row in enumerate(rows, start=1):
+                heap: list[tuple[str, int, int]] = []
+
+                def advance(index: int, rank: int) -> None:
+                    if time.monotonic() >= deadline:
+                        raise sqlite3.OperationalError("interrupted")
+                    row = cursors[index].fetchone()
+                    if time.monotonic() >= deadline:
+                        raise sqlite3.OperationalError("interrupted")
+                    if row is not None:
                         observation_hash = row[0]
                         if not isinstance(observation_hash, str) or not observation_hash:
                             raise ContractValidationError("source lexical lookup result is invalid")
-                        score = scores.setdefault(observation_hash, [0, token_rank])
-                        score[0] += 1
-                        score[1] = min(score[1], token_rank)
+                        heapq.heappush(heap, (observation_hash, index, rank))
+
+                for token in tokens:
+                    if time.monotonic() >= deadline:
+                        raise sqlite3.OperationalError("interrupted")
+                    # Do not fold optional field ranking into the identity
+                    # posting query.  On a large sealed SQLite artifact the
+                    # correlated ranking query can exhaust the 500ms
+                    # accelerator budget even though the identity posting is
+                    # directly indexed.  Returning no identity candidates in
+                    # that case incorrectly prevents the guarded source scan.
+                    # Field hints remain a soft reranking signal for the
+                    # multi-token path below; they are never required terms.
+                    cursors.append(self._connection.execute(
+                        "SELECT p.observation_hash FROM postings p "
+                        "WHERE p.source_family = ? AND p.token = ? "
+                        "ORDER BY p.observation_hash COLLATE BINARY LIMIT ?",
+                        (source_family, token, per_token_limit),
+                    ))
+                    advance(len(cursors) - 1, 1)
+                full_matches = 0
+                while heap:
+                    if time.monotonic() >= deadline:
+                        raise sqlite3.OperationalError("interrupted")
+                    observation_hash = heap[0][0]
+                    members = []
+                    while heap and heap[0][0] == observation_hash:
+                        members.append(heapq.heappop(heap))
+                    scores[observation_hash] = [len(members), min(item[2] for item in members)]
+                    if len(members) == len(tokens):
+                        full_matches += 1
+                    # Full matches beat every partial match. Their rank in each
+                    # sorted stream strictly increases with hash, so later full
+                    # matches cannot outrank this prefix. Otherwise exhaust the
+                    # original per-token cap; never stop early on partial hits.
+                    if full_matches >= limit:
+                        break
+                    for _, index, rank in members:
+                        advance(index, rank + 1)
                 ordered = sorted(
                     scores.items(),
                     key=lambda item: (-item[1][0], item[1][1], item[0]),
                 )
                 result = [observation_hash for observation_hash, _ in ordered[:limit]]
+                if preferred and result:
+                    # Keep the hash-ordered merge and its exact bounded candidate
+                    # set. Soft fields reorder the completed shortlist even for a
+                    # single identity token; they remain optional and never
+                    # become required source terms. This lets a requested field
+                    # select the matching row before the shared deadline while
+                    # preserving the original identifier posting coverage.
+                    try:
+                        markers = ",".join("?" for _ in preferred)
+                        field_scores: dict[str, int] = {}
+                        for observation_hash in result:
+                            if time.monotonic() >= deadline:
+                                raise sqlite3.OperationalError("interrupted")
+                            cursor = self._connection.execute(
+                                "SELECT COUNT(*) FROM postings WHERE source_family = ? "
+                                f"AND token IN ({markers}) AND observation_hash = ?",
+                                (source_family, *preferred, observation_hash),
+                            )
+                            try:
+                                field_scores[observation_hash] = cursor.fetchone()[0]
+                            finally:
+                                cursor.close()
+                            if time.monotonic() >= deadline:
+                                raise sqlite3.OperationalError("interrupted")
+                        reranked = sorted(result, key=lambda value: (
+                            -scores[value][0], -field_scores[value], scores[value][1], value,
+                        ))
+                        if time.monotonic() >= deadline:
+                            raise sqlite3.OperationalError("interrupted")
+                        result = reranked
+                    except sqlite3.OperationalError as exc:
+                        if "interrupted" not in str(exc).casefold():
+                            raise
+                        # Optional scoring may use only the original remaining
+                        # deadline. Never publish partial scores or lose the
+                        # complete original ranking when this phase expires.
             except sqlite3.OperationalError as exc:
                 if "interrupted" not in str(exc).casefold():
                     raise
@@ -584,6 +730,8 @@ class SourceNativeLexicalLookup:
                 # also exhausted.
                 result = []
             finally:
+                for cursor in cursors:
+                    cursor.close()
                 self._connection.set_progress_handler(None, 0)
         if any(not isinstance(item, str) or not item for item in result):
             raise ContractValidationError("source lexical lookup result is invalid")
@@ -592,6 +740,483 @@ class SourceNativeLexicalLookup:
     def close(self) -> None:
         with self._connection_lock:
             self._connection.close()
+
+
+def _attachment_mail_parent_link(observation: Observation) -> Mapping[str, str] | None:
+    """Read explicit backfill linkage, never infer it from an occurrence match."""
+    if observation.observation_type != "email_attachment_occurrence":
+        return None
+    payload, location = observation.payload or {}, observation.location or {}
+    required = ("prior_ingestion_job_id", "parent_extractor_run_id", "parent_message_observation_id")
+    if not any(key in record for key in required for record in (payload, location)):
+        return None
+    keys = (*required, "parent_inventory_item_id", "source_inventory_id",
+            "source_inventory_item_id", "source_content_hash", "parent_source_local_key")
+    link = {}
+    for key in keys:
+        if key in required or key in payload or key in location:
+            value = payload.get(key)
+            if not isinstance(value, str) or not value or location.get(key) != value:
+                raise ContractValidationError("source attachment explicit parent linkage is invalid")
+            link[key] = value
+    # This is the attachment byte hash, NOT the parent message/archive hash.
+    if "source_content_hash" in link and link["source_content_hash"] != payload.get("content_hash"):
+        raise ContractValidationError("source attachment explicit content binding mismatch")
+    return link
+
+
+def _validate_attachment_mail_parent(observation: Observation, parent: Observation) -> None:
+    link = _attachment_mail_parent_link(observation)
+    if link is None:
+        return
+    inventory_id = link.get("parent_inventory_item_id")
+    parent_local_key = link.get("parent_source_local_key")
+    if (
+        parent.observation_id != link["parent_message_observation_id"]
+        or parent.extractor_run_id != link["parent_extractor_run_id"]
+        or not isinstance((observation.payload or {}).get("message_fingerprint"), str)
+        or (observation.payload or {}).get("message_fingerprint") != (parent.payload or {}).get("message_fingerprint")
+        or (inventory_id is not None and (
+            (parent.location or {}).get("source_inventory_item_id") != inventory_id
+            or (parent.payload or {}).get("source_inventory_item_id", inventory_id) != inventory_id
+        ))
+        or (parent_local_key is not None and (
+            (parent.location or {}).get("source_local_key") != parent_local_key
+            or (parent.payload or {}).get("source_local_key", parent_local_key) != parent_local_key
+        ))
+    ):
+        raise ContractValidationError("source attachment explicit parent binding mismatch")
+
+
+def bind_issue56_reviewed_annotations(
+    revision: Issue56IngestionRevision, *, configuration_path: Path, expected_sha256: str,
+) -> Issue56IngestionRevision:
+    """Operator-only, read-only intake; a review receipt is NOT canonical publication."""
+    _, config = _read_sealed_json(configuration_path, expected_sha256=expected_sha256,
+                                  maximum_bytes=_MAX_SAFE_BYTES, reason_prefix="uat_annotations")
+    if config.get("artifact_id") != "formowl_uat_reviewed_annotation_config_v1":
+        raise ContractValidationError("UAT annotation configuration identity is invalid")
+    pages = config.get("review_receipt_pages")
+    if pages is None:
+        pages = [{key: config[key] for key in ("review_receipt_path", "review_receipt_sha256")}]
+    elif "review_receipt_path" in config or "review_receipt_sha256" in config:
+        raise ContractValidationError("UAT annotation receipt authority is ambiguous")
+    if not isinstance(pages, list) or not pages:
+        raise ContractValidationError("UAT annotation receipt pages are invalid")
+    entries, page_hashes = [], []
+    for page in pages:
+        if not isinstance(page, dict) or set(page) != {"review_receipt_path", "review_receipt_sha256"}:
+            raise ContractValidationError("UAT annotation receipt page is invalid")
+        _, receipt = _read_sealed_json(Path(page["review_receipt_path"]),
+            expected_sha256=page["review_receipt_sha256"], maximum_bytes=_MAX_SAFE_BYTES,
+            reason_prefix="uat_annotation_review")
+        if (receipt.get("artifact_id") != "formowl_uat_annotation_review_receipt_v1"
+                or receipt.get("reviewer_user_id") != APPROVER_ACTOR
+                or receipt.get("decision") != "approve_for_uat_source_selection"
+                or revision.session is not None or revision.source_records is None
+                or not getattr(revision.source_records.runtime_store, "has_keyed_source_metadata", False)):
+            raise ContractValidationError("UAT annotation review/source-start authority is invalid")
+        for key in ("source_revision_sha256", "source_authority_fingerprint", "source_session_binding_fingerprint"):
+            if receipt.get(key) != revision.safe_binding[key] or config.get(key) != revision.safe_binding[key]:
+                raise ContractValidationError("UAT annotation source revision mismatch")
+        rows = receipt.get("entries")
+        if not isinstance(rows, list) or not 1 <= len(rows) <= 128:
+            raise ContractValidationError("UAT reviewed annotation count is invalid")
+        entries.extend(rows)
+        page_hashes.append(page["review_receipt_sha256"])
+    store_root = Path(config["store_root"])
+    if not all((store_root / "graph" / name).is_dir() for name in ("candidate-atoms", "semantic-metadata")):
+        raise ContractValidationError("UAT annotation stores are unavailable")
+    atoms, ledgers = CandidateAtomStore(store_root), SemanticMetadataStore(store_root)
+    selected, seen = [], set()
+    for entry in entries:
+        candidate_id = entry["candidate_atom_id"]
+        atom = atoms.get(candidate_id)
+        ledger = ledgers.get(entry["semantic_metadata_id"])
+        if (candidate_id in seen or atom is None or ledger is None
+                or entry.get("target_identity_verified") is not True
+                or sha256_json(atom.to_dict()) != entry["candidate_sha256"]
+                or sha256_json(ledger.to_dict()) != entry["semantic_metadata_sha256"]
+                or ledger.metadata_type != "source_unit_semantic_read"
+                or ledger.value.get("annotation_status") != "annotated"
+                or ledger.value.get("candidate_hashes", {}).get(candidate_id) != entry["candidate_sha256"]
+                or atom.source_semantic_metadata_ids != [ledger.semantic_metadata_id]
+                or atom.status not in {"pending_review", "approved"}):
+            raise ContractValidationError("UAT reviewed candidate/ledger pin mismatch")
+        assertion = atom.properties.get("assertion", {})
+        target = assertion.get("target")
+        if not isinstance(target, str) or not target.strip():
+            raise ContractValidationError("UAT reviewed target identity is missing")
+        hashes = ledger.value["pins"]["observation_hashes"]
+        source_hashes = tuple(hashes[key] for key in atom.source_observation_ids)
+        if any(revision.source_records.observation_hash(key) != hashes[key] for key in atom.source_observation_ids):
+            raise ContractValidationError("UAT reviewed source Observation changed")
+        approved = entry.get("approved_identity_binding_fingerprints", [])
+        bindings = {sha256_json(binding): binding for binding in atom.properties.get("identity_bindings", ())}
+        if (not isinstance(approved, list) or len(approved) > 16 or len(set(approved)) != len(approved)
+                or any(not isinstance(key, str) or key not in bindings for key in approved)):
+            raise ContractValidationError("UAT reviewed scope identity approval is invalid")
+        selected.append(MappingProxyType({"candidate_atom_id": candidate_id, "target": target,
+            "property": assertion.get("property"), "event_type": assertion.get("event_type"),
+            "time_roles": tuple(dict.fromkeys(item.get("role") for item in atom.properties.get("times", ())
+                                             if item.get("role") not in {None, "unknown"})),
+            "source_hashes": source_hashes,
+            "source_observation_ids": tuple(atom.source_observation_ids),
+            # A target-only legacy receipt never approves additional bindings.
+            "identity_bindings": tuple(bindings[key] for key in approved)}))
+        seen.add(candidate_id)
+    pin = sha256_json({"configuration_sha256": expected_sha256, **(
+        {"review_receipt_sha256": page_hashes[0]} if "review_receipt_pages" not in config
+        else {"review_receipt_page_sha256s": page_hashes})})
+    return replace(revision, reviewed_source_annotations=tuple(selected), reviewed_annotation_pin=pin,
+                   safe_binding=MappingProxyType({**revision.safe_binding, "reviewed_annotation_pin": pin,
+                       **({"reviewed_annotation_page_count": len(pages)} if "review_receipt_pages" in config else {})}))
+
+
+
+REVIEWED_HEADER_CONFIG_ARTIFACT_ID = "formowl_reviewed_header_validation_v1"
+REVIEWED_HEADER_RECEIPT_ARTIFACT_ID = "formowl_reviewed_header_review_receipt_v1"
+_REVIEWED_HEADER_BINDING_VERSION = "formowl_reviewed_header_binding_v1"
+_MAX_REVIEWED_HEADER_APPROVALS = 200_000
+
+
+def reviewed_header_binding_key(observation: Observation) -> str | None:
+    """Stable per-table header column identity for one table cell, or None.
+
+    Bound to the parsed asset, extractor run, sheet/table/header row, column
+    position and native header label, so any source or parse change yields a
+    different key and silently falls back to ``candidate_only``.
+    """
+    payload = observation.payload or {}
+    structure = payload.get("table_structure")
+    location = observation.location or {}
+    if (
+        observation.observation_type != "table_cell"
+        or not isinstance(structure, Mapping)
+        or structure.get("structure_status") != "candidate_only"
+        or not isinstance(structure.get("column_name"), str)
+        or not structure["column_name"].strip()
+        or not isinstance(observation.asset_id, str)
+        or not observation.asset_id
+    ):
+        return None
+    header_row_index = structure.get("header_row_index")
+    table_index = location.get("table_index")
+    cell_index = location.get("cell_index")
+    if any(
+        not isinstance(value, int) or isinstance(value, bool)
+        for value in (header_row_index, table_index, cell_index)
+    ):
+        return None
+    sheet_name = location.get("sheet_name")
+    return sha256_json({
+        "binding_version": _REVIEWED_HEADER_BINDING_VERSION,
+        "asset_id": observation.asset_id,
+        "extractor_run_id": observation.extractor_run_id,
+        "sheet_name": sheet_name if isinstance(sheet_name, str) else None,
+        "table_index": table_index,
+        "header_row_index": header_row_index,
+        "cell_index": cell_index,
+        "column_name": structure["column_name"],
+    })
+
+
+def bind_issue56_reviewed_headers(
+    revision: Issue56IngestionRevision, *, configuration_path: Path, expected_sha256: str,
+) -> Issue56IngestionRevision:
+    """Operator-only intake of a sealed reviewed-header approval (SPEC §7.5).
+
+    Approval is produced offline by a versioned policy or approver, never at
+    query time. Each approval names a per-table header binding plus the
+    label-level exact column it belongs to; unknown or non-candidate columns
+    reject the whole configuration.
+    """
+    _, config = _read_sealed_json(configuration_path, expected_sha256=expected_sha256,
+                                  maximum_bytes=_MAX_ARTIFACT_BYTES, reason_prefix="reviewed_headers")
+    manifest = revision.exact_lookup_manifest or {}
+    approvals = config.get("approvals")
+    policy_version = config.get("policy_version")
+    if (
+        set(config) != {"artifact_id", "schema_version", "source_authority_fingerprint",
+                        "policy_version", "approver_user_id", "decision", "approvals",
+                        "review_receipt_path", "review_receipt_sha256"}
+        or config["artifact_id"] != REVIEWED_HEADER_CONFIG_ARTIFACT_ID
+        or config["schema_version"] != 1
+        or config["decision"] != "approve_reviewed_header"
+        or config["approver_user_id"] != APPROVER_ACTOR
+        or not isinstance(policy_version, str) or not 1 <= len(policy_version) <= 80
+        or not manifest
+        or config["source_authority_fingerprint"] != manifest.get("source_authority_fingerprint")
+        or not isinstance(approvals, list)
+        or not 1 <= len(approvals) <= _MAX_REVIEWED_HEADER_APPROVALS
+    ):
+        raise ContractValidationError("reviewed header configuration is invalid")
+    candidate_columns = {
+        item["column_hash"] for item in manifest.get("columns", ())
+        if isinstance(item, Mapping) and item.get("structure_status") == "candidate_only"
+    }
+    bindings: set[str] = set()
+    column_hashes: set[str] = set()
+    for item in approvals:
+        if (
+            not isinstance(item, Mapping) or set(item) != {"binding", "column_hash"}
+            or not isinstance(item["binding"], str) or not item["binding"].startswith("sha256:")
+            or len(item["binding"]) != 71
+            or item["column_hash"] not in candidate_columns
+            or item["binding"] in bindings
+        ):
+            raise ContractValidationError("reviewed header approval is invalid")
+        bindings.add(item["binding"])
+        column_hashes.add(item["column_hash"])
+    receipt_path = config["review_receipt_path"]
+    if not isinstance(receipt_path, str) or not receipt_path:
+        raise ContractValidationError("reviewed header receipt is invalid")
+    receipt_path = Path(receipt_path)
+    if not receipt_path.is_absolute():
+        receipt_path = configuration_path.parent / receipt_path
+    _, receipt = _read_sealed_json(receipt_path, expected_sha256=config["review_receipt_sha256"],
+                                   maximum_bytes=_MAX_SAFE_BYTES, reason_prefix="reviewed_header_receipt")
+    if (
+        receipt.get("artifact_id") != REVIEWED_HEADER_RECEIPT_ARTIFACT_ID
+        or receipt.get("approver_user_id") != APPROVER_ACTOR
+        or receipt.get("decision") != config["decision"]
+        or receipt.get("policy_version") != policy_version
+        or receipt.get("source_authority_fingerprint") != config["source_authority_fingerprint"]
+        or receipt.get("approvals_sha256") != sha256_json(approvals)
+        or receipt.get("approval_count") != len(approvals)
+    ):
+        raise ContractValidationError("reviewed header receipt does not match its configuration")
+    pin = sha256_json({"reviewed_header_configuration_sha256": expected_sha256,
+                       "review_receipt_sha256": config["review_receipt_sha256"]})
+    return replace(
+        revision,
+        reviewed_header_bindings=frozenset(bindings),
+        reviewed_header_column_hashes=frozenset(column_hashes),
+        reviewed_header_pin=pin,
+        safe_binding=MappingProxyType({**revision.safe_binding, "reviewed_header_pin": pin,
+                                       "reviewed_header_approval_count": len(bindings)}),
+    )
+
+def issue56_reviewed_annotation_catalog(
+    revision: Issue56IngestionRevision, *, user_text: str | None = None,
+) -> dict[str, Any] | None:
+    """Labels only, guarded as public metadata; no assertion values or source quotes."""
+    if not revision.reviewed_source_annotations:
+        return None
+    items = revision.reviewed_source_annotations
+    paged_view = len(items) > 128
+    view_status = "original_identity_required"
+    if paged_view:
+        navigation = [{"annotation_id": item["candidate_atom_id"], "target": item["target"],
+                       "identity_bindings": item["identity_bindings"]} for item in items]
+        eligible, _, view_status = _reviewed_annotation_scope(navigation, user_text=user_text)
+        items = tuple(item for item in items if item["candidate_atom_id"] in eligible)
+    entries, omitted, redacted_labels = [], 0, 0
+    for item in items:
+        # A display-label projection must not rewrite a reviewed identity. If
+        # that exact target cannot be public, omit the nomination instead.
+        entry = {"annotation_id": item["candidate_atom_id"], "target": item["target"],
+                 "time_roles": list(item["time_roles"])}
+        if item.get("identity_bindings"):
+            entry["identity_bindings"] = [{key: binding.get(key) for key in (
+                "scope_role", "type_surface", "value_surface")} for binding in item["identity_bindings"]]
+        try:
+            assert_no_public_raw_references(entry, "reviewed_annotation_identity")
+            for key in ("property", "event_type"):
+                value = item[key]
+                label, count = redact_public_raw_references(value) if value is not None else (None, 0)
+                redacted_labels += bool(count)
+                # Entirely replaced property labels cannot guide semantic
+                # selection. Do not substitute an invented safe meaning.
+                if key == "property" and count and (not label.strip() or label.startswith("[redacted_") and label.endswith("]")):
+                    raise ContractValidationError("UAT catalog property is unrepresentable")
+                entry[key] = label
+            assert_no_public_raw_references(entry, "reviewed_annotation_entry")
+        except ContractValidationError:
+            omitted += 1
+            continue
+        entries.append(entry)
+    catalog = {
+        "source_revision_sha256": revision.safe_binding["source_revision_sha256"],
+        "reviewed_annotation_pin": revision.reviewed_annotation_pin,
+        "catalog_status": "partial" if omitted or redacted_labels else "complete",
+        "reviewed_atom_count": len(revision.reviewed_source_annotations),
+        "omitted_entry_count": omitted, "redacted_label_count": redacted_labels,
+        "entries": entries,
+    }
+    # The legacy <=128 receipt keeps its exact catalog/pin and context contract.
+    from .human_uat_orchestrator import _MAX_MESSAGE_CHARS
+    if paged_view:
+        catalog.update(view_mode="original_exact_identity_v1", view_status=view_status,
+            original_query_hash="sha256:" + hashlib.sha256(user_text.encode()).hexdigest() if user_text is not None else None,
+            reviewed_annotation_page_count=revision.safe_binding.get("reviewed_annotation_page_count", 1),
+            eligible_atom_count=len(items), out_of_view_atom_count=len(revision.reviewed_source_annotations) - len(items))
+        catalog["entries"] = entries[:128]
+        while True:
+            catalog["omitted_entry_count"] = omitted + len(entries) - len(catalog["entries"])
+            catalog["catalog_status"] = "partial"  # A view never certifies scope completeness.
+            catalog["catalog_pin"] = sha256_json({key: value for key, value in catalog.items() if key != "catalog_pin"})
+            if len(json.dumps(catalog, ensure_ascii=False).encode()) <= _MAX_MESSAGE_CHARS * 4:
+                break
+            catalog["entries"].pop()
+    else:
+        catalog["catalog_pin"] = sha256_json(catalog)
+        if len(entries) > 128 or len(json.dumps(catalog, ensure_ascii=False).encode()) > _MAX_MESSAGE_CHARS * 4:
+            raise ContractValidationError("UAT reviewed annotation catalog exceeds context bound")
+    assert_no_public_raw_references(catalog, "reviewed_annotation_catalog")
+    return catalog
+
+
+def _reviewed_identity_descriptors(entries):
+    normalize = lambda text: unicodedata.normalize("NFKC", text).casefold().strip()
+    descriptors = {}
+    for entry in entries:
+        rows = list(entry.get("identity_bindings", ()))
+        if not any(row["scope_role"] == "primary" for row in rows):
+            rows.append({"type_surface": None, "value_surface": entry["target"]})
+        descriptors[entry["annotation_id"]] = {
+            (normalize(row["type_surface"]) if row["type_surface"] else "", normalize(row["value_surface"]))
+            for row in rows}
+    return descriptors
+
+
+def _reviewed_identity_matches(term, descriptor):
+    from .query import bind_typed_identifier_to_source_schema
+    normalize = lambda text: unicodedata.normalize("NFKC", text).casefold().strip()
+    kind, value = descriptor
+    return normalize(term) == value or bool(kind and (kind, value) in {
+        (normalize(field), normalize(native))
+        for field, native in bind_typed_identifier_to_source_schema(term, [kind])})
+
+
+def _reviewed_annotation_scope(entries, *, user_text=None, required_terms=()):
+    """Choose an exact reviewed anchor, preserving other scopes as row predicates.
+
+    Roles belong to reviewed assertions, not globally interchangeable aliases.
+    A unique primary can anchor a literal qualifier reviewed only elsewhere.
+    Without it, compound scopes must actually co-occur in a reviewed assertion.
+    """
+    def normalize(value):
+        return unicodedata.normalize("NFKC", value).casefold().strip()
+    descriptors = _reviewed_identity_descriptors(entries)
+    roles = {}
+    for entry in entries:
+        bindings = list(entry.get("identity_bindings", ()))
+        if not any(row["scope_role"] == "primary" for row in bindings):
+            bindings.append({"scope_role": "primary", "type_surface": None, "value_surface": entry["target"]})
+        roles[entry["annotation_id"]] = {
+            role: {(normalize(row["type_surface"]) if row["type_surface"] else "", normalize(row["value_surface"]))
+                   for row in bindings if row["scope_role"] == role}
+            for role in ("primary", "parent", "group", "item")}
+    universe = set().union(*descriptors.values()) if descriptors else set()
+    original = normalize(user_text) if user_text is not None else None
+    if original is not None:
+        from .semantic_plan import protected_reference_identifiers
+        terms = set(protected_reference_identifiers(original))
+        terms.update(value for _, value in universe if re.search(
+            r"(?<![a-z0-9_-])" + re.escape(value) + r"(?![a-z0-9_-])", original))
+    else:
+        terms = {normalize(term) for term in required_terms or ()}
+    matched = set()
+    for term in terms:
+        identities = {identity for identity in universe if _reviewed_identity_matches(term, identity)}
+        if len(identities) > 1:
+            return set(), None, "ambiguous"
+        matched.update(identities)
+    if not matched:
+        return set(), None, "original_identity_required" if user_text is None and not terms else "unknown"
+    primary = matched & set().union(*(row["primary"] for row in roles.values()))
+    if len(primary) == 1:
+        anchor = next(iter(primary))
+        eligible = {key for key, row in roles.items() if anchor in row["primary"]}
+    elif len(matched) == 1:
+        anchor = next(iter(matched))
+        eligible = {key for key, identities in descriptors.items() if anchor in identities}
+    else:
+        eligible = {key for key, identities in descriptors.items() if matched <= identities}
+        anchor = None
+        for role in ("primary", "parent", "group", "item"):
+            candidates = matched & set().union(*(roles[key][role] for key in eligible))
+            if candidates:
+                if len(candidates) == 1:
+                    anchor = next(iter(candidates))
+                break
+        if anchor is None:
+            return set(), None, "ambiguous"
+    return eligible, anchor, "matched"
+
+
+def bind_reviewed_annotation_identity(entries, *, selected_ids, required_terms, user_text=None):
+    """Bind the same reviewed scope used by the catalog to one literal anchor."""
+    def normalize(text):
+        return unicodedata.normalize("NFKC", text).casefold().strip()
+    eligible, identity, status = _reviewed_annotation_scope(
+        entries, user_text=user_text, required_terms=required_terms)
+    if status != "matched" or not set(selected_ids) <= eligible:
+        raise ContractValidationError("UAT reviewed annotation original identity is unknown or ambiguous")
+    descriptors = _reviewed_identity_descriptors(entries)
+    universe = set().union(*descriptors.values())
+    terms = {normalize(term) for term in required_terms or ()}
+    if user_text is not None:
+        from .semantic_plan import protected_reference_identifiers
+        # The paged view may omit a qualifier's annotation. Original protected
+        # constraints still need literal proof; nominations cannot erase them.
+        if not set(protected_reference_identifiers(user_text)) <= set(
+                protected_reference_identifiers(" ".join(terms))):
+            raise ContractValidationError("UAT reviewed annotation original constraint is not independently bound")
+    possible = {term for term in terms if
+                {item for item in universe if _reviewed_identity_matches(term, item)} == {identity}}
+    if not possible:
+        raise ContractValidationError("UAT reviewed annotation identity is not independently bound")
+    # Only this one spelling is source-linked; every other term stays literal.
+    anchor = min(possible, key=lambda term: (term != identity[1], len(term), term))
+    if user_text is not None and not re.search(
+            r"(?<![a-z0-9_-])" + re.escape(anchor) + r"(?![a-z0-9_-])", normalize(user_text)):
+        raise ContractValidationError("UAT reviewed annotation original identity is unknown or ambiguous")
+    return anchor
+
+
+@dataclass(frozen=True)
+class ReviewedAnnotationQueryBinding:
+    original_text: str
+    catalog_json: str
+    request_fingerprint: str
+
+
+_REVIEWED_ANNOTATION_QUERY: ContextVar[ReviewedAnnotationQueryBinding | None] = ContextVar(
+    "issue56_reviewed_annotation_query", default=None)
+
+
+def reviewed_annotation_request_fingerprint(arguments):
+    return sha256_json({key: (sorted(unicodedata.normalize("NFKC", term).casefold().strip()
+                                   for term in arguments.get(key) or ()) if key == "required_terms"
+                             else arguments.get(key)) for key in (
+        "query_text", "request_contract", "required_terms", "reviewed_annotation_ids", "reviewed_annotation_pin")})
+
+
+def bind_reviewed_annotation_query(*, user_text, catalog, arguments):
+    if catalog.get("view_mode") != "original_exact_identity_v1":
+        return None
+    original_hash = "sha256:" + hashlib.sha256(user_text.encode()).hexdigest()
+    if (catalog.get("original_query_hash") != original_hash
+            or catalog.get("catalog_pin") != sha256_json({key: value for key, value in catalog.items() if key != "catalog_pin"})
+            or arguments.get("request_contract", {}).get("original_query_hash") != original_hash):
+        raise ContractValidationError("UAT reviewed annotation query view binding mismatch")
+    return ReviewedAnnotationQueryBinding(user_text, json.dumps(catalog, ensure_ascii=False, sort_keys=True),
+                                          reviewed_annotation_request_fingerprint(arguments))
+
+
+def current_reviewed_annotation_query_binding():
+    return _REVIEWED_ANNOTATION_QUERY.get()
+
+
+@contextmanager
+def reviewed_annotation_query_scope(binding):
+    token = _REVIEWED_ANNOTATION_QUERY.set(binding)
+    try:
+        yield
+    finally:
+        _REVIEWED_ANNOTATION_QUERY.reset(token)
 
 
 class IngestionRevisionSourceRecords:
@@ -709,8 +1334,35 @@ class IngestionRevisionSourceRecords:
         observation_callback: Callable[[Observation, str], bool] | None,
         context_anchor_callback: Callable[[Observation, str], bool] | None = None,
         context_callback: Callable[[Observation, Observation, str], bool] | None = None,
+        _allow_parallel_hydration: bool = False,
+        preferred_observation_hashes: Sequence[str] = (),
     ) -> RevisionOwnedMailSourceScan:
         """Read only sealed references, independent of retrieval helpers."""
+
+        from formowl_retrieval.gateway import (
+            _SOURCE_PHASE_TRACE, _trace, _source_trace_phase, _source_trace_read,
+            _SOURCE_TERM_PLACEMENT, _source_occurrence_pair_scope,
+        )
+        trace = _SOURCE_PHASE_TRACE.get() if _allow_parallel_hydration else None
+        trace_window = 0
+
+        def read_cell(role, authority, observation_id, expected_hash, scope=None, rank=None):
+            if trace is None:
+                return None
+            return _trace(trace, "read", role,
+                          (authority.job_fingerprint, authority.asset.asset_id, scope,
+                           observation_id, expected_hash), expected_hash,
+                          window=trace_window, rank=rank)
+
+        def guarded_read(authority, observation_id, *, expected_observation_hash,
+                         expected_job_fingerprint, cell=None):
+            with _source_trace_read(cell):
+                item = authority.load_indexed_observation(
+                    observation_id, expected_observation_hash=expected_observation_hash,
+                    expected_job_fingerprint=expected_job_fingerprint,
+                )
+                _trace(cell, "observation", item)
+                return item
 
         references = getattr(self, "observation_references", None)
         references_available = isinstance(references, list)
@@ -752,6 +1404,8 @@ class IngestionRevisionSourceRecords:
         selected: list[tuple[Observation, str]] = []
         scanned = 0
         seen_mail_parents: dict[tuple[str, ...], str] = {}
+        seen_mail_parent_bindings: dict[tuple[str, ...], tuple[str, str]] = {}
+        seen_mail_parent_records: dict[tuple[str, ...], Observation] = {}
         context_hashes: set[str] = set()
         delivered_bindings: dict[str, tuple[str, str]] = {}
         pending_mail_children: dict[tuple[str, ...], list[tuple[Observation, str]]] = {}
@@ -759,6 +1413,50 @@ class IngestionRevisionSourceRecords:
         pending_attachment_children: dict[tuple[str, str], list[tuple[Observation, str]]] = {}
         indexed_source = isinstance(self.runtime_store, SourceNativeLexicalLookup)
         emit_stop_reason = "callback"
+        defer_context = False
+        pending_context: list[tuple[Observation, str, CompletedIngestionJobAuthority]] = []
+        parent_reads: dict[tuple[Any, ...], Any] = {}
+        prepared_parent_bindings: dict[tuple[str, ...], tuple[str, str]] = {}
+        window_reads: list[Any] = []
+
+        def parent_reads_ok():
+            for future in window_reads:
+                if future.done():
+                    future.result()  # Anchor AND parent errors precede ready evidence.
+            return not window_reads or not hydration_stop.is_set()
+
+
+        def mail_parent_helper(authority, asset_id, run_id, occurrence_id):
+            return self.runtime_store.helper_for_mail_parent(
+                occurrence_id=occurrence_id,
+                job_index=next(i for i, job in enumerate(self.job_authorities) if job is authority),
+                asset_id=asset_id, extractor_run_id=run_id,
+            )
+
+        def expand_context(item: Observation, scope: str, authority: CompletedIngestionJobAuthority) -> bool:
+            nonlocal scanned, emit_stop_reason
+            key = (
+                authority.job_fingerprint, item.extractor_run_id,
+                item.asset_id, scope, (item.location or {}).get("message_occurrence_id"),
+            )
+            with _source_trace_phase(trace, "neighbor_context"):
+                scan = self.scan_neighbor_context(
+                    anchor=item, authority=authority, source_scope=scope,
+                    max_observations=max_observations - scanned,
+                    deadline_monotonic=deadline_monotonic,
+                    message_fingerprint=seen_mail_parents.get(
+                        key, (item.payload or {}).get("message_fingerprint"),
+                    ),
+                    observation_callback=lambda neighbor, observed_scope: context_callback(
+                        item, neighbor, observed_scope,
+                    ),
+                )
+            scanned += scan.scanned_observation_count
+            context_hashes.update(sha256_json(neighbor.to_dict()) for neighbor, _ in scan.observations)
+            if scan.stop_reason in {"deadline", "callback", "observation_limit"}:
+                emit_stop_reason = scan.stop_reason
+                return False
+            return True
 
         def observation_matches(
             observation: Observation,
@@ -786,44 +1484,50 @@ class IngestionRevisionSourceRecords:
             authority: CompletedIngestionJobAuthority,
         ) -> bool:
             nonlocal scanned, emit_stop_reason
-            def deliver(item: Observation, scope: str) -> bool:
+            def deliver(item: Observation, scope: str, item_authority=authority) -> bool:
                 nonlocal scanned, emit_stop_reason
+                if not parent_reads_ok():
+                    emit_stop_reason = "deadline"
+                    return False
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    emit_stop_reason = "deadline"
+                    return False
                 if observation_callback is None:
                     selected.append((item, scope))
                     delivered_bindings[sha256_json(item.to_dict())] = (
-                        authority.job_fingerprint, item.observation_id,
+                        item_authority.job_fingerprint, item.observation_id,
                     )
                     return True
-                if not observation_callback(item, scope):
+                _trace(trace, "count", "reader_callback")
+                # Publish only this already-guarded own-job plain pair during
+                # the synchronous callback. No parent-map authority in loader.
+                pair = None
+                if (_SOURCE_TERM_PLACEMENT.get() is not None
+                        and item.modality == "mail" and item.observation_type == "email_body_segment"
+                        and _attachment_mail_parent_link(item) is None):
+                    key = (item_authority.job_fingerprint, item.extractor_run_id,
+                           item.asset_id, scope, (item.location or {}).get("message_occurrence_id"))
+                    parent = seen_mail_parent_records.get(key)
+                    if parent is not None:
+                        pair = (item, parent, key)
+                with _source_occurrence_pair_scope(pair):
+                    keep_reading = observation_callback(item, scope)
+                if not keep_reading:
+                    _trace(trace, "count", "callback_stop")
                     return False
                 delivered_bindings[sha256_json(item.to_dict())] = (
-                    authority.job_fingerprint, item.observation_id,
+                    item_authority.job_fingerprint, item.observation_id,
                 )
                 if context_callback is not None and context_anchor_callback(item, scope):
-                    key = (
-                        authority.job_fingerprint, item.extractor_run_id,
-                        item.asset_id, scope, (item.location or {}).get("message_occurrence_id"),
-                    )
-                    scan = self.scan_neighbor_context(
-                        anchor=item, authority=authority, source_scope=scope,
-                        max_observations=max_observations - scanned,
-                        deadline_monotonic=deadline_monotonic,
-                        message_fingerprint=seen_mail_parents.get(
-                            key, (item.payload or {}).get("message_fingerprint"),
-                        ),
-                        observation_callback=lambda neighbor, observed_scope: context_callback(
-                            item, neighbor, observed_scope,
-                        ),
-                    )
-                    scanned += scan.scanned_observation_count
-                    context_hashes.update(sha256_json(neighbor.to_dict()) for neighbor, _ in scan.observations)
-                    if scan.stop_reason in {"deadline", "callback", "observation_limit"}:
-                        emit_stop_reason = scan.stop_reason
+                    if defer_context:
+                        pending_context.append((item, scope, item_authority))
+                    elif not expand_context(item, scope, item_authority):
                         return False
                 return True
 
             occurrence_id = (observation.location or {}).get("message_occurrence_id")
             payload = observation.payload or {}
+            attachment_key = None
             if source_family == "mail" and _is_attachment_text_observation(observation):
                 parent_key = (authority.job_fingerprint, observation.asset_id)
                 parent = attachment_parents.get(parent_key)
@@ -839,9 +1543,10 @@ class IngestionRevisionSourceRecords:
                             emit_stop_reason = "observation_limit"
                             return False
                         scanned += 1
-                        parent = authority.load_indexed_observation(
-                            helper["observation_id"], expected_observation_hash=helper["observation_hash"],
+                        parent = guarded_read(
+                            authority, helper["observation_id"], expected_observation_hash=helper["observation_hash"],
                             expected_job_fingerprint=authority.job_fingerprint,
+                            cell=read_cell("attachment_parent", authority, helper["observation_id"], helper["observation_hash"], observed_scope),
                         )
                         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                             emit_stop_reason = "deadline"
@@ -863,8 +1568,9 @@ class IngestionRevisionSourceRecords:
                     observation.observation_id: observation, parent.observation_id: parent,
                 })
                 if parent_key not in attachment_parents:
-                    attachment_parents[parent_key] = parent
-                    if not deliver(parent, observed_scope):
+                    # The attachment occurrence owns the outer-mail coordinates;
+                    # the document child's asset/run must never select a header.
+                    if not emit(parent, observed_scope, authority):
                         return False
                     if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                         emit_stop_reason = "deadline"
@@ -874,71 +1580,131 @@ class IngestionRevisionSourceRecords:
                 child_asset_id = payload.get("child_asset_id")
                 if not isinstance(child_asset_id, str) or not child_asset_id:
                     return True
-                parent_key = (authority.job_fingerprint, child_asset_id)
-                previous = attachment_parents.get(parent_key)
+                attachment_key = (authority.job_fingerprint, child_asset_id)
+                previous = attachment_parents.get(attachment_key)
                 if previous is not None and previous.observation_id != observation.observation_id:
                     raise ContractValidationError("source attachment parent binding is ambiguous")
-                attachment_parents[parent_key] = observation
-                if not deliver(observation, observed_scope):
-                    return False
-                for child, scope in pending_attachment_children.pop(parent_key, ()):
-                    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
-                        emit_stop_reason = "deadline"
-                        return False
-                    if not emit(child, scope, authority):
-                        return False
-                return True
             if source_family != "mail" or not isinstance(occurrence_id, str):
                 return deliver(observation, observed_scope)
             # Lexical order need not be extraction order. A child without its
             # own fingerprint needs its genuine, hash-checked parent delivered
-            # first; never borrow a parent across jobs/runs/assets/scopes.
+            # first. Cross-job attachments require explicit persisted linkage;
+            # occurrence equality alone never transfers parent authority.
+            parent_authority = authority
+            parent_run_id = observation.extractor_run_id
+            explicit_link = _attachment_mail_parent_link(observation)
+            if explicit_link is not None:
+                matches = [job for job in self.job_authorities
+                           if job.ingestion_job_id == explicit_link["prior_ingestion_job_id"]]
+                if len(matches) != 1:
+                    raise ContractValidationError("source attachment explicit parent job is unavailable or ambiguous")
+                parent_authority = matches[0]
+                parent_run_id = explicit_link["parent_extractor_run_id"]
+                parent_index = next(i for i, job in enumerate(self.job_authorities) if job is parent_authority)
+                parent_run = parent_authority._runs_by_id.get(parent_run_id)
+                if (
+                    parent_run is None
+                    or parent_run.status != "succeeded"
+                    or parent_run.asset_id != parent_authority.asset.asset_id
+                    or parent_run.input_hash != parent_authority.asset.content_hash
+                    or source_scope_by_job_index.get(parent_index) != observed_scope
+                    or dict(parent_authority.permission_scope) != dict(authority.permission_scope)
+                    or parent_authority.asset.asset_id != authority.asset.asset_id
+                    or parent_authority.asset.content_hash != authority.asset.content_hash
+                    or to_plain(parent_authority.asset.source_ref) != to_plain(authority.asset.source_ref)
+                ):
+                    raise ContractValidationError("source attachment explicit parent authority mismatch")
             parent_key = (
-                authority.job_fingerprint, observation.extractor_run_id,
+                parent_authority.job_fingerprint, parent_run_id,
                 observation.asset_id, observed_scope, occurrence_id,
             )
             is_parent = observation.observation_type == "email_message"
+            if indexed_source and attachment_key is not None and parent_key in seen_mail_parents:
+                # A shortlisted parent proves its own bytes, not uniqueness of
+                # the occurrence. Validate the keyed relation even at the read
+                # cap, then reuse those bytes without another source hydration.
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    emit_stop_reason = "deadline"
+                    return False
+                helper = self.runtime_store.helper_for_mail_parent(
+                    occurrence_id=occurrence_id,
+                    job_index=next(i for i, job in enumerate(self.job_authorities) if job is parent_authority),
+                    asset_id=observation.asset_id, extractor_run_id=parent_run_id,
+                )
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    emit_stop_reason = "deadline"
+                    return False
+                if (helper is None or self._authority_for_helper(helper) is not parent_authority
+                        or (helper["observation_id"], helper["observation_hash"]) != seen_mail_parent_bindings.get(parent_key)):
+                    raise ContractValidationError("source cached mail parent binding mismatch")
+                _validate_attachment_mail_parent(observation, seen_mail_parent_records[parent_key])
+            if not is_parent and parent_key in prepared_parent_bindings:
+                helper = mail_parent_helper(parent_authority, observation.asset_id, parent_run_id, occurrence_id)
+                if (helper is None or self._authority_for_helper(helper) is not parent_authority
+                        or (helper["observation_id"], helper["observation_hash"]) != prepared_parent_bindings[parent_key]
+                        or (parent_key in seen_mail_parents
+                            and seen_mail_parent_bindings[parent_key] != prepared_parent_bindings[parent_key])):
+                    raise ContractValidationError("source prepared mail parent binding mismatch")
             if indexed_source and not is_parent and parent_key not in seen_mail_parents:
                 if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                     emit_stop_reason = "deadline"
                     return False
-                job_index = next(i for i, job in enumerate(self.job_authorities) if job is authority)
-                helper = self.runtime_store.helper_for_mail_parent(
-                    occurrence_id=occurrence_id, job_index=job_index,
-                    asset_id=observation.asset_id, extractor_run_id=observation.extractor_run_id,
+                # Outer headers add optional context to an independently bound
+                # attachment. A missing helper/read slot must not erase it.
+                helper = None if attachment_key is not None and scanned >= max_observations else mail_parent_helper(
+                    parent_authority, observation.asset_id, parent_run_id, occurrence_id,
                 )
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    emit_stop_reason = "deadline"
+                    return False
                 if helper is None:
-                    pending_mail_children.setdefault(parent_key, []).append((observation, observed_scope))
-                    return True
-                if self._authority_for_helper(helper) is not authority:
-                    raise ContractValidationError("source mail parent job binding mismatch")
-                if scanned >= max_observations:
-                    emit_stop_reason = "observation_limit"
-                    return False
-                scanned += 1
-                parent = authority.load_indexed_observation(
-                    helper["observation_id"], expected_observation_hash=helper["observation_hash"],
-                    expected_job_fingerprint=authority.job_fingerprint,
-                )
-                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
-                    emit_stop_reason = "deadline"
-                    return False
-                fingerprint = (parent.payload or {}).get("message_fingerprint")
-                if (
-                    parent.modality != "mail" or parent.observation_type != "email_message"
-                    or parent.asset_id != observation.asset_id
-                    or parent.extractor_run_id != observation.extractor_run_id
-                    or (parent.location or {}).get("message_occurrence_id") != occurrence_id
-                    or not isinstance(fingerprint, str)
-                    or payload.get("message_fingerprint") not in {None, fingerprint}
-                ):
-                    raise ContractValidationError("source mail parent occurrence binding mismatch")
-                seen_mail_parents[parent_key] = fingerprint
-                if not deliver(parent, observed_scope):
-                    return False
-                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
-                    emit_stop_reason = "deadline"
-                    return False
+                    if attachment_key is None:
+                        pending_mail_children.setdefault(parent_key, []).append((observation, observed_scope))
+                        return True
+                else:
+                    if self._authority_for_helper(helper) is not parent_authority:
+                        raise ContractValidationError("source mail parent job binding mismatch")
+                    future = parent_reads.get((parent_key, helper["observation_id"], helper["observation_hash"]))
+                    if future is not None:
+                        parent = future.result()  # Already charged at submission; never refunded.
+                        if parent is None:
+                            emit_stop_reason = "deadline"
+                            return False
+                    else:
+                        if parent_key in prepared_parent_bindings:
+                            raise ContractValidationError("source prepared mail parent read is unavailable")
+                        if scanned >= max_observations:
+                            emit_stop_reason = "observation_limit"
+                            return False
+                        scanned += 1
+                        parent = guarded_read(
+                            parent_authority, helper["observation_id"], expected_observation_hash=helper["observation_hash"],
+                            expected_job_fingerprint=parent_authority.job_fingerprint,
+                            cell=read_cell("parent", parent_authority, helper["observation_id"], helper["observation_hash"], observed_scope),
+                        )
+                    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                        emit_stop_reason = "deadline"
+                        return False
+                    fingerprint = (parent.payload or {}).get("message_fingerprint")
+                    if (
+                        parent.modality != "mail" or parent.observation_type != "email_message"
+                        or parent.asset_id != observation.asset_id
+                        or parent.extractor_run_id != parent_run_id
+                        or (parent.location or {}).get("message_occurrence_id") != occurrence_id
+                        or not isinstance(fingerprint, str)
+                        or payload.get("message_fingerprint") not in {None, fingerprint}
+                        or (attachment_key is not None and to_plain(parent.permission_scope) != to_plain(observation.permission_scope))
+                    ):
+                        raise ContractValidationError("source mail parent occurrence binding mismatch")
+                    _validate_attachment_mail_parent(observation, parent)
+                    seen_mail_parent_records[parent_key] = parent
+                    seen_mail_parents[parent_key] = fingerprint
+                    seen_mail_parent_bindings[parent_key] = (parent.observation_id, sha256_json(parent.to_dict()))
+                    if not deliver(parent, observed_scope, parent_authority):
+                        return False
+                    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                        emit_stop_reason = "deadline"
+                        return False
             if indexed_source and not is_parent and parent_key in seen_mail_parents and (
                 payload.get("message_fingerprint") not in {None, seen_mail_parents[parent_key]}
             ):
@@ -948,15 +1714,26 @@ class IngestionRevisionSourceRecords:
             # parent; a legacy/index-less scan must not invent that identity.
             if (
                 not is_parent
+                and attachment_key is None
                 and not isinstance(payload.get("message_fingerprint"), str)
                 and parent_key not in seen_mail_parents
             ):
                 pending_mail_children.setdefault(parent_key, []).append((observation, observed_scope))
                 return True
             if is_parent and isinstance(payload.get("message_fingerprint"), str):
+                seen_mail_parent_records[parent_key] = observation
                 seen_mail_parents[parent_key] = payload["message_fingerprint"]
+                seen_mail_parent_bindings[parent_key] = (observation.observation_id, sha256_json(observation.to_dict()))
             if not deliver(observation, observed_scope):
                 return False
+            if attachment_key is not None:
+                attachment_parents[attachment_key] = observation
+                for child, scope in pending_attachment_children.pop(attachment_key, ()):
+                    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                        emit_stop_reason = "deadline"
+                        return False
+                    if not emit(child, scope, authority):
+                        return False
             if is_parent and parent_key in seen_mail_parents:
                 for child, scope in pending_mail_children.pop(parent_key, ()):
                     if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
@@ -978,7 +1755,7 @@ class IngestionRevisionSourceRecords:
         # authoritative read. Merely seeing an index candidate proves nothing.
         shortlist_hashes: set[str] = set()
         shortlist_seen_hashes: set[str] = set()
-        should_shortlist = bool(query_terms) and callable(
+        should_shortlist = bool(preferred_observation_hashes) or bool(query_terms) and callable(
             getattr(self.runtime_store, "source_family_lexical_lookup", None)
         )
         if should_shortlist:
@@ -989,105 +1766,320 @@ class IngestionRevisionSourceRecords:
                     complete=False,
                     stop_reason="deadline",
                 )
-            lookup_timeout_ms = 500
-            if deadline_monotonic is not None:
-                lookup_timeout_ms = min(
-                    lookup_timeout_ms,
-                    max(1, int((deadline_monotonic - time.monotonic()) * 1000)),
-                )
-            shortlisted = self.runtime_store.source_family_lexical_lookup(
-                query_terms,
-                source_family=source_family,
-                limit=min(max_observations, 256),
-                timeout_ms=lookup_timeout_ms,
-            )
-            if not isinstance(shortlisted, list):
-                raise ContractValidationError("graph lexical lookup shortlist is invalid")
-            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
-                return RevisionOwnedMailSourceScan(
-                    observations=tuple(selected),
-                    scanned_observation_count=scanned,
-                    complete=False,
-                    stop_reason="deadline",
-                )
-            for observation_hash in shortlisted:
+            # Required parents still precede children through the SAME guarded
+            # reader. Optional neighbors wait until both anchor stages finish.
+            defer_context = True
+            shortlist_stop = None
+            shortlist_cap = min(max_observations, 256)
+            # Leave a lexical anchor slot when possible; parent reads and the
+            # original callback/deadline still govern the shared actual budget.
+            preferred_cap = shortlist_cap - 1 if query_terms else shortlist_cap
+            shortlisted = list(dict.fromkeys(preferred_observation_hashes))[:preferred_cap]
+            _trace(trace, "shortlist", shortlisted)
+
+            def shortlist_keys():
+                nonlocal shortlist_stop
+                # This is lazy: each preferred key is hydrated/emitted before
+                # the generator resumes to perform ANY broad lexical lookup.
+                yield from tuple(shortlisted)
                 if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
-                    return RevisionOwnedMailSourceScan(
-                        observations=tuple(selected),
-                        scanned_observation_count=scanned,
-                        complete=False,
-                        stop_reason="deadline",
-                    )
-                if not isinstance(observation_hash, str) or not observation_hash:
-                    raise ContractValidationError(
-                        "graph lexical lookup observation hash is invalid"
-                    )
-                if observation_hash in shortlist_seen_hashes:
-                    continue
-                shortlist_seen_hashes.add(observation_hash)
-                helper = self.runtime_store.helper_for_hash(observation_hash)
-                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
-                    return RevisionOwnedMailSourceScan(
-                        observations=tuple(selected),
-                        scanned_observation_count=scanned,
-                        complete=False,
-                        stop_reason="deadline",
-                    )
-                if helper is None:
-                    continue
-                authority = self._authority_for_helper(helper)
-                if helper["observation_hash"] != observation_hash:
-                    raise ContractValidationError("indexed ingestion source helper hash mismatch")
-                reference = helper["reference"]
-                job_index = reference["job_index"]
-                observed_scope = source_scope_by_job_index.get(job_index)
-                if observed_scope is None:
-                    continue
-                # A child may already have hydrated and delivered its genuine
-                # parent. Its later shortlist entry adds no new source read or
-                # callback. Keep helper/scope validation above this check;
-                # context-only neighbors may still become independent anchors.
-                if delivered_bindings.get(observation_hash) == (
-                    authority.job_fingerprint, helper["observation_id"],
-                ):
-                    continue
+                    shortlist_stop = "deadline"
+                    return
                 if scanned >= max_observations:
-                    return RevisionOwnedMailSourceScan(
-                        observations=tuple(selected),
-                        scanned_observation_count=scanned,
-                        complete=False,
-                        stop_reason="observation_limit",
+                    shortlist_stop = "observation_limit"
+                    return
+                lookup_timeout_ms = 500
+                if deadline_monotonic is not None:
+                    lookup_timeout_ms = min(
+                        lookup_timeout_ms,
+                        max(1, int((deadline_monotonic - time.monotonic()) * 1000)),
                     )
-                scanned += 1
-                observation = authority.load_indexed_observation(
-                    helper["observation_id"],
-                    expected_observation_hash=helper["observation_hash"],
-                    expected_job_fingerprint=authority.job_fingerprint,
+                lookup_preferences = {}
+                if isinstance(self.runtime_store, SourceNativeLexicalLookup):
+                    from formowl_retrieval.gateway import current_source_evidence_preferred_terms
+
+                    lookup_preferences["preferred_tokens"] = current_source_evidence_preferred_terms()
+                with _source_trace_phase(trace, "lexical_lookup"):
+                    baseline = self.runtime_store.source_family_lexical_lookup(
+                        query_terms,
+                        source_family=source_family,
+                        limit=min(max_observations, 256),
+                        timeout_ms=lookup_timeout_ms,
+                        **lookup_preferences,
+                    ) if query_terms else []
+                if not isinstance(baseline, list):
+                    raise ContractValidationError("graph lexical lookup shortlist is invalid")
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    shortlist_stop = "deadline"
+                    return
+                ordinary = list(dict.fromkeys(key for key in baseline if key not in shortlisted))[
+                    :shortlist_cap - len(shortlisted)]
+                shortlisted.extend(ordinary)
+                _trace(trace, "shortlist", ordinary)
+                yield from ordinary
+
+            def candidates():
+                nonlocal shortlist_stop
+                for observation_hash in shortlist_keys():
+                    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                        shortlist_stop = "deadline"
+                        return
+                    if not isinstance(observation_hash, str) or not observation_hash:
+                        raise ContractValidationError(
+                            "graph lexical lookup observation hash is invalid"
+                        )
+                    if observation_hash in shortlist_seen_hashes:
+                        continue
+                    shortlist_seen_hashes.add(observation_hash)
+                    with _source_trace_phase(trace, "helper"):
+                        helper = self.runtime_store.helper_for_hash(observation_hash)
+                    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                        shortlist_stop = "deadline"
+                        return
+                    if helper is None:
+                        continue
+                    if helper.get("retrieval_source_family", source_family) != source_family:
+                        continue
+                    authority = self._authority_for_helper(helper)
+                    if helper["observation_hash"] != observation_hash:
+                        raise ContractValidationError("indexed ingestion source helper hash mismatch")
+                    reference = helper["reference"]
+                    job_index = reference["job_index"]
+                    observed_scope = source_scope_by_job_index.get(job_index)
+                    if observed_scope is None:
+                        continue
+                    # A child may already have hydrated and delivered its genuine
+                    # parent. Its later shortlist entry adds no new source read or
+                    # callback. Keep helper/scope validation above this check;
+                    # context-only neighbors may still become independent anchors.
+                    if delivered_bindings.get(observation_hash) == (
+                        authority.job_fingerprint, helper["observation_id"],
+                    ):
+                        continue
+                    if scanned >= max_observations:
+                        shortlist_stop = "observation_limit"
+                        return
+                    yield observation_hash, helper, authority, observed_scope
+
+            hydration_stop = threading.Event()
+
+            def load_anchor(entry, cell=None):
+                # A charged submission may wait for a worker. The start gate
+                # rejects stop/expiry; already admitted guarded reads must drain.
+                _, helper, authority, _ = entry
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    _trace(cell, "finish", "declined")
+                    return None
+                if hydration_stop.is_set():
+                    _trace(cell, "finish", "declined")
+                    return None
+                try:
+                    return guarded_read(
+                        authority, helper["observation_id"], expected_observation_hash=helper["observation_hash"],
+                        expected_job_fingerprint=authority.job_fingerprint, cell=cell,
+                    )
+                except BaseException:
+                    hydration_stop.set()
+                    raise
+
+            @contextmanager
+            def hydrated_shortlist():
+                pool, pending, errors = None, window_reads, []
+                entries = iter(candidates())
+                parallel = _allow_parallel_hydration and not preferred_observation_hashes and indexed_source and all(
+                    _parallel_file_store(self.job_authorities[index])
+                    for index in source_scope_by_job_index
                 )
-                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+
+                def prepare_parent_reads(hydrated):
+                    nonlocal scanned
+                    plans, eligible = {}, {}
+                    for index, (entry, item) in hydrated.items():
+                        if not parent_reads_ok() or (deadline_monotonic is not None and time.monotonic() >= deadline_monotonic):
+                            return None
+                        # Each plain body owns its authority; nonplain siblings
+                        # retain serial validation AFTER the eligible dependencies.
+                        if (item is None or item.modality != "mail"
+                                or item.observation_type != "email_body_segment"
+                                or _attachment_mail_parent_link(item) is not None
+                                or any(key in record for key in (
+                                    "prior_ingestion_job_id", "parent_extractor_run_id", "parent_message_observation_id",
+                                ) for record in (item.payload or {}, item.location or {}))
+                                or not isinstance((item.location or {}).get("message_occurrence_id"), str)):
+                            continue
+                        authority, scope = entry[2:]
+                        occurrence = item.location["message_occurrence_id"]
+                        key = (authority.job_fingerprint, item.extractor_run_id, item.asset_id, scope, occurrence)
+                        helper = mail_parent_helper(authority, item.asset_id, item.extractor_run_id, occurrence)
+                        if helper is None and key not in seen_mail_parents:
+                            continue  # Original missing-parent pending behavior in emit().
+                        if helper is None or self._authority_for_helper(helper) is not authority:
+                            raise ContractValidationError("source mail parent job binding mismatch")
+                        binding = (helper["observation_id"], helper["observation_hash"])
+                        if key in seen_mail_parents and seen_mail_parent_bindings[key] != binding:
+                            raise ContractValidationError("source cached mail parent binding mismatch")
+                        if key in prepared_parent_bindings and prepared_parent_bindings[key] != binding:
+                            raise ContractValidationError("source prepared mail parent binding mismatch")
+                        prepared_parent_bindings[key] = binding
+                        eligible[index] = (key, *binding)
+                        if key not in seen_mail_parents and (key, *binding) not in parent_reads:
+                            plans[(key, *binding)] = (helper["observation_hash"], helper, authority, scope)
+                    for key, entry in plans.items():
+                        if (not parent_reads_ok() or scanned >= max_observations
+                                or (deadline_monotonic is not None and time.monotonic() >= deadline_monotonic)):
+                            return None
+                        scanned += 1
+                        cell = read_cell("parent", entry[2], entry[1]["observation_id"], entry[0], entry[3])
+                        future = (pool.submit(load_anchor, entry) if cell is None
+                                  else pool.submit(load_anchor, entry, cell))  # Original start gate.
+                        pending.append(future)
+                        parent_reads[key] = future
+                    return eligible
+
+                def ready_parent_window(batch):
+                    nonlocal shortlist_stop
+                    anchors = dict(enumerate(batch))
+                    hydrated, eligible, serial = {}, {}, {}
+                    while anchors or eligible:
+                        if not parent_reads_ok() or (deadline_monotonic is not None and time.monotonic() >= deadline_monotonic):
+                            shortlist_stop = "deadline"
+                            return
+                        completed = {index: (entry, future.result())
+                                     for index, (entry, future) in anchors.items() if future.done()}
+                        if completed:
+                            for index in completed:
+                                anchors.pop(index)
+                            with _source_trace_phase(trace, "parent_plan"):
+                                planned = prepare_parent_reads(completed)
+                            if planned is None:
+                                shortlist_stop = "deadline"
+                                return
+                            hydrated.update(completed)
+                            eligible.update(planned)
+                            serial.update((index, pair) for index, pair in completed.items()
+                                          if index not in planned)
+                        # Rank breaks ties among READY pairs, not across blocked
+                        # anchors/dependencies. No serial sibling or window refill.
+                        ready = next((index for index in sorted(eligible)
+                                      if eligible[index] not in parent_reads
+                                      or parent_reads[eligible[index]].done()), None)
+                        if ready is None:
+                            # Include completed futures too: one may settle after
+                            # the harvest/filter above but before wait() is called.
+                            # wait() returns immediately for it, allowing the
+                            # coordinator to harvest it instead of waiting on a
+                            # slower unrelated future until the deadline.
+                            waiting = [future for _, future in anchors.values()]
+                            waiting.extend(parent_reads[key] for key in eligible.values()
+                                           if key in parent_reads)
+                            if not waiting:
+                                continue  # Reinspect completions; never wait on held serial siblings.
+                            timeout = None if deadline_monotonic is None else max(0, deadline_monotonic - time.monotonic())
+                            with _source_trace_phase(trace, "ready_wait"):
+                                wait(waiting, timeout=timeout, return_when=FIRST_COMPLETED)
+                            continue
+                        eligible.pop(ready)
+                        yield hydrated.pop(ready)  # Original coordinator matching/emit guards.
+                    serial_cell = _trace(trace, "phase", "serial_siblings")
+                    yield from (serial[index] for index in sorted(serial))
+                    _trace(serial_cell, "finish")
+
+                def reads():
+                    nonlocal pool, scanned, shortlist_stop, trace_window
+                    while True:
+                        trace_window += 1
+                        # Three anchors plus two possible parent reads EACH.
+                        # Holds are not charges. Small remaining budgets stay serial.
+                        width = 3 if parallel and max_observations - scanned >= 9 else 1
+                        batch = []
+                        for _ in range(width):
+                            entry = next(entries, None)
+                            if entry is None:
+                                break
+                            if hydration_stop.is_set() or (deadline_monotonic is not None and time.monotonic() >= deadline_monotonic):
+                                shortlist_stop = "deadline"
+                                break
+                            scanned += 1  # Charge submission, including a declined start.
+                            cell = read_cell("anchor", entry[2], entry[1]["observation_id"], entry[0], entry[3],
+                                             rank=_trace(trace, "rank", shortlisted, entry[0]))
+                            if width == 1:
+                                yield entry, load_anchor(entry, cell)
+                            else:
+                                if pool is None:
+                                    pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="source-anchor")
+                                future = (pool.submit(load_anchor, entry) if cell is None
+                                          else pool.submit(load_anchor, entry, cell))
+                                pending.append(future)
+                                batch.append((entry, future))
+                        if source_family == "mail" and len(batch) == 3:
+                            yield from ready_parent_window(batch)
+                        else:
+                            for entry, future in batch:
+                                yield entry, future.result()  # Original rank; no refill.
+                        for future in pending:
+                            future.result()  # Inspect even an unused prefetched parent.
+                        pending.clear()
+                        parent_reads.clear()
+                        prepared_parent_bindings.clear()
+                        if entry is None or shortlist_stop is not None:
+                            return
+
+                try:
+                    yield reads()
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    drain_cell = _trace(trace, "phase", "drain")
+                    hydration_stop.set()  # Close start gate BEFORE draining on every exit.
+                    # Even callback stop/expiry/exception must join and inspect
+                    # every started suffix. No post-turn work or swallowed error.
+                    for future in pending:
+                        try:
+                            future.result()
+                        except BaseException as exc:
+                            if not any(exc is previous for previous in errors):
+                                errors.append(exc)
+                    if pool is not None:
+                        pool.shutdown(wait=True)
+                    _trace(drain_cell, "finish", "failed" if errors else "completed")
+                    if len(errors) == 1:
+                        raise errors[0]
+                    if errors:
+                        raise BaseExceptionGroup("source anchor hydration failed", errors)
+
+            with hydrated_shortlist() as reads:
+                for (observation_hash, helper, authority, observed_scope), observation in reads:
+                    if observation is None or (deadline_monotonic is not None and time.monotonic() >= deadline_monotonic):
+                        shortlist_stop = "deadline"
+                        break
+                    # A prior child may have delivered this speculative parent.
+                    # Its independent guarded read still counts, not its callback.
+                    if delivered_bindings.get(observation_hash) == (
+                        authority.job_fingerprint, helper["observation_id"],
+                    ):
+                        continue
+                    if not observation_matches(observation, authority):
+                        continue
+                    shortlist_hashes.add(observation_hash)
+                    if not emit(observation, observed_scope, authority):
+                        shortlist_stop = emit_stop_reason
+                        break
+                    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                        shortlist_stop = "deadline"
+                        break
+            if shortlist_stop is not None:
+                return RevisionOwnedMailSourceScan(
+                    observations=tuple(selected), scanned_observation_count=scanned,
+                    complete=False, stop_reason=shortlist_stop,
+                )
+            defer_context = False
+            for item, scope, authority in pending_context:
+                if not expand_context(item, scope, authority):
                     return RevisionOwnedMailSourceScan(
-                        observations=tuple(selected),
-                        scanned_observation_count=scanned,
-                        complete=False,
-                        stop_reason="deadline",
+                        observations=tuple(selected), scanned_observation_count=scanned,
+                        complete=False, stop_reason=emit_stop_reason,
                     )
-                if not observation_matches(observation, authority):
-                    continue
-                shortlist_hashes.add(observation_hash)
-                if not emit(observation, observed_scope, authority):
-                    return RevisionOwnedMailSourceScan(
-                        observations=tuple(selected),
-                        scanned_observation_count=scanned,
-                        complete=False,
-                        stop_reason=emit_stop_reason,
-                    )
-                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
-                    return RevisionOwnedMailSourceScan(
-                        observations=tuple(selected),
-                        scanned_observation_count=scanned,
-                        complete=False,
-                        stop_reason="deadline",
-                    )
+            pending_context.clear()
             if indexed_source or not references_available:
                 return RevisionOwnedMailSourceScan(
                     observations=tuple(selected),
@@ -1148,10 +2140,11 @@ class IngestionRevisionSourceRecords:
                 )
             scanned += 1
             authority = self.job_authorities[job_index]
-            observation = authority.load_indexed_observation(
-                observation_id,
+            observation = guarded_read(
+                authority, observation_id,
                 expected_observation_hash=expected_observation_hash,
                 expected_job_fingerprint=authority.job_fingerprint,
+                cell=read_cell("serial", authority, observation_id, expected_observation_hash, observed_scope),
             )
             if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                 return RevisionOwnedMailSourceScan(
@@ -1167,7 +2160,7 @@ class IngestionRevisionSourceRecords:
                     observations=(),
                     scanned_observation_count=scanned,
                     complete=False,
-                    stop_reason="callback",
+                    stop_reason=emit_stop_reason,
                 )
             if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                 return RevisionOwnedMailSourceScan(
@@ -1201,9 +2194,16 @@ class IngestionRevisionSourceRecords:
         observation_callback: Callable[[Observation, str], bool] | None = None,
         context_anchor_callback: Callable[[Observation, str], bool] | None = None,
         context_callback: Callable[[Observation, Observation, str], bool] | None = None,
+        _allow_parallel_hydration: bool = False,
+        preferred_observation_hashes: Sequence[str] = (),
     ) -> RevisionOwnedMailSourceScan:
         """Read one authorized source family through sealed job references."""
 
+        if type(_allow_parallel_hydration) is not bool:
+            raise ContractValidationError("source hydration opt-in is invalid")
+        if (len(preferred_observation_hashes) > 128
+                or any(not isinstance(key, str) or _SHA256_RE.fullmatch(key) is None for key in preferred_observation_hashes)):
+            raise ContractValidationError("reviewed source shortlist is invalid")
         if source_family not in {"mail", "document_text"}:
             raise ContractValidationError("source fallback family is invalid")
         if (
@@ -1256,6 +2256,8 @@ class IngestionRevisionSourceRecords:
             observation_callback=observation_callback,
             context_anchor_callback=context_anchor_callback,
             context_callback=context_callback,
+            _allow_parallel_hydration=_allow_parallel_hydration,
+            preferred_observation_hashes=preferred_observation_hashes,
         )
 
     def scan_neighbor_context(

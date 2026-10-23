@@ -24,6 +24,7 @@ from formowl_core.tokenization import (
     ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT,
     JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
     MailCandidateAdmissionTokenizerProfile,
+    _protected_identifier_spans,
 )
 from formowl_retrieval.gateway import (
     SOURCE_EVIDENCE_OBSERVATION_LIMIT,
@@ -1649,6 +1650,22 @@ def _source_mail_observation_match(
     if protected_query_tokens:
         if tokenizer_profile is None:
             return None
+        if (
+            required_terms is not None
+            and type(tokenizer_profile) is MailCandidateAdmissionTokenizerProfile
+            and tokenizer_profile.tokenizer_id == JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID
+            and tokenizer_profile._jieba_module is not None
+            and tokenizer_profile._sentencepiece_processor is not None
+        ):
+            # The frozen analyzer unconditionally admits these exact spans
+            # before segmentation. After the literal AND predicate succeeds,
+            # their presence proves a positive without segmenting the entire
+            # body. A miss still uses full analysis; this is not a new veto,
+            # substring-ID rule, tokenizer fallback or changed lexical policy.
+            protected_source_tokens = {span.exact_token for span in _protected_identifier_spans(searchable)}
+            _check_revision_source_deadline(deadline_monotonic)
+            if protected_query_tokens.issubset(protected_source_tokens):
+                return required_terms
         searchable_tokens = set(tokenizer_profile.analyze(searchable).tokens)
         _check_revision_source_deadline(deadline_monotonic)
         if not protected_query_tokens.issubset(searchable_tokens):
@@ -1669,6 +1686,39 @@ def _validate_required_mail_terms(value: Any) -> tuple[str, ...]:
     if any(not term for term in normalized):
         raise ContractValidationError("mail required terms are invalid")
     return normalized
+
+
+_TYPED_NUMERIC_IDENTIFIER_RE = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z]+)[\s#:_-]*([0-9]+)(?![0-9])"
+)
+
+_STRUCTURED_FIELD_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+def bind_typed_identifier_to_source_schema(
+    identifier: str,
+    source_fields: Sequence[str],
+) -> tuple[tuple[str, str], ...]:
+    """Bind a typed identifier to a native value only through its schema label."""
+    if not isinstance(identifier, str) or not identifier.strip():
+        raise ContractValidationError("typed identifier is invalid")
+    if isinstance(source_fields, (str, bytes)) or not isinstance(source_fields, Sequence):
+        raise ContractValidationError("source schema fields are invalid")
+    normalized_identifier = _normalize_mail_relevance_text(identifier).strip()
+    match = _TYPED_NUMERIC_IDENTIFIER_RE.fullmatch(normalized_identifier)
+    if match is None:
+        return ()
+    prefix, native_value = match.groups()
+    bindings: list[tuple[str, str]] = []
+    for field in source_fields:
+        if not isinstance(field, str) or not field.strip():
+            raise ContractValidationError("source schema field is invalid")
+        field_tokens = set(_STRUCTURED_FIELD_TOKEN_RE.findall(_normalize_mail_relevance_text(field)))
+        if prefix not in field_tokens:
+            continue
+        binding = (field, native_value)
+        if binding not in bindings:
+            bindings.append(binding)
+    return tuple(bindings)
 
 
 def _normalize_mail_relevance_text(value: str) -> str:

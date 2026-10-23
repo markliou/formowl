@@ -136,6 +136,7 @@ _SAFE_PROVIDER_ERROR_MESSAGE_CLASSES = frozenset(
         "rate_limit",
         "capacity_unavailable",
         "invalid_parameter",
+        "model_account_unsupported",
         "unknown",
     }
 )
