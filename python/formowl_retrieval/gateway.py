@@ -237,6 +237,9 @@ _SOURCE_EVIDENCE_DEADLINE: ContextVar[float | None] = ContextVar(
 _SOURCE_EVIDENCE_QUERY_TERMS: ContextVar[tuple[str, ...]] = ContextVar(
     "formowl_source_evidence_query_terms", default=(),
 )
+_SOURCE_EVIDENCE_PREFERRED_TERMS: ContextVar[tuple[str, ...]] = ContextVar(
+    "formowl_source_evidence_preferred_terms", default=(),
+)
 
 
 def _validate_source_evidence_deadline(deadline_monotonic: float | None) -> None:
@@ -275,7 +278,9 @@ def check_source_evidence_deadline(deadline_monotonic: float | None) -> None:
 
 
 @contextmanager
-def source_evidence_query_terms_scope(query_terms: Sequence[str]) -> Iterator[None]:
+def source_evidence_query_terms_scope(
+    query_terms: Sequence[str], *, preferred_terms: Sequence[str] = (),
+) -> Iterator[None]:
     """Carry normalized terms to an owner-bound sealed source reader.
 
     Terms are metadata-only acceleration hints.  The source reader still
@@ -287,10 +292,18 @@ def source_evidence_query_terms_scope(query_terms: Sequence[str]) -> Iterator[No
         term for term in query_terms
         if isinstance(term, str) and term
     }))
+    preferred = tuple(sorted({
+        term for term in preferred_terms
+        if isinstance(term, str) and term.strip()
+    }))
     token = _SOURCE_EVIDENCE_QUERY_TERMS.set(normalized)
+    preference_token = _SOURCE_EVIDENCE_PREFERRED_TERMS.set(
+        preferred if len(preferred) <= 256 else ()
+    )
     try:
         yield
     finally:
+        _SOURCE_EVIDENCE_PREFERRED_TERMS.reset(preference_token)
         _SOURCE_EVIDENCE_QUERY_TERMS.reset(token)
 
 
@@ -298,6 +311,12 @@ def current_source_evidence_query_terms() -> tuple[str, ...]:
     """Return the current validated matcher terms for source acceleration."""
 
     return _SOURCE_EVIDENCE_QUERY_TERMS.get()
+
+
+def current_source_evidence_preferred_terms() -> tuple[str, ...]:
+    """Return optional field hints for bounded source candidate ordering."""
+
+    return _SOURCE_EVIDENCE_PREFERRED_TERMS.get()
 
 
 def _source_evidence_query_terms(
@@ -584,7 +603,8 @@ def source_evidence_double_check(
             begin(deadline)
         check_source_evidence_deadline(deadline)
         with source_evidence_query_terms_scope(
-            _source_evidence_query_terms(project_observation)
+            _source_evidence_query_terms(project_observation),
+            preferred_terms=getattr(project_observation, "source_lookup_preferred_terms", ()),
         ):
             scan = read_source(
                 max_observations=SOURCE_EVIDENCE_OBSERVATION_LIMIT,

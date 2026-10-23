@@ -1508,10 +1508,31 @@ def _run_gpt_query_agent(
                 else list(protected_reference_identifiers(prompt))
             )
             # A mail occurrence may split the PO and item across body
-            # segments. Use the item as the bounded source-reader anchor;
-            # the complete identifiers remain bound in the request contract.
-            if len(candidate_required_terms) > 1 and any(
-                term.startswith("po") for term in candidate_required_terms
+            # segments, so the mail-only reader uses the item as its bounded
+            # anchor. Attachment tables are different: PO and item are native
+            # cells in one row, and dropping the PO here turns a conjunctive
+            # lookup into a part-number-only lookup that can select another
+            # purchase order. Keep both terms whenever the server-bound scope
+            # includes attachment_table; only the mail-only compatibility path
+            # may narrow to the item anchor.
+            request_source_families = (
+                request.request_contract.get("source_family_scope", ())
+                if isinstance(request.request_contract, Mapping)
+                else ()
+            )
+            if "attachment_table" in request_source_families:
+                # The provider may omit one identifier while expanding the
+                # user's question. The original prompt is server-owned
+                # context, so restore its frozen protected identifiers before
+                # the attachment row reader is called. This keeps the native
+                # PO/item same-row constraint model-independent.
+                candidate_required_terms = list(dict.fromkeys(
+                    (*protected_reference_identifiers(prompt), *candidate_required_terms)
+                ))
+            if (
+                len(candidate_required_terms) > 1
+                and any(term.startswith("po") for term in candidate_required_terms)
+                and "attachment_table" not in request_source_families
             ):
                 candidate_required_terms = [
                     term for term in candidate_required_terms if not term.startswith("po")
@@ -1519,6 +1540,8 @@ def _run_gpt_query_agent(
             bound_terms = request_contract_binder.bind_required_terms(
                 candidate_required_terms or None,
                 allow_missing=request.tool_name == "query_effective_graph_view",
+                request_contract=request.request_contract,
+                allow_server_restored_identifiers=("attachment_table" in request_source_families),
             )
             if bound_terms is not None and bound_terms != request.required_terms:
                 request = replace(request, required_terms=bound_terms)

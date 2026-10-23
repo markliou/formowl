@@ -4861,6 +4861,26 @@ class ProjectionIndependentSourceMcpTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(other_row["evidence"])
             self.assertEqual(other_row["status"], "pending_review")
 
+    def test_part_identifier_anchor_accepts_chinese_native_column_alias(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, revision, handler, arguments = self._table_lookup(
+                Path(directory),
+                terms=("03.80503G301",),
+                attachment_csv=(
+                    "料號,產地,製造商\n"
+                    "03.80503G301,JAPAN,Murata\n"
+                    "03.80503G302,TAIWAN,Other\n"
+                ),
+            )
+            arguments["required_terms"] = ["03.80503G301"]
+            result = handler(arguments)
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(
+                {cell["value"] for item in result["evidence"] for cell in item["table_row"]["cells"]},
+                {"03.80503G301", "JAPAN", "Murata"},
+            )
+            self.assertEqual(result["citations"], [item["citation_hash"] for item in result["evidence"]])
+
     def test_attachment_timeout_caps_and_denial_do_not_become_absence(self):
         with tempfile.TemporaryDirectory() as directory:
             _, revision, handler, arguments = self._table_lookup(Path(directory))

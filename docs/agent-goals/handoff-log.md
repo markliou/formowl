@@ -1,18 +1,67 @@
 # Agent Handoff Log
 Lifecycle label: `active`.
 
-## Current UAT checkpoint — 2026-10-20 06:50 UTC / #63 / 待測
-Live8088/r38 and rollback unchanged. Actual browser target was isolated8112/r47 direct_evidence_baseline, NOT r49 despite the capture directory name. r49 is composed only; r50 adds one candidate-owner failure-propagation patch,252files/251unchanged, also NOT deployed. Root product files remain stale, not deployment authority.
-Native source prerequisite: r5 independently verified4mail/27tables/388rows/4588cells with4980sealed Observation checks. r6d also verified5attachment lineages/36XLSX rows/432cells/4PDF text pages,482checks. The earlier XLSX mismatch was omitted optional-null metadata, not a changed value/coordinate/hash; original r6b/r6c failures remain. PDF visual/OCR, Excel display/formula recalculation and whole-source semantics are not proved.
-Native-semantic r7 STOPPED after its2-call cap: first proposal returned7candidates, second HTTP200/SSE114410bytes timed out at120s, last event response.output_item.done, no terminal. No automatic retry/canonical/source writes. Read-only recovery of existing ledgers proves annotated1/failed1/pending103, not null progress or completeness. Nonblinded inspection also found missing product-identity/time-role coverage in the first proposal; read_status=complete is not semantic approval. No real reviewed-native receipt was published.
-The scope wrapper erased the unit's provider/transport_timeout into validation/contract_validation_failed. r50 preserves the sanitized unit cause and failed-ledger ID/hash through the existing owner, retaining previous progress and explicit-retry guards. Canonical synthetic regressions:2RED before repair,6scopePASS/0.268s and32reader-modulePASS/0.868s afterward. This is not provider recovery, full regression, independent review or UAT acceptance.
-Browser startup failed twice before page/provider with crashpad/pipe_reset. Writable HOME/XDG resolved startup; the existing operator runner now creates a fresh temporary browser home. Network-none startup-only verification succeeded with deliberately invalid inherited HOME,0submissions. Earlier failed receipts and runner preimage retained. Browser screenshots have missing CJK fonts; DOM read is valid evidence, not Chinese visual acceptance.
-Actual DOM submissions: chat complete/MCP0; original short PO+part question clarification_required/MCP1/0citations FAIL; independent project document partial/MCP1/2citations, NOT accepted; reset-chat complete/MCP0. Reload preserved all6turns and reset cleared the transcript. Correlated wire5requests/4turns passed stable UUID/header/cache key, fixed prompt/tools, append-only history, honest UA and terminal checks. No fresh citation reopening or whole-UAT acceptance.
-Original-question trace is distinct from offline SSE failure: provider completed normally, MCP required the literal prefixed identifier and part, native table shortlist was empty,0rows attempted/0Observations scanned; mail lexical phase separately stopped on deadline. Existing reviewed semantic-to-native handoff still lacks a source-validated real receipt; missing annotation/row selection is not source absence and is not repaired by more blind browser retries.
-Receipts remain local-only under `.formowl/ontology-uat-20261019/ops/`: attachment-inventory-r6d, native-semantic-r7-existing-ledger.safe.json, native-semantic-r7-nonblinded-inspection.safe.json, browser-home-fixed-r49-review.safe.json and r50-scope-failure-composition.safe.json; focused logs/overlay in scope-failure-r50. Preserve private payloads, all earlier failures and archives. Do not rerun the consumed r7 launcher or PST APPLY.
-Fresh canonical --check EXIT0:valid=true/ready=false/errors=[],CJKtrue; host dependency failure is supplemental. Four methodology gates/three-reviewer gate,source500ms versus inherited2000ms discrepancy and original-question acceptance remain OPEN; feature待測,step4in-progress. No active subagent: completed James handle closed, actual tier unverified; prior quota exhaustion is not a bounded-work gate.
-Next: obtain provider-side terminal-event evidence (operator asked for14:04–14:07 Taipei), finish fixed-scope semantic coverage/review and original-row handoff without hardcoded identifiers/dates, then repeat bounded original/non-mail/chat browser acceptance. No8088cutover or release from local diagnostics; existing plan/checkboxes unchanged.
-[Lossless previous checkpoint/hash manifest](../archive/2026-10-20/browser-r50-aggregate-preedit/) preserves all earlier evidence.
+## Current checkpoint — 2026-10-23 UTC / reviewed header validation plan / 待實作
+Claude took over from the interrupted Codex session at user request. 8088 v17
+failed only because host-side runs left `__pycache__` in the candidate tree;
+caches removed, v18 restored, v19 deployed with turn cap 300 s and provider
+request cap 240 s (provider latency is queue-dominated; a native-Codex-shaped
+request was not faster in a non-private benchmark). Exact routing never fires
+because 9417 of 9525 exact-cells columns are `candidate_only`; SPEC §7.5 now
+defines reviewed header validation. Phased plan and progress:
+`docs/reviewed-header-validation-plan.md`. Authority remains blocked.
+Phase 1 (loader read path, default-off) landed in the candidate tree with 4/4
+focused dev-container tests; 8088 now runs v20 without a reviewed-header file.
+Phase 2 structural proposer written and unit-tested (4/4); full offline run over
+all eight bound jobs started 2026-10-23 (switched to the exact-cells index after
+the sequential pass proved disk-bound). Phases 3 (policy + sealed receipt, binder
+now requires it) and 4 (fail-closed LLM proposer, synthetic live smoke only) are
+coded and tested. Next: finish the structural run, regenerate pass 4, then
+phase 5; real LLM batches need explicit user authorization.
+Local semantic-reader probe (user asked for a non-Chinese local model): community
+GGUF `mradermacher/Llama-Breeze2-8B-Instruct-text-only` Q4_K_M via host Ollama on one
+GTX 1080 Ti (~50 tok/s, ~6 GB). On 20 seeded random `email_body_segment`s it gave
+valid JSON 19/20 and grounded entities 24/28, but zero usable claims (4 empty
+placeholders, 0/4 verbatim quotes). 9/20 segments were undecoded base64/RTF or
+`redacted_mail_body_segment`, an ingestion decoding gap that blocks any semantic
+reading. Private eval files: `.formowl/ontology-uat-20261019/private/breeze-eval/`.
+Decoding root cause: readpst writes an mbox `From `/`>From ` line before every
+attached `message/rfc822` message, so the stdlib parser sees no headers and the
+whole embedded message (headers, boundaries, base64 attachments, RTF) became one
+`text/plain` body. Every embedded message is affected: 4/4 in `source-export-2`
+(2,699 messages, 3.4 MB) and 346/346 in `source-export-pending-j1-20261007`
+(28,513 messages, 600 MB). Fix (uncommitted): `_parse_mail_bytes` in
+`python/formowl_ingestion/extractors/mail/pst.py` re-parses only that shape;
+`tests/test_pst_embedded_mbox_from.py` 3/3; existing `*pst*` suite unchanged
+(same 1 failure + 4 errors before and after). Existing revisions still hold the
+bad segments until a new ingestion revision is extracted.
+Attachment coverage audit of those two exports (31,212 messages): embedded
+messages hold 1,618 attachments (400 MB; 116 PDF, 50 xls/xlsx, 274 RTF bodies)
+that were never extracted before the fix; they still need embedded-message
+lineage (own sender/date/subject) before re-ingestion. Unsupported formats today:
+RTF bodies (352 top-level + 274 embedded), images without OCR (~66k png/jpg/gif
+top-level), archives (208 zip, 51 rar, 40 7z), OLE `.doc` (80), scanned PDFs.
+
+## Current UAT checkpoint — 2026-10-22/23 UTC / field-aware source shortlist repair / 待測
+User authorized private-source use and live UAT acceptance. Root cause for the COO miss was a bounded lexical shortlist: the validated料號 token had 21 mail postings, the known row containing `COO=JAPAN` was present at position 11, and single-token identity lookups skipped optional requested-field reranking before the source deadline. This was retrieval ordering, not missing attachment data or an authorization failure.
+
+The candidate source reader now performs bounded optional-field reranking even for a single identity token; the identifier remains the required matcher and every selected Observation still crosses the existing hash, permission, lineage and source checks. v16 is running on 8088 with health `status=ok/query_service_connected=true` and manifest `sha256:d2f20103057dda33ce9eaad7b18659f5e4048595ea9a20df1617104c36dd85c0`.
+
+Live webpage checks (HTTP 200) passed for the three requested prompts: PO470002002 / 20.QCS64G901 returned CRD `2026-03-04` and ETD `2026-07-13`; 470002138 returned delivery date `2026-05-14` with page-coverage disclosure; 03.80503G301 returned COO/origin `JAPAN` with citation `sha256:822699…`. All are finite `partial` answers because source coverage/field support remains incomplete; this is not methodology readiness, release acceptance or a whole-suite claim. Focused dev-container tests: 18/18 pass. Authority `--check` remains blocked (`methodology_ready=false`, CJK host dependency error and four gates open).
+
+## Current UAT checkpoint — 2026-10-22 07:41 UTC / bounded finalization-budget repair / 待測
+The relayed 8088 diagnosis identified the dominant failure as provider latency plus a late second finalization call: the source MCP result was citeable but the 120-second turn budget expired while the answer provider was still streaming. The bounded repair adds a 45-second finalization reserve. When an evidence result is governed and citeable, has `partial` or `incomplete` status, and the reserve is exhausted, the orchestrator returns the preserved source evidence with an explicit incomplete-coverage note; it does not issue a second provider request. Graph and mail evidence tools use the same rule. The requested model and reasoning setting are unchanged.
+
+The candidate deployment is `formowl-ontology-uat-r53-occurrence-expansion-8088-20261022-v10`, health `status=ok/query_service_connected=true`. Manifest `sha256:deaefbb6fcef16f2ffe5ea8b9ef5c817df9ce2560ed9f17ca90bf2ba66b2a5f9`, candidate orchestrator `sha256:e7c5b66a4a79ffdb61fc8b7591bf8978a2c7c07143553d7ceec278ce98f7a648` and source binding `sha256:5be36d6228e4243ef274f0e2612b41fee2e0d27a96cf3f4f6439352feac9a42d` are recorded in the private handoff bus. The source binding was recomputed in an isolated 8GB diagnostic container with the same `/out` mount and matched the manifest; no source files were written. A sequential cutover fixed the v9 port-race. The v7 full-observation diagnostic exit 137 and v8/v9 stopped containers remain preserved history.
+
+Focused provider bridge tests for the repair are 4/4 passing. The whole provider bridge module remains non-green (95 tests, 11 inherited descriptor/loop failures); this bounded result is not whole-suite acceptance. Live private-source prompts have not yet been rerun because the execution review requested an explicit confirmation for sending UAT evidence to the configured external provider. Methodology authority remains blocked; feature remains 待測 and no readiness/release/comparative claim is made.
+
+## Current UAT checkpoint — 2026-10-21 UTC / bounded delivery-query remediation / 待測
+The provider connection follows the OpenAI-compatible Responses path documented by the referenced codex-provider service. The live 8088 UAT container was restarted with deployment manifest `sha256:14120e7388024a8e6d557a57aa944dfbc0f2304902ef93cfd3820fe3a3c04b58`; the prior manifest and attestation are preserved as `r39-8088-pre-remediation-v3-20261021-*`.
+The original webpage question returned one cited same-row result for PO470002002 and 20.QCS64G901 with `CRD 2026-03-04` and `ETD 2026-07-13`; the former Excel serial `46216` is no longer exposed. Trace evidence records two required terms, source families `attachment_table` and `mail`, provider attempts completed, and MCP projection preserved.
+Bounded code changes: restore all protected identifiers for attachment scope through the provider-term binder; preserve native spreadsheet `display_value` or verified `date_value_iso` beside raw values; guide the answer model to use that source presentation. Focused bridge/projection tests passed (3 tests).
+The result remains a finite UAT diagnostic with coverage `partial` because the source has CRD/ETD but no canonical field literally named 交期. Methodology authority remains blocked and feature remains 待測; no readiness, release, whole-suite, or comparative claim is made.
+[Lossless pre-edit checkpoint and hashes](../archive/2026-10-21/uat-delivery-remediation-preedit/) preserve the replaced status.
 
 ## Documentation publication handoff — 2026-10-18 / #63
 User authorized commit/push. The publication branch is based on main `8dc9fc5`,
