@@ -1596,8 +1596,14 @@ class IngestionRevisionSourceRecords:
             if explicit_link is not None:
                 matches = [job for job in self.job_authorities
                            if job.ingestion_job_id == explicit_link["prior_ingestion_job_id"]]
-                if len(matches) != 1:
+                if len(matches) > 1:
                     raise ContractValidationError("source attachment explicit parent job is unavailable or ambiguous")
+                if not matches:
+                    # The linked parent job is outside this revision: no parent
+                    # authority is transferred. The child stays bound to its own
+                    # authorized job and is delivered without outer-mail context.
+                    explicit_link = None
+            if explicit_link is not None:
                 parent_authority = matches[0]
                 parent_run_id = explicit_link["parent_extractor_run_id"]
                 parent_index = next(i for i, job in enumerate(self.job_authorities) if job is parent_authority)

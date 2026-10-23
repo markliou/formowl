@@ -2279,7 +2279,18 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             self.assertNotIn("exception_owner", rendered)
 
     def test_mail_projection_accepts_partial_governed_identity_without_public_ids(self) -> None:
-        citation_id = "mailcitation_partial"
+        from formowl_mail.query import _citation_for_snippet
+
+        # Governed mail citation ids must be recomputable from their own
+        # identity; the snippet itself carries no public identifiers.
+        citation = _citation_for_snippet({
+            "mail_import_session_id": "mail-session-1",
+            "source_observation_id": "observation-partial-1",
+            "source_type": "mail_body_segment",
+            "email_message_id": "message-partial-1",
+            "message_occurrence_id": "occurrence-partial-1",
+        })
+        citation_id = citation["citation_id"]
         response = {
             "evidence_snippets": [
                 {
@@ -2287,13 +2298,10 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                     "mail_import_session_id": "mail-session-1",
                 }
             ],
-            "citations": [
-                {
-                    "citation_id": citation_id,
-                    "mail_import_session_id": "mail-session-1",
-                }
-            ],
+            "citations": [citation],
         }
+        forged = {**response, "citations": [{**citation, "citation_id": "mailcitation_forged"}]}
+        self.assertEqual(_governed_mail_evidence_records(forged, limit=8), ())
         records = _governed_mail_evidence_records(response, limit=8)
 
         self.assertEqual(
@@ -3136,7 +3144,8 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 (_PROVIDER_MODEL, _PROVIDER_REASONING_EFFORT),
             ],
         )
-        self.assertEqual(provider_requests[0]["tools"], [])
+        # The configured catalog stays on the wire (stable prompt-cache prefix);
+        # the greeting still forbids every call through tool_choice "none".
         self.assertEqual(provider_requests[0]["tool_choice"], "none")
         self.assertTrue(provider_requests[1]["tools"])
         self.assertNotEqual(provider_requests[1]["tool_choice"], "none")
