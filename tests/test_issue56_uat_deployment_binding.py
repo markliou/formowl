@@ -420,5 +420,18 @@ class DiagnosticDeploymentBindingTests(unittest.TestCase):
             mcp.assert_not_called()
 
 
+
+def setUpModule() -> None:
+    import _uat_turn_budget
+
+    _uat_turn_budget.start()
+
+
+def tearDownModule() -> None:
+    import _uat_turn_budget
+
+    _uat_turn_budget.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

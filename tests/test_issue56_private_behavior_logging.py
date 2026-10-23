@@ -21,6 +21,7 @@ class PrivateBehaviorLoggingTests(unittest.TestCase):
     def service(self, path=None):
         service = object.__new__(runtime.Issue56TemporaryLanQueryService)
         service._application = object()
+        service._provider_tool_catalog = runtime._query_agent_tool_catalog(service._application)
         service._conversation_model = SimpleNamespace(discard_conversation=MagicMock())
         service._lock = threading.RLock()
         service._query_lock = threading.Lock()

@@ -1465,7 +1465,17 @@ def _query_agent_tool_catalog(application: ConnectedMcpApplication | Any) -> tup
             else set()
         )
         if "query_mail_evidence" in enabled_tool_names:
-            enabled_tool_names = {"whoami", "query_mail_evidence"}
+            # The per-turn selector may route non-mail work (independent
+            # documents, native tables, chat) to the graph tool, so a journal
+            # configured with only the mail tool would reject the first such
+            # turn. Keep the graph tool whenever non-mail families are served.
+            keep_graph = (
+                "query_effective_graph_view" in enabled_tool_names
+                and bool(source_families - {"mail"})
+            )
+            enabled_tool_names = {"whoami", "query_mail_evidence"} | (
+                {"query_effective_graph_view"} if keep_graph else set()
+            )
     descriptors = build_remote_tool_descriptors(
         required_scope=dispatcher.required_scope if dispatcher is not None else "formowl.use",
         enabled_tool_names=enabled_tool_names,

@@ -223,8 +223,13 @@ class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
                         self.assertEqual(result["answer"], "Hello")
                         request_response.assert_called_once()
                         request = request_response.call_args.args[0]
-                        self.assertEqual(request["tools"], [])
+                        # The configured catalog stays on the wire for a stable
+                        # prompt-cache prefix; tool_choice "none" forbids any call.
                         self.assertEqual(request["tool_choice"], "none")
+                        self.assertTrue({tool["name"] for tool in request["tools"]} <= {
+                            "query_effective_graph_view", "query_mail_evidence",
+                            "clarify_public_terminology",
+                        })
                         mcp_call.assert_not_called()
                         self.assertEqual(service.request_count, 0)
 

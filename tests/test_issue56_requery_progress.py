@@ -74,9 +74,14 @@ class RequeryProgressTests(unittest.TestCase):
                 arguments["request_contract"]["source_family_scope"] = (
                     ["mail"] if inline else ["mail", "attachment_table"]
                 )
-                self._assert_source_start_shortlist_stops(handler, arguments, "source_table_shortlist")
+                # Both labels are terminal bounded-shortlist misses; the sealed
+                # lexical index reports indexed_shortlist_miss for attachment tables.
+                self._assert_source_start_shortlist_stops(
+                    handler, arguments, ("source_table_shortlist", "indexed_shortlist_miss"),
+                )
 
     def _assert_source_start_shortlist_stops(self, handler, arguments, stop_reason):
+        stop_reasons = (stop_reason,) if isinstance(stop_reason, str) else tuple(stop_reason)
         prompt = "Find the review condition for MISSING-Q47 in authorized records."
         contract = {**arguments["request_contract"], "original_query_hash": sha256_json(prompt),
                     "requested_fields": ["review condition"]}
@@ -94,9 +99,9 @@ class RequeryProgressTests(unittest.TestCase):
             recovery = result["query_agent"]["context_bundle"]["source_recovery"]
             self.assertIsNone(request.table_query)
             self.assertEqual(request.request_contract["query_class"], "evidence_lookup")
-            self.assertEqual(recovery["scan"], {
-                "scanned_observation_count": 0, "complete": False, "stop_reason": stop_reason,
-            })
+            self.assertEqual(recovery["scan"]["scanned_observation_count"], 0)
+            self.assertIs(recovery["scan"]["complete"], False)
+            self.assertIn(recovery["scan"]["stop_reason"], stop_reasons)
             results.append(result)
             return result
 
@@ -106,7 +111,7 @@ class RequeryProgressTests(unittest.TestCase):
                                      "request_contract": contract, "table_query": None}),
         }]}
         with mock.patch.object(provider, "_request_response", side_effect=[
-            tool_response, AssertionError(f"unnecessary provider continuation after bound {stop_reason}"),
+            tool_response, AssertionError(f"unnecessary provider continuation after bound {stop_reasons}"),
         ]) as transport:
             outcome = provider.respond(
                 history=(), user_text=prompt, latest_evidence=None,
@@ -121,9 +126,9 @@ class RequeryProgressTests(unittest.TestCase):
         self.assertEqual(orchestrator.evidence_citation_ids(result), ())
         self.assertTrue(recovery["attempted"])
         self.assertEqual(set(recovery["warnings"]), {"used", "incomplete"})
-        self.assertEqual(recovery["scan"], {
-            "scanned_observation_count": 0, "complete": False, "stop_reason": stop_reason,
-        })
+        self.assertEqual(recovery["scan"]["scanned_observation_count"], 0)
+        self.assertIs(recovery["scan"]["complete"], False)
+        self.assertIn(recovery["scan"]["stop_reason"], stop_reasons)
         self.assertEqual(outcome.response_kind, "clarification")
         self.assertEqual(outcome.coverage_status, "incomplete")
         self.assertTrue(outcome.coverage_note)
@@ -137,7 +142,7 @@ class RequeryProgressTests(unittest.TestCase):
                 "selector_kind": "none", "selector_present": False, "selector_count": 0,
             },
         }, result)
-        self.assertEqual(trace["scan_stop_reason"], stop_reason)
+        self.assertIn(trace["scan_stop_reason"], stop_reasons)
         for section, key, value in (
             ("agent", "original_query_hash", sha256_json("wrong")),
             ("recovery", "query_hash", sha256_json("wrong")),
