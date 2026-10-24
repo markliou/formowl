@@ -1,6 +1,48 @@
 # Agent Handoff Log
 Lifecycle label: `active`.
 
+## Current checkpoint — 2026-10-24/25 UTC / single-run PST re-extraction + local annotation model bake-off / 待測
+Authority remains valid-but-blocked; nothing here is UAT, completeness or methodology evidence.
+Code: 43ea2fe (ZIP/gzip/tar, legacy .doc/.ppt, attached .msg/.eml), 9822d23 (Codex review:
+gzip and compressed-RTF inside the expansion budget), 221ce71 (PST keeps attachment bytes
+only when children are materialized; fixed an OOM introduced by 789dd38), 0d1bd12
+(AttachmentDocumentExtractor 0.7.1: lenient PDF re-read, fallback to the last readable
+revision when an appended incremental update is broken, one bad page no longer drops the file).
+Re-extraction store `/Cache/formowl-reextract-20261024` (one complete run per PST, export
+copied to NVMe and three-way hash verified): small PST 342,461 obs; big PST mail-only
+5,790,047 obs; whole-export sidecar backfill 5,907,869 obs (77 non-partial child failures,
+879 cell-limit). The user chose to keep working on this POC host despite bad non-ECC RAM:
+one directory entry was written as `.Json` (single bit flip); its content was recovered by
+inode and rewritten; all 6,132,508 root-job observations re-verified by recomputing their
+content-derived ids (0 mismatches). Revision composition hit the one-child-failure-authority
+rule (small PST had 2 failed children: one PDF with a broken appended update); 0d1bd12 removes
+that failure; the small PST was re-extracted into its own store (`store-small-r2`; a re-run cannot
+re-register child assets) and the existing backfill delta was reused unchanged (same sidecar parent
+binding 539a82…, same ledger 1a426d…; it keeps parser 0.7.0, the small PST uses 0.7.1).
+`revision-r2`: 5 jobs, 12,040,491 observations, revision fd2b34be…, lookup sqlite 63aef6d2…
+(16.7 GB; 2,721,690 references, 1,613,538 helpers, 43,605,424 postings). Both seals re-hashed
+from disk after page-cache eviction; the sealed loader opens it in 84 s and four diagnostic
+source-start lookups (mail, attachment table, project document) returned cited evidence.
+Not deployed; 8088 still runs v22. Dense/strong-RAG projection not built.
+Annotation model bake-off (local only, 2x GTX 1080 Ti; host Ollama 0.21.2 cannot load
+gemma4, so `formowl-ollama-new` = ollama/ollama:0.40.2 on :11435): 38 seeded units (whole
+messages, attachment documents, attachment tables) plus an independent 38-unit holdout.
+Gemma 4 26B-A4B with prompt v3 (records before the business flag, explicit proposal/request/
+commitment/result roles, dedup + quote-grounding filter): 38/38 valid JSON, 37/38 units
+annotated, 355 records, 100% quotes grounded on the holdout; Nemotron 3.5 Lightning 30B-A3B
+left most attachments empty. Same prompt v3, both samples (valid JSON / annotated units /
+records / s per unit): Qwen3.8-27B 37+37/34+34/569+447/145+118 (richest, ~5x slower);
+Qwen3.6-35B-A3B 37+37/34+35/501+517/45+41 (often paraphrases values: 583/858 values verbatim
+vs Gemma 619/655); Gemma-3-TAIDE-12B 24+27/21+23/148+203/106+93; Breeze 2 8B Q8
+23+28/17+21/98+124/91+73 (TAIDE/Breeze: 30-40% invalid JSON and many false "not business").
+Qwen was run only as a user-requested comparison (user prefers non-Chinese models). No model
+chosen yet. Seen in tables: date cells reach the model as Excel serials (45212), so the table
+text projection should carry display values too. Quoted-text measurement (small PST): new
+text is 33.1% of mail body chars. Dense e5-small is CPU-only by profile: 12.8 passages/s at
+~1,600 chars, 44.8/s at ~230 chars (6 threads) → about 10-35 h for 1.61M helpers; not started.
+Private files: session scratchpad `bakeoff/`. Next (user decisions): annotation model, scoped
+vs full annotation, deploy revision-r2, build dense, re-run backfill with parser 0.7.1.
+
 ## Current checkpoint — 2026-10-23 UTC / reviewed header validation plan / 待實作
 Claude took over from the interrupted Codex session at user request. 8088 v17
 failed only because host-side runs left `__pycache__` in the candidate tree;
