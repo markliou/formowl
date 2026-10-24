@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from email import policy
 from email.message import EmailMessage
@@ -123,6 +123,8 @@ class _PstParserConfig:
     include_deleted_items: bool
     parser_workers: int
     preserve_private_body_text: bool = True
+    # Attachment bytes are kept only for child materialization; hashes never need them.
+    retain_attachment_bytes: bool = True
 
 
 @dataclass(frozen=True)
@@ -383,7 +385,10 @@ class PstMailArchiveExtractor:
         return "mail_archive"
 
     def extract(self, extraction_input: ExtractionInput) -> ExtractionResult:
-        config = _parser_config(extraction_input.config)
+        config = replace(
+            _parser_config(extraction_input.config),
+            retain_attachment_bytes=extraction_input.attachment_materialization is not None,
+        )
         if not _looks_like_pst(extraction_input.object_path):
             return ExtractionResult(errors=["pst_parser_input_signature_mismatch"])
 
@@ -2798,7 +2803,9 @@ def _attachments(
                 mime_type=_safe_mail_text(part.get_content_type(), "attachment_mime_type"),
                 content_hash=content_hash,
                 size_bytes=size_bytes,
-                content_bytes=payload if content_hash is not None else None,
+                content_bytes=(
+                    payload if content_hash is not None and config.retain_attachment_bytes else None
+                ),
                 embedded_message=embedded.get(id(part)),
             )
         )
@@ -2850,7 +2857,7 @@ def _detached_attachments(
                 mime_type=_safe_mail_text(mime_type, "attachment_mime_type"),
                 content_hash=content_hash,
                 size_bytes=size_bytes,
-                content_bytes=payload,
+                content_bytes=payload if config.retain_attachment_bytes else None,
             )
         )
     return attachments
