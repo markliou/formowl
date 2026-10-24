@@ -93,6 +93,19 @@ class EmbeddedMboxFromLineTests(unittest.TestCase):
         rtf = next(item for item in attachments if item.filename.endswith(".rtf"))
         self.assertEqual(rtf.embedded_message["subject"], "inner")
         self.assertTrue(rtf.content_hash)
+        self.assertIsNotNone(rtf.content_bytes)
+
+    def test_attachment_bytes_are_dropped_when_no_child_is_materialized(self):
+        from dataclasses import replace
+
+        from formowl_ingestion.extractors.mail.pst import _attachments, _parser_config
+
+        message = _parse_mail_bytes(_exported('>From "MAILER-DAEMON" Tue Jun 24 01:11:55 2025'))
+        config = replace(_parser_config({}), retain_attachment_bytes=False)
+        rtf = next(item for item in _attachments(message, config=config, warnings=[])
+                   if item.filename.endswith(".rtf"))
+        self.assertTrue(rtf.content_hash)
+        self.assertIsNone(rtf.content_bytes)
 
 
 if __name__ == "__main__":
