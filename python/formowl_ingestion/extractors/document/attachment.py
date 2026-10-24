@@ -701,9 +701,13 @@ def _archive_members(data: bytes, *, kind: str, max_bytes: int) -> Iterator[_Arc
                     bool(info.flag_bits & 0x1),
                 )
     elif kind == "gzip":
-        with gzip.GzipFile(fileobj=io.BytesIO(data)) as stream:
-            content = stream.read(max_bytes + 1)
-        yield _gzip_member_name(data), None, lambda: content, False
+        # Lazy, like the other kinds: nothing is inflated once the shared budget is spent.
+        yield (
+            _gzip_member_name(data),
+            None,
+            lambda: _bounded_read(gzip.GzipFile(fileobj=io.BytesIO(data)), max_bytes),
+            False,
+        )
     elif kind == "tar":
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as archive:
             for info in archive:
@@ -808,7 +812,10 @@ def _msg_content(
             observation_type="paragraph", text=header, location={"block_index": 0},
             payload={"source_format": "msg", "span_role": "message_header", "native_text": True},
         ))
-    body, body_format = _msg_body(document, children)
+    body, body_format = _msg_body(document, children, limit=min(max_bytes, budget["bytes"]))
+    budget["bytes"] -= len(body.encode("utf-8"))
+    if body_format == "rtf_byte_limit":
+        result.warnings.extend(["msg_body_byte_limit", "attachment_document_partial_text_coverage"])
     max_blocks = _limit(config, "attachment_max_document_blocks", 10_000)
     for paragraph in (part.strip() for part in re.split(r"\n\s*\n", body)):
         if not paragraph:
@@ -995,7 +1002,7 @@ def _filetime_iso(value: bytes | None) -> str | None:
         return None
 
 
-def _msg_body(document: Any, children: dict[str, int]) -> tuple[str, str]:
+def _msg_body(document: Any, children: dict[str, int], *, limit: int) -> tuple[str, str]:
     plain = _msg_text(document, children, 0x1000)
     if plain:
         return plain.replace("\r\n", "\n"), "text"
@@ -1006,7 +1013,10 @@ def _msg_body(document: Any, children: dict[str, int]) -> tuple[str, str]:
         return _html_to_text(html), "html"
     rtf_node = children.get("__substg1.0_10090102")
     if rtf_node is not None:
-        rtf = _lzfu_decompress(_ole_stream(document, document.dirlist[rtf_node]))
+        try:
+            rtf = _lzfu_decompress(_ole_stream(document, document.dirlist[rtf_node]), limit=limit)
+        except OverflowError:
+            return "", "rtf_byte_limit"
         text = _rtf_to_text(rtf)
         if text and not _decoded_text_is_unreliable(text):
             return text, "rtf"
@@ -1054,8 +1064,11 @@ _LZFU_DICTIONARY = (
 )
 
 
-def _lzfu_decompress(data: bytes) -> bytes:
+def _lzfu_decompress(data: bytes, *, limit: int) -> bytes:
+    """Raises OverflowError when the declared output exceeds ``limit`` bytes."""
     compressed_size, raw_size, magic = struct.unpack_from("<III", data, 0)
+    if raw_size > limit:
+        raise OverflowError("compressed RTF exceeds the byte limit")
     if magic == 0x414C454D:  # "MELA": stored uncompressed
         return data[16:16 + raw_size]
     if magic != 0x75465A4C:  # "LZFu"
