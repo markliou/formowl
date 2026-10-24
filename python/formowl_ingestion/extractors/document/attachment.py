@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from email import policy as email_policy
+from email.parser import BytesParser
+from email.utils import parsedate_to_datetime
+import gzip
+import hashlib
+from html.parser import HTMLParser
 import io
 import math
 import posixpath
 import re
-from typing import Any
+import struct
+import tarfile
+from typing import Any, Callable, Iterator
+import zlib
 from xml.etree import ElementTree as ET
 from zipfile import BadZipFile, ZipFile, is_zipfile
 
@@ -34,6 +43,7 @@ class _TableData:
     merge_ranges: tuple[_MergeRange, ...] = ()
     cell_metadata: dict[tuple[int, int], dict[str, Any]] = field(default_factory=dict)
     source_format: str = "delimited"
+    location_extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -56,6 +66,15 @@ class _ParserLimit(ValueError):
 
 
 _MAX_HEADER_PATH_DEPTH = 4
+_PARSE_ERRORS = (
+    BadZipFile, ET.ParseError, KeyError, OSError, UnicodeDecodeError, ValueError,
+    EOFError, tarfile.TarError, zlib.error, struct.error,
+)
+_ARCHIVE_KINDS = frozenset({"zip", "gzip", "tar"})
+_UNAVAILABLE_ARCHIVE_KINDS = frozenset({"7z", "rar"})
+_MAX_CONTAINER_DEPTH = 3
+# Formats without a reliable magic number: the declared type wins over sniffing.
+_DECLARED_KIND_FIRST = frozenset({"text", "delimited", "eml"})
 
 _MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _MIME_XLS = "application/vnd.ms-excel"
@@ -81,7 +100,7 @@ class AttachmentDocumentExtractor:
         return "attachment_document_parser"
 
     def version(self) -> str:
-        return "0.6.2"
+        return "0.7.0"
 
     def supported_mime_types(self) -> list[str]:
         # run_extractor uses this as a routing admission check for every child
@@ -94,6 +113,13 @@ class AttachmentDocumentExtractor:
             "delimited_text",
             "text",
             "rtf",
+            "zip",
+            "gzip",
+            "tar",
+            "doc",
+            "ppt",
+            "msg",
+            "eml",
             "xlsx",
             "xlsm",
             "xls",
@@ -119,7 +145,7 @@ class AttachmentDocumentExtractor:
             # text.  A declared TXT/MD (or CSV/TSV) must retain its declared
             # dispatch even when its first line happens to contain a comma or
             # tab and later lines are ordinary prose.
-            kind = declared_kind if declared_kind in {"text", "delimited"} else sniffed_kind
+            kind = declared_kind if declared_kind in _DECLARED_KIND_FIRST else sniffed_kind
             warnings = []
             if declared_kind and kind and declared_kind != kind:
                 warnings.append("attachment_document_mime_sniff_mismatch")
@@ -147,7 +173,7 @@ class AttachmentDocumentExtractor:
             return ExtractionResult(observations=observations, warnings=_unique(warnings))
         except _ParserLimit as exc:
             return ExtractionResult(errors=[str(exc)])
-        except (BadZipFile, ET.ParseError, KeyError, OSError, UnicodeDecodeError, ValueError):
+        except _PARSE_ERRORS:
             return ExtractionResult(errors=["attachment_document_parse_failed"])
 
 
@@ -167,6 +193,18 @@ def _declared_kind(mime_type: str | None, filename: str | None) -> str | None:
         "application/rtf": "rtf",
         "text/rtf": "rtf",
         "text/html": "text",
+        "application/zip": "zip",
+        "application/x-zip-compressed": "zip",
+        "application/gzip": "gzip",
+        "application/x-gzip": "gzip",
+        "application/x-tar": "tar",
+        "application/x-7z-compressed": "7z",
+        "application/vnd.rar": "rar",
+        "application/x-rar-compressed": "rar",
+        "application/msword": "doc",
+        "application/vnd.ms-powerpoint": "ppt",
+        "application/vnd.ms-outlook": "msg",
+        "message/rfc822": "eml",
     }
     if mime in by_mime:
         return by_mime[mime]
@@ -183,8 +221,25 @@ def _declared_kind(mime_type: str | None, filename: str | None) -> str | None:
         ".rtf": "rtf",
         ".md": "text",
         ".markdown": "text",
+        ".log": "text",
+        ".json": "text",
+        ".xml": "text",
+        ".yaml": "text",
+        ".yml": "text",
+        ".htm": "text",
+        ".html": "text",
         ".csv": "delimited",
         ".tsv": "delimited",
+        ".zip": "zip",
+        ".gz": "gzip",
+        ".tgz": "gzip",
+        ".tar": "tar",
+        ".7z": "7z",
+        ".rar": "rar",
+        ".doc": "doc",
+        ".ppt": "ppt",
+        ".msg": "msg",
+        ".eml": "eml",
     }.get(suffix)
 
 
@@ -195,10 +250,21 @@ def _sniff_kind(data: bytes, *, max_bytes: int) -> str | None:
         return "rtf"
     if data.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
         return "ole"
+    if data.startswith(b"\x1f\x8b"):
+        return "gzip"
+    if data.startswith(b"7z\xbc\xaf\x27\x1c"):
+        return "7z"
+    if data.startswith(b"Rar!\x1a\x07"):
+        return "rar"
+    if data[257:262] == b"ustar":
+        return "tar"
     if is_zipfile(io.BytesIO(data)):
         with ZipFile(io.BytesIO(data)) as archive:
-            _validate_zip_bounds(archive, max_bytes=max_bytes)
             names = set(archive.namelist())
+            if not names & {"xl/workbook.xml", "word/document.xml", "ppt/presentation.xml"}:
+                # A plain archive: members are bounded one by one on expansion.
+                return "zip"
+            _validate_zip_bounds(archive, max_bytes=max_bytes)
             if "xl/workbook.xml" in names:
                 content_types = _zip_text(archive, "[Content_Types].xml")
                 return "xlsm" if "macroEnabled.main+xml" in content_types else "xlsx"
@@ -251,7 +317,17 @@ def _parse_content(
     declared_kind: str | None,
     max_bytes: int,
     config: dict[str, Any],
+    depth: int = 0,
+    archive_budget: dict[str, int] | None = None,
 ) -> _ParsedContent:
+    if kind in _ARCHIVE_KINDS and (
+        declared_kind is None or declared_kind in _ARCHIVE_KINDS | _UNAVAILABLE_ARCHIVE_KINDS
+    ):
+        return _archive_content(
+            data, kind=kind, max_bytes=max_bytes, config=config, depth=depth, budget=archive_budget,
+        )
+    if kind in _UNAVAILABLE_ARCHIVE_KINDS:
+        return _ParsedContent(warnings=[f"attachment_document_{kind}_parser_unavailable"])
     if kind == "xlsx":
         return _xlsx_content(data, max_bytes=max_bytes)
     if kind == "xlsm":
@@ -263,7 +339,8 @@ def _parse_content(
     if kind == "ole":
         if declared_kind == "xls":
             return _xls_content(data, config=config)
-        return _ParsedContent(warnings=["attachment_document_ole_format_unsupported"])
+        return _ole_content(data, declared_kind=declared_kind, config=config, max_bytes=max_bytes,
+                            depth=depth, budget=archive_budget)
     if kind == "pdf":
         return _pdf_content(data, config=config)
     if kind == "docx":
@@ -275,9 +352,11 @@ def _parse_content(
         return _ParsedContent(tables=[table] if table is not None else [])
     if kind == "text":
         return _text_content(data, config=config)
+    if kind == "eml":
+        return _eml_content(data, max_bytes=max_bytes, config=config, depth=depth, budget=archive_budget)
     if kind == "rtf":
         return _rtf_content(data, config=config)
-    if declared_kind in {"pdf", "xls", "xlsb", "doc", "ppt"}:
+    if declared_kind in {"pdf", "xls", "xlsb", "doc", "ppt", "msg"}:
         return _ParsedContent(warnings=[f"attachment_document_{declared_kind}_parser_unavailable"])
     return _ParsedContent()
 
@@ -410,8 +489,8 @@ def _rtf_to_text(data: bytes, *, max_chars: int = 2_000_000) -> str:
     return re.sub(r"\n{3,}", "\n\n", joined).strip()
 
 
-def _rtf_text_is_unreliable(text: str) -> bool:
-    """Garbled output (e.g. a mis-decompressed RTF body) must not become evidence."""
+def _decoded_text_is_unreliable(text: str) -> bool:
+    """Garbled decoder output (e.g. a mis-decompressed RTF body) must not become evidence."""
     if not text:
         return False
     noisy = sum(1 for char in text if char == "\ufffd" or (ord(char) < 32 and char not in "\n\t"))
@@ -422,7 +501,7 @@ def _rtf_content(data: bytes, *, config: dict[str, Any]) -> _ParsedContent:
     text = _rtf_to_text(data)
     if not text:
         return _ParsedContent(warnings=["attachment_document_rtf_text_empty"])
-    if _rtf_text_is_unreliable(text):
+    if _decoded_text_is_unreliable(text):
         return _ParsedContent(warnings=["attachment_document_rtf_text_unreliable"])
     parsed = _text_content(text.encode("utf-8"), config=config)
     for block in parsed.blocks:
@@ -430,8 +509,791 @@ def _rtf_content(data: bytes, *, config: dict[str, Any]) -> _ParsedContent:
     return parsed
 
 
+# Archive members: (source name, declared size or None, bounded reader, encrypted).
+_ArchiveMember = tuple[str, int | None, Callable[[], bytes], bool]
+
+
+def _archive_content(
+    data: bytes,
+    *,
+    kind: str,
+    max_bytes: int,
+    config: dict[str, Any],
+    depth: int,
+    budget: dict[str, int] | None = None,
+) -> _ParsedContent:
+    """Expand a ZIP/gzip/tar container into its members' evidence.
+
+    Every member is recorded as an ``container_member`` block whatever its status,
+    so unreadable members stay visible as coverage gaps. Readable members'
+    tables and blocks carry the member chain in ``location["container_members"]``
+    (outermost first). One bad member never discards its siblings. Expanded
+    bytes and member records share one budget across nested archives.
+    """
+    if depth >= _MAX_CONTAINER_DEPTH:
+        return _ParsedContent(warnings=["attachment_container_depth_limit_reached"])
+    if budget is None:
+        budget = {
+            "bytes": max_bytes * 8,
+            "members": _limit(config, "attachment_container_max_members", 1000),
+        }
+    result = _ParsedContent()
+    complete = True
+    try:
+        _expand_members(data, kind=kind, max_bytes=max_bytes, config=config, depth=depth,
+                        budget=budget, result=result)
+    except _PARSE_ERRORS:
+        # A damaged listing keeps the members already recorded.
+        result.warnings.append("attachment_archive_listing_failed")
+        complete = False
+    _container_coverage_warnings(result, complete=complete)
+    return result
+
+
+def _expand_members(
+    data: bytes,
+    *,
+    kind: str,
+    max_bytes: int,
+    config: dict[str, Any],
+    depth: int,
+    budget: dict[str, int],
+    result: _ParsedContent,
+) -> None:
+    for index, (source_name, size, read, encrypted) in enumerate(
+        _archive_members(data, kind=kind, max_bytes=max_bytes), 1
+    ):
+        if not _add_member(result, source_name=source_name, index=index, size=size, read=read,
+                           encrypted=encrypted, container_format=kind, max_bytes=max_bytes,
+                           config=config, depth=depth, budget=budget):
+            break
+
+
+def _add_member(
+    result: _ParsedContent,
+    *,
+    source_name: str,
+    index: int,
+    size: int | None,
+    read: Callable[[], bytes] | None,
+    encrypted: bool,
+    container_format: str,
+    max_bytes: int,
+    config: dict[str, Any],
+    depth: int,
+    budget: dict[str, int],
+    parse: Callable[[], _ParsedContent] | None = None,
+) -> bool:
+    """Record one container member and append its evidence; False once the member budget is spent.
+
+    ``parse`` replaces byte reading for members that are structured storage
+    rather than bytes (an embedded Outlook message).
+    """
+    if budget["members"] <= 0:
+        result.warnings.append("attachment_container_member_limit_reached")
+        return False
+    budget["members"] -= 1
+    name = redact_public_raw_references(
+        posixpath.basename(source_name.replace("\\", "/")) or f"member-{index}"
+    )[0]
+    member: dict[str, Any] = {
+        "name": name,
+        "name_fingerprint": "sha256:" + hashlib.sha256(source_name.encode("utf-8")).hexdigest(),
+        "member_index": index,
+    }
+    member_kind = None
+    parsed = _ParsedContent()
+    if parse is not None:
+        member_kind = "msg"
+        try:
+            parsed = parse()
+            status = _member_status(parsed)
+        except _PARSE_ERRORS:
+            parsed, status = _ParsedContent(), "parse_failed"
+    elif encrypted:
+        status = "encrypted"
+    elif size is not None and size > max_bytes:
+        status = "byte_limit"
+    elif budget["bytes"] <= 0:
+        status = "expansion_limit"
+    else:
+        try:
+            content = read()
+        except (*_PARSE_ERRORS, NotImplementedError, RuntimeError):
+            content = None  # e.g. unsupported compression method or password
+        if content is None:
+            status = "parse_failed"
+        elif len(content) > max_bytes:
+            status = "byte_limit"
+        else:
+            budget["bytes"] -= len(content)
+            member.update(
+                content_hash="sha256:" + hashlib.sha256(content).hexdigest(),
+                size_bytes=len(content),
+            )
+            declared = _declared_kind(None, name)
+            try:
+                sniffed = _sniff_kind(content, max_bytes=max_bytes)
+                member_kind = declared if declared in _DECLARED_KIND_FIRST else sniffed
+                parsed = _parse_content(
+                    content,
+                    kind=member_kind,
+                    declared_kind=declared,
+                    max_bytes=max_bytes,
+                    config=config,
+                    depth=depth + 1,
+                    archive_budget=budget,
+                )
+                status = _member_status(parsed)
+            except _PARSE_ERRORS:
+                parsed, status = _ParsedContent(), "parse_failed"
+            member_kind = member_kind or declared
+    result.blocks.append(
+        _TextBlock(
+            observation_type="container_member",
+            text=name,
+            location={"container_members": [member]},
+            payload={
+                "source_format": container_format,
+                "member_status": status,
+                "member_kind": member_kind,
+            },
+        )
+    )
+    for table in parsed.tables:
+        table.location_extra["container_members"] = [
+            member, *table.location_extra.get("container_members", [])
+        ]
+    for block in parsed.blocks:
+        block.location["container_members"] = [member, *block.location.get("container_members", [])]
+    result.tables.extend(parsed.tables)
+    result.blocks.extend(parsed.blocks)
+    result.warnings.extend(parsed.warnings)
+    return True
+
+
+def _member_status(parsed: _ParsedContent) -> str:
+    if "attachment_container_depth_limit_reached" in parsed.warnings:
+        return "depth_limit"
+    return "extracted" if parsed.tables or parsed.blocks else "unsupported"
+
+
+def _container_coverage_warnings(result: _ParsedContent, *, complete: bool = True) -> None:
+    if not complete or any(
+        block.payload.get("member_status") != "extracted"
+        for block in result.blocks if block.observation_type == "container_member"
+    ) or "attachment_container_member_limit_reached" in result.warnings:
+        result.warnings.extend(
+            ["attachment_container_incomplete", "attachment_document_partial_text_coverage"]
+        )
+
+
+def _archive_members(data: bytes, *, kind: str, max_bytes: int) -> Iterator[_ArchiveMember]:
+    if kind == "zip":
+        with ZipFile(io.BytesIO(data)) as archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                yield (
+                    _zip_member_name(info),
+                    info.file_size,
+                    lambda info=info: _bounded_read(archive.open(info), max_bytes),
+                    bool(info.flag_bits & 0x1),
+                )
+    elif kind == "gzip":
+        with gzip.GzipFile(fileobj=io.BytesIO(data)) as stream:
+            content = stream.read(max_bytes + 1)
+        yield _gzip_member_name(data), None, lambda: content, False
+    elif kind == "tar":
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as archive:
+            for info in archive:
+                if not info.isfile():
+                    continue
+                yield (
+                    info.name,
+                    info.size,
+                    lambda info=info: _bounded_read(archive.extractfile(info), max_bytes),
+                    False,
+                )
+
+
+def _bounded_read(stream: Any, max_bytes: int) -> bytes:
+    with stream:
+        return stream.read(max_bytes + 1)
+
+
+def _zip_member_name(info: Any) -> str:
+    """ZIP names without the UTF-8 flag are legacy code pages (often Big5/GBK here)."""
+    if info.flag_bits & 0x800:
+        return info.filename
+    try:
+        raw = info.filename.encode("cp437")
+    except UnicodeEncodeError:  # zipfile already applied a Unicode path extra field
+        return info.filename
+    for encoding in ("utf-8", "cp950", "gb18030"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return info.filename
+
+
+def _gzip_member_name(data: bytes) -> str:
+    """RFC 1952 FNAME, when present; otherwise an empty name."""
+    if len(data) < 10 or not data[3] & 0x08:
+        return ""
+    position = 10
+    if data[3] & 0x04:
+        position += 2 + int.from_bytes(data[10:12], "little")
+    end = data.find(b"\x00", position, position + 1024)
+    return data[position:end].decode("latin-1") if end > position else ""
+
+
+def _msg_content(
+    document: Any,
+    *,
+    storage: int = 0,
+    max_bytes: int,
+    config: dict[str, Any],
+    depth: int,
+    budget: dict[str, int] | None,
+) -> _ParsedContent:
+    """Outlook ``.msg``: header, body and attachments under the message's own context.
+
+    The message's sender, date and subject travel with every block and table it
+    yields (``location["embedded_message"]``), so its content is never read as
+    the outer mail's. Attachments are container members, recursively parsed.
+    """
+    if depth >= _MAX_CONTAINER_DEPTH:
+        return _ParsedContent(warnings=["attachment_container_depth_limit_reached"])
+    if budget is None:
+        budget = {
+            "bytes": max_bytes * 8,
+            "members": _limit(config, "attachment_container_max_members", 1000),
+        }
+    children = _ole_children(document, storage)
+    properties = _msg_properties(document, children.get("__properties_version1.0"),
+                                 header=32 if storage == 0 else 24)
+
+    def text(prop: int) -> str:
+        return _msg_text(document, children, prop)
+
+    sender_name, sender_address = text(0x0C1A), text(0x0C1F) or text(0x5D01)
+    sender = f"{sender_name} <{sender_address}>" if sender_name and sender_address else sender_name or sender_address
+    recipients = []
+    for name, did in sorted(children.items()):
+        if name.startswith("__recip_version1.0_#"):
+            recipient = _ole_children(document, did)
+            label = _msg_text(document, recipient, 0x3001)
+            address = _msg_text(document, recipient, 0x39FE) or _msg_text(document, recipient, 0x3003)
+            recipients.append(f"{label} <{address}>" if label and address else label or address)
+    sent_at = _filetime_iso(properties.get(0x0039) or properties.get(0x0E06))
+    context = {
+        "span_role": "embedded_message",
+        "depth": depth + 1,
+        "message_id": redact_public_raw_references(text(0x1035))[0] or None,
+        "sender": redact_public_raw_references(sender)[0] or None,
+        "sent_at": sent_at,
+        "subject": redact_public_raw_references(text(0x0037))[0] or None,
+    }
+    result = _ParsedContent(warnings=["msg_page_locations_unavailable"])
+    header = "\n".join(line for line in (
+        f"From: {sender}" if sender else "",
+        f"To: {'; '.join(item for item in recipients if item)}" if any(recipients) else "",
+        f"Date: {sent_at}" if sent_at else "",
+        f"Subject: {context['subject']}" if context["subject"] else "",
+    ) if line)
+    if header:
+        result.blocks.append(_TextBlock(
+            observation_type="paragraph", text=header, location={"block_index": 0},
+            payload={"source_format": "msg", "span_role": "message_header", "native_text": True},
+        ))
+    body, body_format = _msg_body(document, children)
+    max_blocks = _limit(config, "attachment_max_document_blocks", 10_000)
+    for paragraph in (part.strip() for part in re.split(r"\n\s*\n", body)):
+        if not paragraph:
+            continue
+        if len(result.blocks) >= max_blocks:
+            result.warnings.extend(["attachment_document_block_limit_reached",
+                                    "attachment_document_partial_text_coverage"])
+            break
+        index = len(result.blocks)
+        result.blocks.append(_TextBlock(
+            observation_type="paragraph", text=paragraph,
+            location={"block_index": index, "paragraph_index": index},
+            payload={"source_format": "msg", "body_format": body_format, "native_text": True},
+        ))
+    attachments = sorted((name, did) for name, did in children.items()
+                         if name.startswith("__attach_version1.0_#"))
+    for index, (_, did) in enumerate(attachments, 1):
+        attachment = _ole_children(document, did)
+        source_name = (_msg_text(document, attachment, 0x3707) or _msg_text(document, attachment, 0x3704)
+                       or _msg_text(document, attachment, 0x3001))
+        embedded = attachment.get("__substg1.0_3701000D")
+        data_node = attachment.get("__substg1.0_37010102")
+        if embedded is not None:
+            keep = _add_member(
+                result, source_name=source_name or f"embedded-{index}.msg", index=index, size=None,
+                read=None, encrypted=False, container_format="msg", max_bytes=max_bytes,
+                config=config, depth=depth, budget=budget,
+                parse=lambda embedded=embedded: _msg_content(
+                    document, storage=embedded, max_bytes=max_bytes, config=config,
+                    depth=depth + 1, budget=budget),
+            )
+        else:
+            node = document.dirlist[data_node] if data_node is not None else None
+            keep = _add_member(
+                result, source_name=source_name or f"attachment-{index}", index=index,
+                size=node.tot_size if node is not None else None,
+                read=(lambda node=node: _ole_stream(document, node)) if node is not None else lambda: None,
+                encrypted=False, container_format="msg", max_bytes=max_bytes,
+                config=config, depth=depth, budget=budget,
+            )
+        if not keep:
+            break
+    for table in result.tables:
+        table.location_extra.setdefault("embedded_message", context)
+    for block in result.blocks:
+        block.location.setdefault("embedded_message", context)
+    _container_coverage_warnings(result)
+    return result
+
+
+def _eml_content(
+    data: bytes,
+    *,
+    max_bytes: int,
+    config: dict[str, Any],
+    depth: int,
+    budget: dict[str, int] | None,
+) -> _ParsedContent:
+    """RFC 822 message file: same shape as ``.msg`` (own context, attachments as members)."""
+    if depth >= _MAX_CONTAINER_DEPTH:
+        return _ParsedContent(warnings=["attachment_container_depth_limit_reached"])
+    if budget is None:
+        budget = {
+            "bytes": max_bytes * 8,
+            "members": _limit(config, "attachment_container_max_members", 1000),
+        }
+    message = BytesParser(policy=email_policy.default).parsebytes(data)
+    if not any(message.get(name) for name in ("From", "Subject", "Date", "Message-ID")):
+        raise ValueError("not an RFC 822 message")
+
+    def header(name: str) -> str:
+        try:
+            return redact_public_raw_references(" ".join(str(message.get(name) or "").split()))[0]
+        except (TypeError, ValueError, IndexError):  # malformed header values
+            return ""
+
+    try:
+        sent_at = parsedate_to_datetime(header("Date")).astimezone(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ") if header("Date") else None
+    except (TypeError, ValueError, IndexError):
+        sent_at = None
+    context = {"span_role": "embedded_message", "depth": depth + 1,
+               "message_id": header("Message-ID") or None, "sender": header("From") or None,
+               "sent_at": sent_at, "subject": header("Subject") or None}
+    result = _ParsedContent(warnings=["eml_page_locations_unavailable"])
+    header_text = "\n".join(f"{name}: {value}" for name, value in (
+        ("From", header("From")), ("To", header("To")), ("Date", sent_at or header("Date")),
+        ("Subject", header("Subject"))) if value)
+    if header_text:
+        result.blocks.append(_TextBlock(
+            observation_type="paragraph", text=header_text, location={"block_index": 0},
+            payload={"source_format": "eml", "span_role": "message_header", "native_text": True},
+        ))
+    body_part = message.get_body(preferencelist=("plain", "html"))
+    body, body_format = "", "none"
+    if body_part is not None:
+        payload = body_part.get_payload(decode=True) or b""
+        charset = body_part.get_content_charset() or "utf-8"
+        try:
+            body = payload.decode(charset)
+        except (LookupError, UnicodeDecodeError):
+            body = _decode_text(payload)
+        body_format = body_part.get_content_subtype()
+        if body_format == "html":
+            body = _html_to_text(body)
+    max_blocks = _limit(config, "attachment_max_document_blocks", 10_000)
+    for paragraph in (part.strip() for part in re.split(r"\n\s*\n", body.replace("\r\n", "\n"))):
+        if not paragraph:
+            continue
+        if len(result.blocks) >= max_blocks:
+            result.warnings.extend(["attachment_document_block_limit_reached",
+                                    "attachment_document_partial_text_coverage"])
+            break
+        index = len(result.blocks)
+        result.blocks.append(_TextBlock(
+            observation_type="paragraph", text=paragraph,
+            location={"block_index": index, "paragraph_index": index},
+            payload={"source_format": "eml", "body_format": body_format, "native_text": True},
+        ))
+    for index, part in enumerate(message.iter_attachments(), 1):
+        if part.get_content_type() == "message/rfc822" and part.is_multipart():
+            content = part.get_payload(0).as_bytes()
+            name = part.get_filename() or f"embedded-{index}.eml"
+        else:
+            content = part.get_payload(decode=True)
+            name = part.get_filename() or f"attachment-{index}"
+
+        def read(content: Any = content) -> bytes | None:
+            return content if isinstance(content, bytes) else None
+        if not _add_member(result, source_name=name, index=index, size=None, read=read, encrypted=False,
+                           container_format="eml", max_bytes=max_bytes, config=config, depth=depth,
+                           budget=budget):
+            break
+    for table in result.tables:
+        table.location_extra.setdefault("embedded_message", context)
+    for block in result.blocks:
+        block.location.setdefault("embedded_message", context)
+    _container_coverage_warnings(result)
+    return result
+
+
+def _ole_children(document: Any, storage: int) -> dict[str, int]:
+    return {document.dirlist[child].name: child for child in document.dirlist[storage].children}
+
+
+def _ole_stream(document: Any, node: Any) -> bytes:
+    if node.tot_size >= document.min_size_std_stream:
+        return document._get_stream(document.mem, 512, document.SAT, document.sec_size,
+                                    node.first_SID, node.tot_size, name=node.name, seen_id=None)
+    return document._get_stream(document.SSCS, 0, document.SSAT, document.short_sec_size,
+                                node.first_SID, node.tot_size, name=node.name, seen_id=None)
+
+
+def _msg_text(document: Any, children: dict[str, int], prop: int) -> str:
+    for suffix, decode in (("001F", lambda raw: raw.decode("utf-16-le", errors="replace")),
+                           ("001E", _decode_text)):
+        did = children.get(f"__substg1.0_{prop:04X}{suffix}")
+        if did is not None:
+            return decode(_ole_stream(document, document.dirlist[did])).split("\0", 1)[0].strip()
+    return ""
+
+
+def _msg_properties(document: Any, did: int | None, *, header: int) -> dict[int, bytes]:
+    """Fixed-size property values (8 bytes each) keyed by property id."""
+    if did is None:
+        return {}
+    stream = _ole_stream(document, document.dirlist[did])
+    values = {}
+    for position in range(header, len(stream) - 15, 16):
+        tag = struct.unpack_from("<I", stream, position)[0]
+        values[tag >> 16] = stream[position + 8:position + 16]
+    return values
+
+
+def _filetime_iso(value: bytes | None) -> str | None:
+    if not value:
+        return None
+    ticks = struct.unpack("<Q", value)[0]
+    if not ticks:
+        return None
+    try:
+        return (datetime(1601, 1, 1) + timedelta(microseconds=ticks // 10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except OverflowError:
+        return None
+
+
+def _msg_body(document: Any, children: dict[str, int]) -> tuple[str, str]:
+    plain = _msg_text(document, children, 0x1000)
+    if plain:
+        return plain.replace("\r\n", "\n"), "text"
+    html_node = children.get("__substg1.0_10130102")
+    html = (_decode_text(_ole_stream(document, document.dirlist[html_node]))
+            if html_node is not None else _msg_text(document, children, 0x1013))
+    if html:
+        return _html_to_text(html), "html"
+    rtf_node = children.get("__substg1.0_10090102")
+    if rtf_node is not None:
+        rtf = _lzfu_decompress(_ole_stream(document, document.dirlist[rtf_node]))
+        text = _rtf_to_text(rtf)
+        if text and not _decoded_text_is_unreliable(text):
+            return text, "rtf"
+    return "", "none"
+
+
+class _HtmlText(HTMLParser):
+    _BLOCKS = frozenset({"p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table"})
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.skip = 0
+
+    def handle_starttag(self, tag: str, attrs: Any) -> None:
+        if tag in {"script", "style", "head"}:
+            self.skip += 1
+        elif tag in self._BLOCKS:
+            self.parts.append("\n\n" if tag in {"p", "div", "table"} else "\n")
+        elif tag in {"td", "th"}:
+            self.parts.append("\t")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style", "head"} and self.skip:
+            self.skip -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self.skip:
+            self.parts.append(data)
+
+
+def _html_to_text(html: str) -> str:
+    parser = _HtmlText()
+    parser.feed(html)
+    parser.close()
+    lines = (" ".join(line.split()) for line in "".join(parser.parts).splitlines())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+# MS-OXRTFCP: compressed RTF (Outlook PR_RTF_COMPRESSED) and its initial dictionary.
+_LZFU_DICTIONARY = (
+    b"{\\rtf1\\ansi\\mac\\deff0\\deftab720{\\fonttbl;}{\\f0\\fnil \\froman \\fswiss \\fmodern "
+    b"\\fscript \\fdecor MS Sans SerifSymbolArialTimes New RomanCourier{\\colortbl\\red0\\green0"
+    b"\\blue0\r\n\\par \\pard\\plain\\f0\\fs20\\b\\i\\u\\tab\\tx"
+)
+
+
+def _lzfu_decompress(data: bytes) -> bytes:
+    compressed_size, raw_size, magic = struct.unpack_from("<III", data, 0)
+    if magic == 0x414C454D:  # "MELA": stored uncompressed
+        return data[16:16 + raw_size]
+    if magic != 0x75465A4C:  # "LZFu"
+        raise ValueError("unknown compressed RTF")
+    window = bytearray(4096)
+    window[:len(_LZFU_DICTIONARY)] = _LZFU_DICTIONARY
+    write = len(_LZFU_DICTIONARY)
+    output = bytearray()
+    position, end = 16, min(len(data), compressed_size + 4)
+    while position < end and len(output) < raw_size:
+        flags = data[position]
+        position += 1
+        for bit in range(8):
+            if position >= end:
+                break
+            if flags & (1 << bit):
+                if position + 1 >= end:
+                    break
+                reference = (data[position] << 8) | data[position + 1]
+                position += 2
+                offset, length = reference >> 4, (reference & 0x0F) + 2
+                if offset == write:
+                    return bytes(output)
+                for step in range(length):
+                    char = window[(offset + step) % 4096]
+                    output.append(char)
+                    window[write] = char
+                    write = (write + 1) % 4096
+            else:
+                char = data[position]
+                position += 1
+                output.append(char)
+                window[write] = char
+                write = (write + 1) % 4096
+    return bytes(output[:raw_size])
+
+
+_DOC_STORIES = ("main", "footnote", "header", "macro", "comment", "endnote", "textbox", "header_textbox")
+
+
+def _ole_content(
+    data: bytes,
+    *,
+    declared_kind: str | None,
+    config: dict[str, Any],
+    max_bytes: int,
+    depth: int = 0,
+    budget: dict[str, int] | None = None,
+) -> _ParsedContent:
+    """Legacy Word/PowerPoint binaries and Outlook messages, dispatched by their streams."""
+    try:
+        from xlrd import compdoc
+    except ImportError:
+        return _ParsedContent(warnings=["attachment_document_ole_parser_unavailable"])
+    try:
+        document = compdoc.CompDoc(data, logfile=io.StringIO())
+        if "__properties_version1.0" in _ole_children(document, 0):
+            return _msg_content(document, max_bytes=max_bytes, config=config, depth=depth, budget=budget)
+        word = document.get_named_stream("WordDocument")
+        if word is not None:
+            stories = _doc_stories(word, document)
+            source_format = "doc"
+        else:
+            slides = document.get_named_stream("PowerPoint Document")
+            if slides is None:
+                return _ParsedContent(warnings=["attachment_document_ole_format_unsupported"])
+            stories = [("slide_text", text) for text in _ppt_texts(slides)]
+            source_format = "ppt"
+    except _DocEncrypted:
+        return _ParsedContent(warnings=["attachment_document_doc_encrypted"])
+    except (compdoc.CompDocError, *_PARSE_ERRORS):
+        return _ParsedContent(warnings=[f"attachment_document_{declared_kind or 'ole'}_parse_failed"])
+    max_blocks = _limit(config, "attachment_max_document_blocks", 10_000)
+    blocks: list[_TextBlock] = []
+    warnings = [f"{source_format}_page_locations_unavailable"]
+    for story, text in stories:
+        for paragraph in re.split(r"[\r\x0c]|\n\s*\n" if source_format == "doc" else r"\n\s*\n", text):
+            paragraph = paragraph.strip(" \t\n")
+            if not paragraph:
+                continue
+            if len(blocks) >= max_blocks:
+                return _ParsedContent(blocks=blocks, warnings=[
+                    *warnings, "attachment_document_block_limit_reached",
+                    "attachment_document_partial_text_coverage",
+                ])
+            index = len(blocks) + 1
+            blocks.append(_TextBlock(
+                observation_type="paragraph",
+                text=paragraph,
+                location={"block_index": index, "paragraph_index": index},
+                payload={"source_format": source_format, "story": story, "native_text": True},
+            ))
+    if not blocks:
+        return _ParsedContent(warnings=[f"attachment_document_{source_format}_text_empty"])
+    if _decoded_text_is_unreliable("\n".join(block.text for block in blocks)):
+        return _ParsedContent(warnings=[f"attachment_document_{source_format}_text_unreliable"])
+    return _ParsedContent(blocks=blocks, warnings=warnings)
+
+
+class _DocEncrypted(ValueError):
+    pass
+
+
+def _doc_stories(word: bytes, document: Any, *, max_chars: int = 2_000_000) -> list[tuple[str, str]]:
+    """Word 97-2003 text via the FIB and the piece table (CLX) in the table stream."""
+    if struct.unpack_from("<H", word, 0)[0] != 0xA5EC:
+        raise ValueError("not a Word 97+ document")
+    flags = struct.unpack_from("<H", word, 0x0A)[0]
+    if flags & 0x0100:
+        raise _DocEncrypted()
+    table = document.get_named_stream("1Table" if flags & 0x0200 else "0Table")
+    if table is None:
+        raise ValueError("missing table stream")
+    position = 32
+    position += 2 + 2 * struct.unpack_from("<H", word, position)[0]
+    long_count = struct.unpack_from("<H", word, position)[0]
+    longs = position + 2
+    position = longs + 4 * long_count
+    pair_count = struct.unpack_from("<H", word, position)[0]
+    if long_count < 11 or pair_count < 34:
+        raise ValueError("FIB too short")
+    story_lengths = struct.unpack_from("<8I", word, longs + 12)
+    clx_offset, clx_length = struct.unpack_from("<II", word, position + 2 + 33 * 8)
+    clx = table[clx_offset:clx_offset + clx_length]
+    if not clx_length or len(clx) != clx_length:
+        raise ValueError("bad CLX")
+    cursor = 0
+    while cursor < len(clx) and clx[cursor] == 0x01:
+        cursor += 3 + struct.unpack_from("<H", clx, cursor + 1)[0]
+    if cursor >= len(clx) or clx[cursor] != 0x02:
+        raise ValueError("missing piece table")
+    plc_length = struct.unpack_from("<I", clx, cursor + 1)[0]
+    plc = clx[cursor + 5:cursor + 5 + plc_length]
+    pieces = (plc_length - 4) // 12
+    if pieces <= 0 or 4 * (pieces + 1) + 8 * pieces != plc_length or len(plc) != plc_length:
+        raise ValueError("bad piece table")
+    positions = struct.unpack_from(f"<{pieces + 1}I", plc, 0)
+    text: list[str] = []
+    total = 0
+    for piece in range(pieces):
+        count = positions[piece + 1] - positions[piece]
+        offset = struct.unpack_from("<I", plc, 4 * (pieces + 1) + 8 * piece + 2)[0]
+        if count < 0:
+            raise ValueError("bad piece length")
+        if offset & 0x40000000:
+            start = (offset & 0x3FFFFFFF) // 2
+            raw = word[start:start + count]
+            decoded = raw.decode("cp1252", errors="replace")
+            expected = count
+        else:
+            raw = word[offset:offset + 2 * count]
+            decoded = raw.decode("utf-16-le", errors="replace")
+            expected = 2 * count
+        if len(raw) != expected:
+            raise ValueError("piece outside WordDocument stream")
+        text.append(decoded)
+        total += count
+        if total >= max_chars:
+            break
+    joined = "".join(text)
+    stories = []
+    start = 0
+    for name, length in zip(_DOC_STORIES, story_lengths):
+        if length and name != "macro":
+            stories.append((name, _doc_clean(joined[start:start + length])))
+        start += length
+    return stories
+
+
+def _doc_clean(text: str) -> str:
+    """Drop field codes (keep results) and map Word control characters."""
+    output: list[str] = []
+    fields: list[bool] = []  # True while inside a field's code part
+    for char in text:
+        if char == "\x13":
+            fields.append(True)
+        elif char == "\x14":
+            if fields:
+                fields[-1] = False
+        elif char == "\x15":
+            if fields:
+                fields.pop()
+        elif any(fields):
+            continue
+        elif char in "\r\x0c":
+            output.append("\r")
+        elif char == "\x0b":
+            output.append("\n")
+        elif char == "\x07":
+            output.append("\t")  # table cell/row end; layout is not reconstructed
+        elif char == "\x1e":
+            output.append("-")
+        elif ord(char) >= 32 or char == "\t":
+            output.append(char)
+    return "".join(output)
+
+
+def _ppt_texts(stream: bytes, *, max_chars: int = 2_000_000) -> list[str]:
+    """TextCharsAtom (UTF-16) and TextBytesAtom records, in stream order."""
+    texts: list[str] = []
+    total = 0
+    position = 0
+    while position + 8 <= len(stream) and total < max_chars:
+        version_instance, record_type, length = struct.unpack_from("<HHI", stream, position)
+        position += 8
+        if version_instance & 0x000F == 0x000F:
+            continue  # container: descend into its children
+        body = stream[position:position + length]
+        position += length
+        if record_type == 0x0FA0:
+            texts.append(body.decode("utf-16-le", errors="replace"))
+        elif record_type == 0x0FA8:
+            texts.append(body.decode("cp1252", errors="replace"))
+        else:
+            continue
+        total += len(texts[-1])
+    return [text.replace("\r", "\n").replace("\x0b", "\n") for text in texts if text.strip()]
+
+
+def _decode_text(data: bytes) -> str:
+    """UTF-8/UTF-16 (BOM) first, then the legacy CJK code pages common in this mail."""
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16")
+    error = None
+    for encoding in ("utf-8-sig", "cp950", "gb18030"):
+        try:
+            text = data.decode(encoding)
+        except UnicodeDecodeError as exc:
+            error = error or exc
+            continue
+        # A legacy code page can "decode" binary bytes; such output is not text.
+        if encoding == "utf-8-sig" or not _decoded_text_is_unreliable(text):
+            return text
+    raise error or UnicodeDecodeError(encoding, data, 0, len(data), "binary content")
+
+
 def _text_content(data: bytes, *, config: dict[str, Any]) -> _ParsedContent:
-    text = data.decode("utf-8-sig")
+    text = _decode_text(data)
     max_blocks = _limit(config, "attachment_max_document_blocks", 10_000)
     blocks: list[_TextBlock] = []
     for index, paragraph in enumerate(
@@ -846,7 +1708,7 @@ def _pptx_content_impl(data: bytes, *, max_bytes: int, config: dict[str, Any]) -
 
 def _delimited_table(data: bytes) -> _TableData | None:
     try:
-        text = data.decode("utf-8-sig")
+        text = _decode_text(data)
     except UnicodeDecodeError:
         # A binary attachment is not a malformed supported text table. Preserve
         # its governed child Asset and report unsupported content to the parent.
@@ -1137,7 +1999,7 @@ def _observations(
             merge_ranges,
         )
         for row_index, cells in rows:
-            location = {"table_index": table_index, "row_index": row_index}
+            location = {"table_index": table_index, "row_index": row_index, **table.location_extra}
             if sheet_name is not None:
                 location["sheet_name"] = redact_public_raw_references(sheet_name)[0]
             row_structure = _row_structure(

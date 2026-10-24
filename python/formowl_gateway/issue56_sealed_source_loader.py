@@ -1418,9 +1418,18 @@ def _mail_header_context(observation, item, parent, *, source, scope_id, attachm
             "parent_attachment_observation_id": attachment_parent.observation_id,
             "parent_attachment_observation_hash": sha256_json(attachment_parent.to_dict()),
         }
+        members = (observation.location or {}).get("container_members")
+        embedded = (observation.location or {}).get("embedded_message")
         item = {**item, "source_context": {
             "relationship": "attachment_parent", **attachment_context,
             "outer_header_status": "not_present_in_current_context",
+            # Evidence from a file inside an attached archive/message names its member chain.
+            **({"container_member_names": [str(member.get("name") or "") for member in members
+                                           if isinstance(member, Mapping)]}
+               if isinstance(members, list) and members else {}),
+            # An attached .msg/.eml carries its own sender, date and subject.
+            **({"embedded_message": {key: embedded.get(key) for key in ("sender", "sent_at", "subject")}}
+               if isinstance(embedded, Mapping) else {}),
         }}
         observation = attachment_parent
     else:
