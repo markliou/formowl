@@ -260,8 +260,8 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
                     extracted_value=observation.extracted_value,
                 ))
                 assert_no_public_raw_references(observation.to_dict())
-                self.assertEqual(AttachmentDocumentExtractor().version(), "0.7.0")
-                self.assertEqual(result.extractor_run.extractor_version, "0.7.0")
+                self.assertEqual(AttachmentDocumentExtractor().version(), "0.7.1")
+                self.assertEqual(result.extractor_run.extractor_version, "0.7.1")
 
     def test_pdf_reads_only_admitted_pages_once(self) -> None:
         pages = [Mock(), Mock()]
@@ -278,6 +278,53 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
         pages[0].extract_text.assert_called_once()
         pages[1].extract_text.assert_not_called()
         self.assertIn("attachment_document_page_limit_reached", result.warnings)
+
+    def test_pdf_with_broken_xref_is_read_leniently_and_says_so(self) -> None:
+        data = _pdf_bytes("Recovered text")
+        # A startxref pointing past the file: strict parsing rejects it, viewers rebuild the table.
+        broken = data[:data.rindex(b"startxref")] + b"startxref\n999999\n%%EOF\n"
+        result = self._extract(broken, mime_type="application/pdf", filename="broken.pdf")
+        self.assertFalse(result.errors)
+        self.assertIn("attachment_document_pdf_structure_repaired", result.warnings)
+        self.assertIn("Recovered text", [observation.text for observation in result.observations])
+
+    def test_pdf_with_broken_appended_update_falls_back_to_last_readable_revision(self) -> None:
+        import pypdf
+
+        original = _pdf_bytes("Original revision")
+        broken = original + b"9 0 obj\n<< /Annots [] >>\nendobj\ntrailer\n<</Size 10>>\nstartxref\n116\n%%EOF\n"
+        real_reader = pypdf.PdfReader
+
+        def reader(stream, strict):
+            if stream.getvalue() == broken:  # the update hides the catalog, as in the wild
+                raise pypdf.errors.PdfReadError("Cannot find Root object in pdf")
+            return real_reader(stream, strict=strict)
+
+        with patch("pypdf.PdfReader", side_effect=reader):
+            result = self._extract(broken, mime_type="application/pdf", filename="updated.pdf")
+        self.assertFalse(result.errors)
+        self.assertIn("Original revision", [observation.text for observation in result.observations])
+        self.assertIn("attachment_document_pdf_later_revision_unreadable", result.warnings)
+        self.assertIn("attachment_document_partial_native_text_coverage", result.warnings)
+        self.assertNotIn("attachment_document_pdf_structure_repaired", result.warnings)
+
+    def test_one_unreadable_pdf_page_keeps_the_others(self) -> None:
+        pages = [Mock(), Mock()]
+        pages[0].extract_text.side_effect = ValueError("bad content stream")
+        pages[1].extract_text.return_value = "Page two"
+        with patch("pypdf.PdfReader", return_value=Mock(pages=pages, is_encrypted=False)):
+            result = self._extract(b"%PDF-1.4", mime_type="application/pdf", filename="brief.pdf")
+        self.assertFalse(result.errors)
+        texts = [(o.text, o.location.get("page")) for o in result.observations if o.observation_type == "paragraph"]
+        self.assertEqual(texts, [("Page two", 2)])
+        self.assertIn("attachment_document_pdf_page_text_extract_failed", result.warnings)
+        self.assertIn("attachment_document_partial_native_text_coverage", result.warnings)
+        self.assertNotIn("attachment_document_pdf_ocr_required", result.warnings)
+
+        pages[1].extract_text.side_effect = ValueError("bad content stream")
+        with patch("pypdf.PdfReader", return_value=Mock(pages=pages, is_encrypted=False)):
+            result = self._extract(b"%PDF-1.4", mime_type="application/pdf", filename="brief.pdf")
+        self.assertEqual(result.errors, ["attachment_document_pdf_text_extract_failed"])
 
     def test_unsupported_binary_and_zip_expansion_are_explicit(self) -> None:
         unsupported = self._extract(

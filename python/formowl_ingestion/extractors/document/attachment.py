@@ -100,7 +100,7 @@ class AttachmentDocumentExtractor:
         return "attachment_document_parser"
 
     def version(self) -> str:
-        return "0.7.0"
+        return "0.7.1"
 
     def supported_mime_types(self) -> list[str]:
         # run_extractor uses this as a routing admission check for every child
@@ -1468,25 +1468,45 @@ def _pdf_content_impl(data: bytes, *, config: dict[str, Any]) -> _ParsedContent:
     except ImportError:
         return _ParsedContent(warnings=["attachment_document_pdf_parser_unavailable"])
     max_pages = _limit(config, "attachment_max_pages", 100)
+    warnings: list[str] = []
     try:
         reader = PdfReader(io.BytesIO(data), strict=True)
-    except Exception as exc:
-        raise _ParserLimit("attachment_document_pdf_parse_failed") from exc
+        len(reader.pages)  # parsing is lazy; resolve the catalog here
+    except Exception:
+        # Malformed-but-readable files (broken xref, stray bytes) open in every
+        # viewer; read them leniently and say so rather than dropping the file.
+        try:
+            reader = PdfReader(io.BytesIO(data), strict=False)
+            len(reader.pages)  # forces the document catalog to resolve
+            warnings.append("attachment_document_pdf_structure_repaired")
+        except Exception as exc:
+            reader = _pdf_earlier_revision(data, PdfReader)
+            if reader is None:
+                raise _ParserLimit("attachment_document_pdf_parse_failed") from exc
+            # A broken incremental update was appended; viewers show the last
+            # readable revision, and whatever the update added is not covered.
+            warnings.extend(["attachment_document_pdf_later_revision_unreadable",
+                             "attachment_document_partial_native_text_coverage"])
     if reader.is_encrypted:
         return _ParsedContent(warnings=["attachment_document_pdf_encrypted_unsupported"])
     pages = reader.pages
-    warnings: list[str] = []
     if len(pages) > max_pages:
         warnings.append("attachment_document_page_limit_reached")
     blocks: list[_TextBlock] = []
-    empty_pages = 0
+    empty_pages = failed_pages = 0
     admitted_pages = min(len(pages), max_pages)
     for page_index in range(1, admitted_pages + 1):
         page = pages[page_index - 1]
         try:
             text = page.extract_text() or ""
         except Exception as exc:
-            raise _ParserLimit("attachment_document_pdf_text_extract_failed") from exc
+            # One unreadable page must not discard the others; only a file with
+            # no readable page at all is a failed extraction.
+            failed_pages += 1
+            if failed_pages == admitted_pages:
+                raise _ParserLimit("attachment_document_pdf_text_extract_failed") from exc
+            warnings.append("attachment_document_pdf_page_text_extract_failed")
+            continue
         if text.strip():
             blocks.append(
                 _TextBlock(
@@ -1503,11 +1523,24 @@ def _pdf_content_impl(data: bytes, *, config: dict[str, Any]) -> _ParsedContent:
         else:
             empty_pages += 1
             warnings.append("attachment_document_pdf_page_text_unavailable")
-    if empty_pages == admitted_pages and admitted_pages:
+    if empty_pages and empty_pages + failed_pages == admitted_pages:
         warnings.append("attachment_document_pdf_ocr_required")
-    if len(pages) > max_pages or empty_pages:
+    if len(pages) > max_pages or empty_pages or failed_pages:
         warnings.append("attachment_document_partial_native_text_coverage")
     return _ParsedContent(blocks=blocks, warnings=_unique(warnings))
+
+
+def _pdf_earlier_revision(data: bytes, reader_type: Any) -> Any:
+    """Newest earlier revision (cut at a previous ``%%EOF``) that opens, or None."""
+    end = data.rstrip().rfind(b"%%EOF")
+    while (end := data.rfind(b"%%EOF", 0, end)) > 0:
+        try:
+            reader = reader_type(io.BytesIO(data[:end + 5]), strict=False)
+            len(reader.pages)  # forces the document catalog to resolve
+            return reader
+        except Exception:
+            continue
+    return None
 
 
 def _docx_content(data: bytes, *, max_bytes: int, config: dict[str, Any]) -> _ParsedContent:
