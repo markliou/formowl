@@ -9,6 +9,7 @@ import struct
 import sys
 import tarfile
 import unittest
+from unittest import mock
 from zipfile import ZipFile, ZipInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
@@ -238,6 +239,15 @@ class ArchiveExpansionTests(unittest.TestCase):
         self.assertEqual(len(_members(parsed)), 3)
         self.assertIn("attachment_container_member_limit_reached", parsed.warnings)
 
+    def test_gzip_is_not_inflated_once_the_shared_budget_is_spent(self):
+        buffer = io.BytesIO()
+        with gzip.GzipFile(filename="values.txt", mode="wb", fileobj=buffer, mtime=0) as stream:
+            stream.write(b"y" * 3000)
+        with mock.patch.object(gzip.GzipFile, "read", side_effect=AssertionError("inflated")):
+            parsed = _parse_content(buffer.getvalue(), kind="gzip", declared_kind="gzip", max_bytes=_MB,
+                                    config={}, archive_budget={"bytes": 0, "members": 5})
+        self.assertEqual(_members(parsed), {"values.txt": "expansion_limit"})
+
     def test_unsupported_compression_method_fails_only_that_member(self):
         data = bytearray(_zip({"odd.txt": b"x", "fine.txt": b"fine"}))
         for marker in (b"PK\x03\x04", b"PK\x01\x02"):  # set odd.txt's method to Deflate64 (9)
@@ -395,10 +405,12 @@ class OutlookMessageTests(unittest.TestCase):
         body = b"\0" + literal[:8] + bytes([1 << 4]) + literal[8:]
         body += struct.pack(">H", ((207 + len(literal)) % 4096) << 4)  # end marker
         compressed = struct.pack("<IIII", len(body) + 12, len(literal), 0x75465A4C, 0) + body
-        self.assertEqual(_lzfu_decompress(compressed), literal)
+        self.assertEqual(_lzfu_decompress(compressed, limit=4096), literal)
+        with self.assertRaises(OverflowError):
+            _lzfu_decompress(compressed, limit=len(literal) - 1)
         reference = b"\x01" + struct.pack(">H", 4) + b"\x01" + struct.pack(">H", (207 + 6) << 4)
         packed = struct.pack("<IIII", len(reference) + 12, 6, 0x75465A4C, 0) + reference
-        self.assertEqual(_lzfu_decompress(packed), b"{\\rtf1")
+        self.assertEqual(_lzfu_decompress(packed, limit=4096), b"{\\rtf1")
         rtf = b"{\\rtf1\\ansi RTF only body.\\par}"
         stored = struct.pack("<IIII", len(rtf) + 12, len(rtf), 0x414C454D, 0) + rtf
         message = _cfb({"__properties_version1.0": b"\0" * 32, "__substg1.0_10090102": stored})
@@ -408,6 +420,11 @@ class OutlookMessageTests(unittest.TestCase):
         self.assertEqual(body.text, "RTF only body.")
         self.assertEqual(body.payload["body_format"], "rtf")
         self.assertEqual(body.location["container_members"][0]["name"], "note.msg")
+        oversized = struct.pack("<IIII", len(rtf) + 12, 1 << 30, 0x414C454D, 0) + rtf
+        message = _cfb({"__properties_version1.0": b"\0" * 32, "__substg1.0_10090102": oversized})
+        parsed = _parse(message, "big.msg")
+        self.assertIn("msg_body_byte_limit", parsed.warnings)
+        self.assertIn("attachment_document_partial_text_coverage", parsed.warnings)
 
 
 class EmlMessageTests(unittest.TestCase):
