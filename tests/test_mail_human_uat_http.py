@@ -122,10 +122,12 @@ class MailHumanUatHttpTests(unittest.TestCase):
                 arguments, tool_descriptor=descriptor, request_contract_binder=binder,
             )
 
+        selection_trace = {}
         fallback_arguments = _annotation_source_fallback_arguments(
             arguments,
             request_contract_binder=binder,
             rejection_code="field_term_role_overlap",
+            selection_trace=selection_trace,
         )
         self.assertIsNotNone(fallback_arguments)
         request = _parse_tool_request(
@@ -136,6 +138,10 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(request.reviewed_annotation_ids, ())
         self.assertEqual(request.required_terms, ("kestrel",))
         self.assertEqual(request.request_contract["requested_fields"], ["交期"])
+        self.assertEqual(selection_trace, {
+            "fallback_selection_level": "non_overlapping_terms",
+            "fallback_term_hash_count": 1,
+        })
 
         source_calls = []
 
@@ -146,6 +152,73 @@ class MailHumanUatHttpTests(unittest.TestCase):
         source_result = source_lookup(request)
         self.assertEqual(len(source_calls), 1)
         self.assertEqual(source_result["citations"][0]["citation_id"], "mail-source-1")
+
+    def test_field_overlap_fallback_uses_reviewed_identity_terms_when_no_terms_remain(self) -> None:
+        prompt = "請查詢 Kestrel 標籤機專案的最新進度"
+        catalog = {"entries": [{"annotation_id": "candidate-1", "target": "Kestrel",
+                                "identity_bindings": []}]}
+        catalog["catalog_pin"] = sha256_json(catalog)
+        binder = _UatTurnRequestContractBinder(
+            user_text=prompt,
+            authorized_capability_summary={
+                "source_families": ["mail"], "reviewed_annotation_catalog": catalog,
+            },
+        )
+        arguments = {
+            "query_text": "查詢 Kestrel 標籤機專案的最新進度",
+            "required_terms": ["最新進度"],
+            "reviewed_annotation_ids": ["candidate-1"],
+            "request_contract": {
+                "original_query_hash": "sha256:" + hashlib.sha256(prompt.encode()).hexdigest(),
+                "query_class": "evidence_lookup", "source_family_scope": ["mail"],
+                "requested_fields": ["最新進度"], "maximum_claim_strength": "cited_evidence",
+            },
+        }
+        selection_trace = {}
+        fallback = _annotation_source_fallback_arguments(
+            arguments, request_contract_binder=binder,
+            rejection_code="field_term_role_overlap", selection_trace=selection_trace,
+        )
+        request = _parse_tool_request(
+            fallback, tool_descriptor=_actual_query_tool_descriptor(),
+            request_contract_binder=binder,
+        )
+
+        self.assertEqual(request.required_terms, ("kestrel",))
+        self.assertEqual(request.reviewed_annotation_ids, ())
+        self.assertEqual(selection_trace, {
+            "fallback_selection_level": "reviewed_identity_terms",
+            "fallback_term_hash_count": 1,
+        })
+
+    def test_field_overlap_fallback_without_grounded_identity_records_none_tier(self) -> None:
+        prompt = "請查詢資料的進度"
+        binder = _UatTurnRequestContractBinder(
+            user_text=prompt, authorized_capability_summary={"source_families": ["mail"]},
+        )
+        arguments = {
+            "query_text": prompt, "required_terms": ["進度"],
+            "reviewed_annotation_ids": ["candidate-1"],
+            "request_contract": {
+                "original_query_hash": "sha256:" + hashlib.sha256(prompt.encode()).hexdigest(),
+                "query_class": "evidence_lookup", "source_family_scope": ["mail"],
+                "requested_fields": ["進度"], "maximum_claim_strength": "cited_evidence",
+            },
+        }
+        selection_trace = {}
+        fallback = _annotation_source_fallback_arguments(
+            arguments, request_contract_binder=binder,
+            rejection_code="field_term_role_overlap", selection_trace=selection_trace,
+        )
+        request = _parse_tool_request(
+            fallback, tool_descriptor=_actual_query_tool_descriptor(),
+            request_contract_binder=binder,
+        )
+
+        self.assertIsNone(request.required_terms)
+        self.assertEqual(selection_trace, {
+            "fallback_selection_level": "none", "fallback_term_hash_count": 0,
+        })
 
     def test_unavailable_annotation_nomination_still_allows_source_lookup(self) -> None:
         prompt = "請查詢 Kestrel 的交期"

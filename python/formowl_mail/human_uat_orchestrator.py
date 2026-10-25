@@ -6766,10 +6766,12 @@ class CodexResponsesConversationModel:
                                 tool_attempt=formowl_attempts,
                             )
                             _record_private_citation_stage(rejection)
+                            fallback_selection_trace: dict[str, Any] = {}
                             fallback_arguments = _annotation_source_fallback_arguments(
                                 parsed_arguments,
                                 request_contract_binder=request_contract_binder,
                                 rejection_code=rejection["rejection_code"],
+                                selection_trace=fallback_selection_trace,
                             )
                             fallback_request = None
                             if fallback_arguments is not None:
@@ -6790,6 +6792,7 @@ class CodexResponsesConversationModel:
                                     "nominated_count": len(parsed_arguments.get("reviewed_annotation_ids", ())),
                                     "selected_count": 0,
                                     "source_fallback": True,
+                                    **fallback_selection_trace,
                                     "query_hash": "sha256:" + hashlib.sha256(
                                         fallback_request.query_text.encode("utf-8")
                                     ).hexdigest(),
@@ -8572,6 +8575,7 @@ def _annotation_source_fallback_arguments(
     *,
     request_contract_binder: _UatTurnRequestContractBinder,
     rejection_code: str,
+    selection_trace: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Drop only a rejected optional nomination and its miscast output terms.
 
@@ -8610,6 +8614,8 @@ def _annotation_source_fallback_arguments(
         or not isinstance(candidate_terms, list)
     ):
         return None
+    selection_level = "none"
+    selected_terms: list[str] = []
     if (
         isinstance(contract, Mapping)
         and contract.get("query_class") == "evidence_lookup"
@@ -8633,9 +8639,49 @@ def _annotation_source_fallback_arguments(
             and unicodedata.normalize("NFKC", term.strip()).casefold() not in overlapping
         ]
         if retained:
-            fallback["required_terms"] = retained
-        elif overlapping:
-            fallback.pop("required_terms", None)
+            selected_terms = retained
+            selection_level = "non_overlapping_terms"
+    if not selected_terms and isinstance(contract, Mapping) and contract.get("query_class") == "evidence_lookup":
+        from .issue56_sealed_source import _partial_reviewed_identity_terms
+
+        catalog = request_contract_binder._annotation_catalog
+        entries = catalog.get("entries", ()) if isinstance(catalog, Mapping) else ()
+        reviewed_terms = _partial_reviewed_identity_terms(
+            entries if isinstance(entries, (list, tuple)) else (),
+            request_contract_binder._annotation_original_text,
+        )
+        protected_terms = protected_reference_identifiers(
+            request_contract_binder._annotation_original_text,
+        )
+        identity_terms = {
+            unicodedata.normalize("NFKC", term.strip()).casefold()
+            for term in (*reviewed_terms, *protected_terms)
+            if isinstance(term, str) and term.strip() and len(term) <= 80
+        }
+        identity_terms.difference_update(
+            _required_terms_overlapping_output_fields(
+                request_contract_binder._normalized_user_text,
+                tuple(sorted(identity_terms)),
+                {
+                    unicodedata.normalize("NFKC", field.strip()).casefold()
+                    for field in contract.get("requested_fields", ())
+                    if isinstance(field, str)
+                },
+                anchor=(request_contract_binder._reference_binding or {}).get("identifier"),
+            )
+        )
+        if 0 < len(identity_terms) <= 8:
+            selected_terms = sorted(identity_terms)
+            selection_level = "reviewed_identity_terms"
+    if selected_terms:
+        fallback["required_terms"] = selected_terms
+    else:
+        fallback.pop("required_terms", None)
+    if selection_trace is not None:
+        selection_trace.update({
+            "fallback_selection_level": selection_level,
+            "fallback_term_hash_count": len(selected_terms),
+        })
     return fallback
 
 

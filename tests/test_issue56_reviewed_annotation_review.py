@@ -100,9 +100,13 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
         ]
         with mock.patch.object(sealed_source, "load_issue56_target_mail_tokenizer_profile",
                                return_value=FrozenProfileFixture()):
+            matched_terms = sealed_source._partial_reviewed_identity_terms(
+                entries, "Kestrel 標籤機專案 4500",
+            )
             eligible, anchor, status = sealed_source._reviewed_annotation_scope(
                 entries, user_text="Kestrel 標籤機專案 4500")
         self.assertEqual(eligible, {"atom_latin", "atom_cjk"})
+        self.assertEqual(set(matched_terms), {"kestrel", "標籤", "籤機"})
         self.assertIsNone(anchor)
         self.assertEqual(status, "partial_identity")
         annotations = [

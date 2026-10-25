@@ -1168,8 +1168,9 @@ def _reviewed_identity_matches(term, descriptor):
         for field, native in bind_typed_identifier_to_source_schema(term, [kind])})
 
 
-def _partial_reviewed_identity_candidates(entries, user_text):
-    """Find bounded partial candidates; these terms can never become anchors."""
+def _partial_reviewed_identity_terms(entries, user_text):
+    """Return complete query terms found in reviewed labels, never identity anchors."""
+    entries = tuple(entries)
     profile = load_issue56_target_mail_tokenizer_profile()
     query_terms = set()
     for token in profile.analyze(user_text).tokens:
@@ -1177,9 +1178,38 @@ def _partial_reviewed_identity_candidates(entries, user_text):
         if re.fullmatch(r"[a-z]{3,}", normalized) or re.fullmatch(r"[\u3400-\u9fff]{2,}", normalized):
             query_terms.add(normalized)
     if not query_terms:
-        return set()
+        return ()
     patterns = [re.compile(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])")
                 for term in sorted(query_terms, key=lambda value: (-len(value), value))]
+    surfaces = []
+    for entry in entries:
+        surfaces.append(entry["target"])
+        for binding in entry.get("identity_bindings", ()):
+            for key in ("type_surface", "value_surface"):
+                value = binding.get(key)
+                if value:
+                    surfaces.append(value)
+    normalized_surfaces = tuple(
+        unicodedata.normalize("NFKC", surface).casefold()
+        for surface in surfaces if isinstance(surface, str)
+    )
+    matches = tuple(
+        term for term, pattern in zip(
+            sorted(query_terms, key=lambda value: (-len(value), value)), patterns,
+        )
+        if any(pattern.search(surface) for surface in normalized_surfaces)
+    )
+    return matches if len(matches) <= 128 else ()
+
+
+def _partial_reviewed_identity_candidates(entries, user_text):
+    """Find bounded partial candidates; these terms can never become anchors."""
+    entries = tuple(entries)
+    terms = _partial_reviewed_identity_terms(entries, user_text)
+    if not terms:
+        return set()
+    patterns = [re.compile(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])")
+                for term in terms]
     eligible = set()
     for entry in entries:
         surfaces = [entry["target"]]
