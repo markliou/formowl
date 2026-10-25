@@ -32,6 +32,9 @@ def _record(**overrides) -> dict:
 
 
 class ReviewedAnnotationReviewTests(unittest.TestCase):
+    def test_missing_serving_lookup_fails_closed(self) -> None:
+        self.assertNotIn("obs_review", review.ServedReferences(None))
+
     def test_policy_approves_only_validated_atoms_that_name_a_target(self) -> None:
         temp_dir = _paths.fresh_test_dir("reviewed-annotation-review")
         observation = Observation(

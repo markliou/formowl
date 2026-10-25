@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import io
 import json
+from copy import deepcopy
 import unittest
 from unittest import mock
 
 import _paths
-from formowl_contract import ContractValidationError, Observation, sha256_json
+from formowl_contract import CandidateAtom, ContractValidationError, Observation, sha256_json
 from formowl_graph.candidates import read_and_store_source_unit
 from formowl_graph.local_semantic_reader import LocalOllamaReader
 from formowl_graph.reconciliation import GroupMember, build_groups, reconcile_group
@@ -64,11 +65,54 @@ class ReconciliationTests(unittest.TestCase):
                                semantic_metadata_store=SemanticMetadataStore(self.temp_dir),
                                candidate_relation_store=CandidateRelationStore(self.temp_dir))
 
+    def _with_item_scope(self, member: GroupMember, item_or_row: str) -> GroupMember:
+        atom = member.atom.to_dict()
+        atom["properties"] = deepcopy(atom["properties"])
+        atom["properties"]["assertion"]["item_or_row"] = item_or_row
+        return GroupMember(
+            CandidateAtom.from_dict(atom), member.message_key, member.message_time,
+            member.context, member.observations,
+        )
+
     def test_groups_need_the_same_target_and_property_across_messages(self) -> None:
         same_message = GroupMember(self.old.atom, "mailocc_new", None)
         self.assertEqual(len(build_groups([self.old, self.new])), 1)
         self.assertEqual(build_groups([self.old]), [])
         self.assertEqual(build_groups([same_message, self.new]), [])
+
+    def test_groups_keep_different_item_rows_separate(self) -> None:
+        scoped = self._with_item_scope(self.new, "row-2")
+        groups = build_groups([self.old, self.new, scoped])
+        self.assertEqual(len(groups), 1)
+        self.assertEqual({member.atom.candidate_atom_id for member in groups[0]},
+                         {self.old.atom.candidate_atom_id, self.new.atom.candidate_atom_id})
+
+    def test_groups_keep_different_parent_group_item_bindings_separate(self) -> None:
+        for role in ("parent", "group", "item"):
+            with self.subTest(role=role):
+                atom = self.new.atom.to_dict()
+                atom["properties"] = deepcopy(atom["properties"])
+                atom["properties"]["identity_bindings"].append({
+                    "scope_role": role, "type_surface": "order", "value_surface": "scope-2",
+                    "evidence_spans": [],
+                })
+                scoped = GroupMember(CandidateAtom.from_dict(atom), self.new.message_key,
+                                     self.new.message_time, self.new.context, self.new.observations)
+                self.assertEqual(build_groups([self.old, scoped]), [])
+
+    def test_relation_crossing_item_scope_fails_the_group(self) -> None:
+        scoped = self._with_item_scope(self.new, "row-2")
+        reader = mock.Mock()
+        reader.complete_json.return_value = (
+            {"relations": [{"source": 1, "target": 0, "relation_type": "updates",
+                             "confidence": 0.8,
+                             "evidence": [{"observation_id": "obs_new", "quote": "交期改為 1/27"}]}]},
+            {"requested_model": "m", "observed_model": "m", "request_fingerprint": sha256_json({"r": 1})},
+        )
+        with self.assertRaisesRegex(ContractValidationError, "reconciliation relation crosses scope"):
+            reconcile_group([self.old, scoped], reader=reader, extractor_run_id="recon_scope_bad",
+                            model_name="m", semantic_metadata_store=SemanticMetadataStore(self.temp_dir),
+                            candidate_relation_store=CandidateRelationStore(self.temp_dir))
 
     def test_update_quoted_from_the_later_source_becomes_a_pending_relation(self) -> None:
         result = self._run([{"source": 1, "target": 0, "relation_type": "updates", "confidence": 0.8,

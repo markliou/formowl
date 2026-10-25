@@ -100,7 +100,7 @@ class AttachmentDocumentExtractor:
         return "attachment_document_parser"
 
     def version(self) -> str:
-        return "0.7.2"
+        return "0.7.3"
 
     def supported_mime_types(self) -> list[str]:
         # run_extractor uses this as a routing admission check for every child
@@ -605,11 +605,15 @@ def _add_member(
     parsed = _ParsedContent()
     if parse is not None:
         member_kind = "msg"
-        try:
-            parsed = parse()
-            status = _member_status(parsed)
-        except _PARSE_ERRORS:
-            parsed, status = _ParsedContent(), "parse_failed"
+        if budget["bytes"] <= 0:
+            status = "expansion_limit"
+        else:
+            try:
+                parsed = parse()
+                budget["bytes"] = max(0, budget["bytes"] - _unbilled_parsed_text_bytes(parsed))
+                status = _member_status(parsed)
+            except _PARSE_ERRORS:
+                parsed, status = _ParsedContent(), "parse_failed"
     elif encrypted:
         status = "encrypted"
     elif size is not None and size > max_bytes:
@@ -626,7 +630,7 @@ def _add_member(
         elif len(content) > max_bytes:
             status = "byte_limit"
         else:
-            budget["bytes"] -= len(content)
+            budget["bytes"] = max(0, budget["bytes"] - len(content))
             member.update(
                 content_hash="sha256:" + hashlib.sha256(content).hexdigest(),
                 size_bytes=len(content),
@@ -670,6 +674,23 @@ def _add_member(
     result.blocks.extend(parsed.blocks)
     result.warnings.extend(parsed.warnings)
     return True
+
+
+def _unbilled_parsed_text_bytes(parsed: _ParsedContent) -> int:
+    """Count emitted text except MSG bodies and nested members already charged while parsing."""
+    block_bytes = sum(
+        len(block.text.encode("utf-8"))
+        for block in parsed.blocks
+        if "container_members" not in block.location and "body_format" not in block.payload
+    )
+    table_bytes = sum(
+        len(value.encode("utf-8"))
+        for table in parsed.tables
+        if "container_members" not in table.location_extra
+        for _row_index, cells in table.rows
+        for _cell_index, value in cells
+    )
+    return block_bytes + table_bytes
 
 
 def _member_status(parsed: _ParsedContent) -> str:
@@ -813,7 +834,7 @@ def _msg_content(
             payload={"source_format": "msg", "span_role": "message_header", "native_text": True},
         ))
     body, body_format = _msg_body(document, children, limit=min(max_bytes, budget["bytes"]))
-    budget["bytes"] -= len(body.encode("utf-8"))
+    budget["bytes"] = max(0, budget["bytes"] - len(body.encode("utf-8")))
     if body_format == "rtf_byte_limit":
         result.warnings.extend(["msg_body_byte_limit", "attachment_document_partial_text_coverage"])
     max_blocks = _limit(config, "attachment_max_document_blocks", 10_000)

@@ -3453,17 +3453,27 @@ def _provider_transport_cause_diagnostic(exception: Exception) -> dict[str, Any]
 def _codex_native_request(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Only fields a native Codex request carries (codex-pool rejects the rest).
 
-    Codex never caps output length and never forces a tool choice. A forbidden
-    tool phase ("none") is kept by offering no tools; a forced tool ("required" or a
-    named function) becomes that tool alone under the model's own choice.
+    Codex never caps output length and does not accept a non-``auto`` tool choice
+    on the wire. A forbidden tool phase ("none") is kept by offering no tools;
+    required and named phases retain the permitted tools and append an instruction
+    to the request instructions. The existing response validation remains the
+    fail-closed gate.
     """
     request = {key: value for key, value in payload.items() if key not in {"max_output_tokens", "tool_choice"}}
     choice = payload.get("tool_choice")
     if choice == "none":
         for key in ("tools", "parallel_tool_calls"):
             request.pop(key, None)
-    elif isinstance(choice, Mapping) and choice.get("name"):
-        request["tools"] = [tool for tool in payload.get("tools", ()) if tool.get("name") == choice["name"]]
+    elif choice == "required" or (isinstance(choice, Mapping) and choice.get("name")):
+        if choice == "required":
+            instruction = "This step requires calling exactly one of the provided tools before answering."
+        else:
+            name = str(choice["name"])
+            request["tools"] = [tool for tool in payload.get("tools", ()) if tool.get("name") == name]
+            instruction = f"This step requires calling exactly the {name} tool before answering."
+        # Instructions, not input: the conversation journal requires each turn's
+        # input to extend the previous one, while instructions are per request.
+        request["instructions"] = f"{request.get('instructions') or ''}\n\n{instruction}".strip()
     return request
 
 
