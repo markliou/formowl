@@ -43,7 +43,7 @@ from formowl_core import (
     load_issue56_target_runtime_components,
 )
 from formowl_graph import EffectiveGraphView
-from formowl_graph.storage import CandidateAtomStore, SemanticMetadataStore
+from formowl_graph.storage import CandidateAtomStore, CandidateRelationStore, SemanticMetadataStore
 from formowl_ingestion.storage import (
     AssetStore,
     ExtractorRunStore,
@@ -231,6 +231,9 @@ class Issue56IngestionRevision:
     source_records: Any | None = field(default=None, repr=False, compare=False)
     authorized_source: Any | None = field(default=None, repr=False, compare=False)
     reviewed_source_annotations: tuple[Mapping[str, Any], ...] = field(default=(), repr=False)
+    # Reviewed cross-unit relations between reviewed annotations (updates,
+    # supersedes, contradicts, ...); empty unless relation receipts are bound.
+    reviewed_source_relations: tuple[Mapping[str, Any], ...] = field(default=(), repr=False)
     reviewed_annotation_pin: str | None = None
     # SPEC §7.5 reviewed header validation: approved per-table header bindings
     # and the label-level exact column hashes they make applicable. Empty by
@@ -865,13 +868,75 @@ def bind_issue56_reviewed_annotations(
             # A target-only legacy receipt never approves additional bindings.
             "identity_bindings": tuple(bindings[key] for key in approved)}))
         seen.add(candidate_id)
+    relations, relation_hashes = _bind_reviewed_relations(config, revision, store_root, seen)
     pin = sha256_json({"configuration_sha256": expected_sha256, **(
         {"review_receipt_sha256": page_hashes[0]} if "review_receipt_pages" not in config
-        else {"review_receipt_page_sha256s": page_hashes})})
+        else {"review_receipt_page_sha256s": page_hashes}),
+        **({"relation_receipt_page_sha256s": relation_hashes} if relation_hashes else {})})
     return replace(revision, reviewed_source_annotations=tuple(selected), reviewed_annotation_pin=pin,
+                   reviewed_source_relations=relations,
                    safe_binding=MappingProxyType({**revision.safe_binding, "reviewed_annotation_pin": pin,
                        **({"reviewed_annotation_page_count": len(pages)} if "review_receipt_pages" in config else {})}))
 
+
+
+RELATION_RECEIPT_ARTIFACT_ID = "formowl_uat_relation_review_receipt_v1"
+REVIEWED_RELATION_TYPES = frozenset({"same_fact", "updates", "supersedes", "contradicts", "refines"})
+
+
+def _bind_reviewed_relations(config, revision, store_root: Path, reviewed_atom_ids):
+    """Optional relation receipts: both endpoints must be reviewed atoms of this same binding."""
+    pages = config.get("relation_receipt_pages")
+    if pages is None:
+        return (), []
+    if not isinstance(pages, list) or not pages or not (store_root / "graph" / "candidate-relations").is_dir():
+        raise ContractValidationError("UAT relation receipt pages are invalid")
+    relations_store, ledgers = CandidateRelationStore(store_root), SemanticMetadataStore(store_root)
+    selected, seen, page_hashes = [], set(), []
+    for page in pages:
+        if not isinstance(page, dict) or set(page) != {"review_receipt_path", "review_receipt_sha256"}:
+            raise ContractValidationError("UAT relation receipt page is invalid")
+        _, receipt = _read_sealed_json(Path(page["review_receipt_path"]),
+            expected_sha256=page["review_receipt_sha256"], maximum_bytes=_MAX_SAFE_BYTES,
+            reason_prefix="uat_relation_review")
+        if (receipt.get("artifact_id") != RELATION_RECEIPT_ARTIFACT_ID
+                or receipt.get("reviewer_user_id") != APPROVER_ACTOR
+                or receipt.get("decision") != "approve_for_uat_source_selection"
+                or any(receipt.get(key) != revision.safe_binding[key] for key in (
+                    "source_revision_sha256", "source_authority_fingerprint", "source_session_binding_fingerprint"))):
+            raise ContractValidationError("UAT relation review authority is invalid")
+        rows = receipt.get("entries")
+        if not isinstance(rows, list) or not 1 <= len(rows) <= 128:
+            raise ContractValidationError("UAT reviewed relation count is invalid")
+        for entry in rows:
+            relation_id = entry.get("candidate_relation_id")
+            relation = relations_store.get(relation_id) if isinstance(relation_id, str) else None
+            ledger = ledgers.get(entry.get("semantic_metadata_id", ""))
+            if (relation is None or ledger is None or relation_id in seen
+                    or sha256_json(relation.to_dict()) != entry.get("candidate_relation_sha256")
+                    or sha256_json(ledger.to_dict()) != entry.get("semantic_metadata_sha256")
+                    or ledger.metadata_type != "cross_unit_reconciliation"
+                    or ledger.value.get("reconciliation_status") != "reconciled"
+                    or ledger.value.get("relation_hashes", {}).get(relation_id) != entry["candidate_relation_sha256"]
+                    or relation.source_semantic_metadata_ids != [ledger.semantic_metadata_id]
+                    or relation.status not in {"pending_review", "approved"}
+                    or relation.relation_type not in REVIEWED_RELATION_TYPES
+                    or relation.source_candidate_atom_id not in reviewed_atom_ids
+                    or relation.target_candidate_atom_id not in reviewed_atom_ids):
+                raise ContractValidationError("UAT reviewed relation/ledger pin mismatch")
+            spans = relation.properties.get("evidence_spans", ())
+            if any(revision.source_records.observation_hash(span["observation_id"]) != span["observation_hash"]
+                   for span in spans):
+                raise ContractValidationError("UAT reviewed relation source Observation changed")
+            selected.append(MappingProxyType({
+                "candidate_relation_id": relation_id, "relation_type": relation.relation_type,
+                "source_candidate_atom_id": relation.source_candidate_atom_id,
+                "target_candidate_atom_id": relation.target_candidate_atom_id,
+                "evidence_hashes": tuple(dict.fromkeys(span["observation_hash"] for span in spans)),
+                "evidence_observation_ids": tuple(dict.fromkeys(span["observation_id"] for span in spans))}))
+            seen.add(relation_id)
+        page_hashes.append(page["review_receipt_sha256"])
+    return tuple(selected), page_hashes
 
 
 REVIEWED_HEADER_CONFIG_ARTIFACT_ID = "formowl_reviewed_header_validation_v1"
@@ -1011,12 +1076,15 @@ def issue56_reviewed_annotation_catalog(
                        "identity_bindings": item["identity_bindings"]} for item in items]
         eligible, _, view_status = _reviewed_annotation_scope(navigation, user_text=user_text)
         items = tuple(item for item in items if item["candidate_atom_id"] in eligible)
+    relation_index = reviewed_relation_index(revision)
     entries, omitted, redacted_labels = [], 0, 0
     for item in items:
         # A display-label projection must not rewrite a reviewed identity. If
         # that exact target cannot be public, omit the nomination instead.
         entry = {"annotation_id": item["candidate_atom_id"], "target": item["target"],
                  "time_roles": list(item["time_roles"])}
+        if relation_index.get(item["candidate_atom_id"]):
+            entry["relations"] = relation_index[item["candidate_atom_id"]]
         if item.get("identity_bindings"):
             entry["identity_bindings"] = [{key: binding.get(key) for key in (
                 "scope_role", "type_surface", "value_surface")} for binding in item["identity_bindings"]]
@@ -1065,6 +1133,17 @@ def issue56_reviewed_annotation_catalog(
             raise ContractValidationError("UAT reviewed annotation catalog exceeds context bound")
     assert_no_public_raw_references(catalog, "reviewed_annotation_catalog")
     return catalog
+
+
+def reviewed_relation_index(revision) -> dict[str, list[dict[str, str]]]:
+    """Per reviewed atom: its reviewed relations as ids and types only (public metadata)."""
+    index: dict[str, list[dict[str, str]]] = {}
+    for relation in revision.reviewed_source_relations:
+        for role, own, other in (("source", "source_candidate_atom_id", "target_candidate_atom_id"),
+                                 ("target", "target_candidate_atom_id", "source_candidate_atom_id")):
+            index.setdefault(relation[own], []).append({"relation_type": relation["relation_type"], "role": role,
+                                                        "other_annotation_id": relation[other]})
+    return index
 
 
 def _reviewed_identity_descriptors(entries):
