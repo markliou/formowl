@@ -115,6 +115,20 @@ class ResponsesWebSocketTests(unittest.TestCase):
         self.assertEqual((server.request["model"], server.request["reasoning"]), ("gpt-5.6-luna", {"effort": "low"}))
         self.assertTrue(server.pong)
 
+    def test_fields_codex_does_not_send_are_omitted(self) -> None:
+        import urllib.request
+
+        server = _Server([_completed('{"ok":true}')])
+        model = CodexResponsesConversationModel(base_url=f"http://127.0.0.1:{server.port}/v1", api_key="k",
+                                                websocket=True)
+        request = urllib.request.Request(model._responses_url, headers={"Authorization": "Bearer k"})
+        parsed, _, status, _ = model._websocket_round_trip(
+            request, {"model": "m", "stream": True, "safety_identifier": "uat-user", "input": []},
+            deadline=__import__("time").monotonic() + 10, timeout_seconds=10, request_shape=None)
+        server.thread.join(timeout=5)
+        self.assertEqual((parsed["status"], status), ("completed", 200))
+        self.assertEqual(server.request, {"type": "response.create", "model": "m", "input": []})
+
     def test_error_event_and_rejected_upgrade_are_provider_failures(self) -> None:
         with self.assertRaises(_UatProviderFailure) as error:
             self._read(_Server([{"type": "error", "error": {"message": "bad request"}}]))
