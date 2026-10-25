@@ -98,8 +98,9 @@ secrets. An unpinned resume is permitted when explicit pinning is unavailable,
 provided its actual configuration is marked unverified and the work remains
 within the bounded assignment.
 
-**2026-10-15 UAT authorization:** the requested UAT model is `gpt-6-luna`
-with `reasoning_effort=high`. Runtime/provider support, observed model identity,
+**2026-10-25 user override:** the requested UAT answer model is
+`gpt-5.6-luna` with `reasoning_effort=low`, superseding the dated 2026-10-15
+request for `gpt-6-luna/high`. Runtime/provider support, observed model identity,
 and browser acceptance remain pending; this policy is not rollout evidence.
 Development workers still request `gpt-6.1-sol`/`high`. Preserve dated earlier
 model evidence with its original identity. Downtime repair is permitted within
