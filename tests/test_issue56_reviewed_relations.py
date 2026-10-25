@@ -51,6 +51,7 @@ class RelationSelectionTests(unittest.TestCase):
 class RelationBindingTests(unittest.TestCase):
     setUp = ReconciliationTests.setUp  # two annotated delivery-date atoms (1/20, then 1/27)
     _run = ReconciliationTests._run
+    _run_members = ReconciliationTests._run_members
     def _receipt(self, entries) -> dict:
         receipt = {"artifact_id": "formowl_uat_relation_review_receipt_v1", "reviewer_user_id": APPROVER_ACTOR,
                    "decision": "approve_for_uat_source_selection", **BINDING, "entries": entries}
