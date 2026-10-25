@@ -164,7 +164,48 @@ class _RecordingLedgerStore:
         return self.store.get(ledger_id)
 
 
-def run_command(args) -> int:
+_REASON_HINTS = {
+    "provider_incomplete": "上一次輸出超過長度上限而被截斷；請只保留最重要的事實（最多 40 筆），quote 盡量短但必須唯一。",
+    "schema_output_invalid": "上一次輸出不是完整的 JSON；請輸出完整、有效的 JSON。",
+    "candidate_outside_focus": "每筆事實的 evidence 必須引用 focus_observation_ids 中的原文。",
+    "time_surface_mismatch": "times.raw 必須逐字出現在 times.quote 之中。",
+    "identity_surface_mismatch": "subject 與 subject_label 必須逐字出現在 subject_quote 之中。",
+    "atomic_property_missing": "非 entity 的每筆紀錄都要有 property。",
+}
+
+
+def retry_feedback(units: dict, progress_path: Path, raw_path: Path, from_run: str) -> dict[str, list[str]]:
+    """Units of ``from_run`` that did not end annotated, with problems recomputed from their raw output."""
+    from formowl_graph.local_semantic_reader import Adapter
+    from formowl_ingestion.storage.records import ObservationStore
+
+    last = {}
+    for row in map(json.loads, progress_path.open()):
+        if row["run"] == from_run:
+            last[row["unit"]] = row
+    raw = {}
+    if raw_path.exists():
+        raw = {row["unit"]: row["content"] for row in map(json.loads, raw_path.open())}
+    stores: dict[str, ObservationStore] = {}
+    feedback = {}
+    for unit_id, row in last.items():
+        if row["status"] == "annotated" or row.get("reason") == "source_incomplete_or_unit_limit":
+            continue  # done, or not fixable by asking again
+        problems = []
+        unit = units[unit_id]
+        try:
+            store = stores.setdefault(unit["store"], ObservationStore(unit["store"]))
+            adapter = Adapter({oid: store.get(oid).to_dict() for oid in unit["observation_ids"]})
+            adapter.convert(json.loads(raw[unit_id]))
+            problems = adapter.problems
+        except (KeyError, ValueError, TypeError):
+            pass
+        hint = _REASON_HINTS.get(row.get("reason"))
+        feedback[unit_id] = problems + ([hint] if hint and hint not in problems else [])
+    return feedback
+
+
+def run_command(args, feedback: dict[str, list[str]] | None = None) -> int:
     from formowl_contract import sha256_json
     from formowl_graph.candidates import read_and_store_source_unit
     from formowl_graph.local_semantic_reader import LocalOllamaReader
@@ -182,7 +223,7 @@ def run_command(args) -> int:
     work: queue.Queue = queue.Queue()
     for line in open(args.units):
         unit = json.loads(line)
-        if unit["unit_id"] not in done:
+        if unit["unit_id"] not in done and (feedback is None or unit["unit_id"] in feedback):
             work.put(unit)
     print(json.dumps({"run": args.run_id, "queued": work.qsize(), "already_done": len(done)}), flush=True)
     observation_stores: dict[str, ObservationStore] = {}
@@ -203,6 +244,7 @@ def run_command(args) -> int:
             row = {"run": args.run_id, "unit": unit["unit_id"], "kind": unit["kind"], "lane": url.rsplit(":", 1)[-1],
                    "source_unit_id": "su_" + sha256_json(unit["unit_id"])[7:39]}
             reader.last, ledgers.last = {}, None
+            reader.feedback = list((feedback or {}).get(unit["unit_id"], []))
             started = time.time()
             try:
                 result = read_and_store_source_unit(
@@ -224,6 +266,8 @@ def run_command(args) -> int:
                 row.update(status=value.get("annotation_status", "error"),
                            reason=value.get("failure_reason") or value.get("stop_reason") or str(exc)[:120],
                            ledger=ledgers.last.semantic_metadata_id if ledgers.last is not None else None)
+            if feedback is not None:
+                row["retry_of"] = args.from_run
             row.update(seconds=round(time.time() - started, 1),
                        **{key: value for key, value in reader.last.items() if key != "content"})
             with lock:
@@ -253,6 +297,24 @@ def main(argv: list[str] | None = None) -> int:
     scope.add_argument("--focus-chars", type=int, default=3500)
     scope.add_argument("--output", required=True)
     run = commands.add_parser("run")
+    retry = commands.add_parser("retry", help="rerun units that did not end annotated, with feedback")
+    retry.add_argument("--from-run", required=True)
+    for sub in (run, retry):
+        _run_arguments(sub)
+    args = parser.parse_args(argv)
+    if args.command == "scope":
+        return scope_command(args)
+    if args.command == "retry":
+        if args.from_run == args.run_id:
+            parser.error("a retry needs a NEW run id")
+        units = {json.loads(line)["unit_id"]: json.loads(line) for line in open(args.units)}
+        out = Path(args.output)
+        return run_command(args, retry_feedback(units, out / "progress.jsonl", out / f"raw-{args.from_run}.jsonl",
+                                                args.from_run))
+    return run_command(args)
+
+
+def _run_arguments(run) -> None:
     run.add_argument("--units", required=True)
     run.add_argument("--run-id", required=True)
     run.add_argument("--output", required=True)
@@ -260,8 +322,6 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--ontology-revision", default="issue56_core_ontology_candidate_v1")
     run.add_argument("--model", default="hf.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf:latest")
     run.add_argument("--urls", default=os.environ.get("FORMOWL_OLLAMA_URLS", "http://127.0.0.1:11434"))
-    args = parser.parse_args(argv)
-    return scope_command(args) if args.command == "scope" else run_command(args)
 
 
 if __name__ == "__main__":

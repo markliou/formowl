@@ -154,6 +154,11 @@ class Adapter:
     def __init__(self, sources: Mapping[str, Mapping[str, Any]]) -> None:
         self.sources, self.relocated = sources, 0
         self.counts = {"surface_located": 0, "invented_label_cleared": 0, "invented_subject_cleared": 0}
+        self.problems: list[str] = []  # advisory retry feedback; the contract validator decides
+
+    def problem(self, text: str) -> None:
+        if len(self.problems) < 20 and text not in self.problems:
+            self.problems.append(text)
 
     def present(self, surface: str) -> bool:
         """Whether the text occurs anywhere in the unit (whitespace-insensitive)."""
@@ -186,18 +191,22 @@ class Adapter:
         if source is None or not isinstance(quote, str) or not quote.strip():
             return out
         fields = list(_scalars(source))
-        exact = [path for path, text in fields if quote in text]
+        exact = [(path, text) for path, text in fields if quote in text]
         if exact:
-            out["field_path"] = exact[0]
+            out["field_path"] = exact[0][0]
+            if exact[0][1].count(quote) > 1:
+                self.problem(f"「{quote[:40]}」在 {oid} 中出現 {exact[0][1].count(quote)} 次，請改引用包含它的較長、唯一的片段")
             return out
         pattern = _ws_pattern(quote)
         hits = [(path, m) for path, text in fields for m in pattern.finditer(text)]
         if len({m.group(0) for _, m in hits}) == 1 and len({tuple(p) for p, _ in hits}) == len(hits):
             out["field_path"], out["quote"] = hits[0][0], hits[0][1].group(0)
             self.relocated += 1
+        else:
+            self.problem(f"「{quote[:40]}」在 {oid} 中找不到逐字相同的連續原文")
         return out
 
-    def surface(self, value: Any, spans: list[dict[str, Any]]) -> Any:
+    def surface(self, value: Any, spans: list[dict[str, Any]], *, record: bool = True) -> Any:
         """A surface must lie inside its evidence; whitespace-only drift maps to the unique source text."""
         if not isinstance(value, str) or any(value in s["quote"] for s in spans if isinstance(s["quote"], str)):
             return value
@@ -208,6 +217,8 @@ class Adapter:
         if len(found) == 1:
             self.relocated += 1
             return found.pop()
+        if record:
+            self.problem(f"「{value[:40]}」沒有出現在它所引用的原文中")
         return value
 
     def convert(self, flat: Mapping[str, Any]) -> dict[str, Any]:
@@ -220,7 +231,7 @@ class Adapter:
                 quote = rec.get("subject_quote")
                 id_spans = [self.span(quote)] if quote else list(evidence)
                 cited = [s["observation_id"] for s in id_spans + evidence]
-                value = self.surface(subject, id_spans)
+                value = self.surface(subject, id_spans, record=False)
                 if not any(value in s["quote"] for s in id_spans if isinstance(s["quote"], str)):
                     found = self.find_surface(subject, cited)
                     if found is not None:
@@ -231,7 +242,7 @@ class Adapter:
                         self.counts["invented_subject_cleared"] += 1
                 label = rec.get("subject_label")
                 if value is not None and isinstance(label, str) and label.strip():
-                    label = self.surface(label, id_spans)
+                    label = self.surface(label, id_spans, record=False)
                     if not any(label in s["quote"] for s in id_spans if isinstance(s["quote"], str)):
                         found = self.find_surface(label, cited) or self.find_surface(label, list(self.sources))
                         if found is not None:
@@ -241,6 +252,9 @@ class Adapter:
                         elif not self.present(label):
                             label = None  # an unknown type_surface is null, never invented
                             self.counts["invented_label_cleared"] += 1
+                for name in (value, label if value is not None and isinstance(label, str) and label.strip() else None):
+                    if name is not None and not any(name in s["quote"] for s in id_spans if isinstance(s["quote"], str)):
+                        self.problem(f"「{name[:40]}」沒有出現在它所引用的原文中；請把名稱或欄名所在的那段原文放進 subject_quote")
                 if value is not None:
                     identities.append({"local_id": f"i{i}", "display_label": subject,
                                        "type_surface": label if isinstance(label, str) and label.strip() else None,
@@ -282,11 +296,13 @@ class LocalOllamaReader:
     def __init__(self, url: str, model: str, *, num_ctx: int = 32768, timeout: float = 1800) -> None:
         self.url, self.model, self.num_ctx, self.timeout = url.rstrip("/") + "/api/chat", model, num_ctx, timeout
         self.last: dict[str, Any] = {}
+        self.feedback: list[str] = []  # problems found in a previous attempt of the same unit
 
     @property
     def configuration(self) -> dict[str, Any]:
         return {"reader_adapter": ADAPTER_ID, "adapter_instructions_sha256": sha256_json(INSTRUCTIONS),
-                "num_ctx": self.num_ctx, "temperature": 0}
+                "num_ctx": self.num_ctx, "temperature": 0,
+                **({"retry_feedback_sha256": sha256_json(self.feedback)} if self.feedback else {})}
 
     def extract_structured_json(self, *, instructions: str, source_unit: Mapping[str, Any],
                                 response_schema: Mapping[str, Any], schema_name: str,
@@ -296,7 +312,9 @@ class LocalOllamaReader:
         payload = {"model": self.model, "stream": False, "think": False,
                    "format": flat_schema(ids, min(int(max_candidates), 128), list(source_unit["focus_observation_ids"])),
                    "messages": [{"role": "system", "content": INSTRUCTIONS},
-                                {"role": "user", "content": json.dumps(presented(source_unit), ensure_ascii=False)}],
+                                {"role": "user", "content": json.dumps(presented(source_unit), ensure_ascii=False)},
+                                *([{"role": "user", "content": "上一次標註這個來源單元時有以下問題，請修正後重新輸出完整結果：\n"
+                                    + "\n".join(f"- {item}" for item in self.feedback)}] if self.feedback else [])],
                    "options": {"num_ctx": self.num_ctx, "num_predict": max_output_tokens, "temperature": 0}}
         fingerprint = sha256_json({"endpoint": self.url, "payload": payload})
         self.last = {}
@@ -319,7 +337,7 @@ class LocalOllamaReader:
             raise ContractValidationError("offline semantic response is not complete strict JSON")
         adapter = Adapter({o["observation_id"]: o for o in source_unit["observations"]})
         data = adapter.convert(flat)
-        self.last.update(whitespace_relocated=adapter.relocated, **adapter.counts)
+        self.last.update(whitespace_relocated=adapter.relocated, problems=adapter.problems, **adapter.counts)
         observed = body.get("model")
         return {"data": data, "requested_model": self.model,
                 "observed_model": observed if isinstance(observed, str) and observed.strip() else None,
