@@ -287,6 +287,38 @@ def run_command(args, feedback: dict[str, list[str]] | None = None) -> int:
     return 0
 
 
+def report_command(args) -> int:
+    """Per-scope ledger summary: each unit's best status over the given runs. Gaps stay gaps."""
+    from formowl_contract import sha256_json
+
+    units = [json.loads(line)["unit_id"] for line in open(args.units)]
+    runs = list(args.run_id)
+    best: dict[str, dict] = {}
+    for row in map(json.loads, (Path(args.output) / "progress.jsonl").open()):
+        current = best.get(row["unit"])
+        if row["run"] in runs and (current is None or current["status"] != "annotated"):
+            best[row["unit"]] = row  # an annotated read stands; otherwise the latest attempt
+    status = collections.Counter()
+    reasons = collections.Counter()
+    for unit_id in units:
+        row = best.get(unit_id)
+        state = "not_attempted" if row is None else row["status"]
+        status[state] += 1
+        if row is not None and state != "annotated":
+            reasons[row.get("reason") or "unknown"] += 1
+    coverage = {unit_id: [best[unit_id]["run"], best[unit_id].get("ledger")] for unit_id in units
+                if best.get(unit_id, {}).get("status") == "annotated"}
+    report = {"artifact_id": "formowl_semantic_annotation_scope_report_v1",
+              "units_sha256": "sha256:" + hashlib.sha256(Path(args.units).read_bytes()).hexdigest(),
+              "run_ids": runs, "unit_count": len(units), "status_counts": dict(status),
+              "gap_reasons": dict(reasons.most_common()),
+              "candidate_atoms": sum(best[u].get("atoms") or 0 for u in coverage),
+              "annotated_coverage_fingerprint": sha256_json(coverage),
+              "scope_complete": status["annotated"] == len(units)}
+    print(json.dumps(report, ensure_ascii=False, indent=1))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -301,9 +333,15 @@ def main(argv: list[str] | None = None) -> int:
     retry.add_argument("--from-run", required=True)
     for sub in (run, retry):
         _run_arguments(sub)
+    report = commands.add_parser("report", help="per-scope ledger summary over one or more runs")
+    report.add_argument("--units", required=True)
+    report.add_argument("--output", required=True)
+    report.add_argument("--run-id", action="append", required=True)
     args = parser.parse_args(argv)
     if args.command == "scope":
         return scope_command(args)
+    if args.command == "report":
+        return report_command(args)
     if args.command == "retry":
         if args.from_run == args.run_id:
             parser.error("a retry needs a NEW run id")

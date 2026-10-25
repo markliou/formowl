@@ -21,5 +21,31 @@ class ChunkTests(unittest.TestCase):
         self.assertEqual(annotation.chunks([], 100), [])
 
 
+class ReportTests(unittest.TestCase):
+    def test_annotated_read_stands_and_gaps_keep_their_latest_reason(self) -> None:
+        import contextlib
+        import io
+        import json
+
+        temp_dir = _paths.fresh_test_dir("semantic-annotation-report")
+        (temp_dir / "units.jsonl").write_text("".join(json.dumps({"unit_id": u}) + "\n" for u in "abcd"))
+        rows = [("r1", "a", "annotated", None), ("r1", "b", "failed", "exact_span_mismatch"),
+                ("r2", "b", "failed", "provider_incomplete"), ("r2", "a", "failed", "x"),
+                ("r1", "c", "failed", "exact_span_mismatch"), ("r2", "c", "annotated", None),
+                ("other", "d", "annotated", None)]
+        (temp_dir / "progress.jsonl").write_text("".join(json.dumps(
+            {"run": r, "unit": u, "status": s, "reason": why, "atoms": 2, "ledger": f"sem_{r}_{u}"}) + "\n"
+            for r, u, s, why in rows))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            annotation.main(["report", "--units", str(temp_dir / "units.jsonl"), "--output", str(temp_dir),
+                             "--run-id", "r1", "--run-id", "r2"])
+        report = json.loads(out.getvalue())
+        self.assertEqual(report["status_counts"], {"annotated": 2, "failed": 1, "not_attempted": 1})
+        self.assertEqual(report["gap_reasons"], {"provider_incomplete": 1})
+        self.assertEqual(report["candidate_atoms"], 4)
+        self.assertFalse(report["scope_complete"])
+
+
 if __name__ == "__main__":
     unittest.main()
