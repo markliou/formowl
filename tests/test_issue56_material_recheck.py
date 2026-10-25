@@ -21,14 +21,46 @@ class MaterialSourceRecheckTests(unittest.TestCase):
             first_terms,
             protected_terms=("ZX-421",),
             reviewed_annotations=({
-                "annotation_id": "ann-synthetic",
-                "target": "Clienta",
+                "candidate_atom_id": "atom-synthetic",
+                "target": "Clienta Label Printer",
                 "identity_bindings": [],
             },),
         )
         self.assertEqual(hard, ("clienta", "zx-421"))
         self.assertEqual(soft, ("quarterly update",))
         self.assertNotEqual(sha256_json(first_terms), sha256_json(hard))
+
+    def test_identity_term_uses_the_n2_complete_word_boundary_rule(self):
+        from unittest.mock import patch
+
+        from formowl_mail import issue56_sealed_source
+
+        surfaces = ("Clienta Label Printer",)
+        self.assertTrue(issue56_sealed_source._reviewed_identity_surface_has_complete_term(
+            "Clienta", surfaces,
+        ))
+        self.assertFalse(issue56_sealed_source._reviewed_identity_surface_has_complete_term(
+            "Clientax", surfaces,
+        ))
+        profile = SimpleNamespace(analyze=lambda _text: SimpleNamespace(tokens=frozenset({"Clienta"})))
+        with patch.object(issue56_sealed_source, "load_issue56_target_mail_tokenizer_profile",
+                          return_value=profile):
+            self.assertEqual(issue56_sealed_source._partial_reviewed_identity_terms(
+                ({"annotation_id": "ann-synthetic", "target": surfaces[0], "identity_bindings": []},),
+                "query",
+            ), ("clienta",))
+
+    def test_identity_boundary_does_not_turn_a_topic_only_plan_into_a_variant(self):
+        result = _identity_only_recheck_terms(
+            ("Clientax", "quarterly"),
+            protected_terms=(),
+            reviewed_annotations=({
+                "candidate_atom_id": "atom-synthetic",
+                "target": "Clienta Label Printer",
+                "identity_bindings": [],
+            },),
+        )
+        self.assertIsNone(result)
 
     def test_topic_terms_rank_but_do_not_filter_and_identity_stays_hard(self):
         candidates = (
