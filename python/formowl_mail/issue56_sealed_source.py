@@ -2815,13 +2815,16 @@ class IngestionRevisionSourceRecords:
             if progress is not None and (end % 32768 == 0 or end == len(references)):
                 progress({"phase": "prepared_source_references_persisted", "reference_count": end})
         cursor = store.checkpoint_cursor("prepared_lineages")
+        parents: dict[str, Any] = {}  # every row/block of one attachment shares its parent
         while page := store.iter_helpers(after_id=cursor, limit=256):
             updates = []
             for item in page:
                 child_asset_id = item.get("pending_child_asset_id")
                 if child_asset_id is None:
                     continue
-                parent = store.helper_for_attachment_asset(child_asset_id)
+                if child_asset_id not in parents:
+                    parents[child_asset_id] = store.helper_for_attachment_asset(child_asset_id)
+                parent = parents[child_asset_id]
                 if parent is None or parent["permission_scope"] != item["permission_scope"]:
                     raise ContractValidationError("prepared child parent binding is unavailable")
                 lineage = MailAttachmentChildOccurrenceLineage(
