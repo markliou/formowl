@@ -7,6 +7,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+import base64
 import hashlib
 import http.client
 import json
@@ -3347,6 +3348,7 @@ class _NoResponsesRedirect(urllib.request.HTTPRedirectHandler):
 
 _PROVIDER_FAILURE_PHASES = frozenset({
     "prepare", "connect_headers", "sse_read", "json_read", "http_error_read", "close",
+    "websocket_connect", "websocket_handshake", "websocket_send", "websocket_read",
 })
 _PROVIDER_TRANSPORT_EXCEPTION_TYPES = (
     urllib.error.HTTPError, urllib.error.URLError,
@@ -3446,6 +3448,167 @@ def _provider_transport_cause_diagnostic(exception: Exception) -> dict[str, Any]
                 break
     safe["transport_causes"] = causes
     return safe
+
+
+_RESPONSES_WEBSOCKET_BETA = "responses_websockets=2026-02-06"
+_WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+class _ResponsesWebSocket:
+    """Minimal RFC 6455 client (stdlib only) for the Responses WebSocket mode.
+
+    Mirrors the Codex CLI transport: the ``/responses`` endpoint upgraded to
+    ws(s) with ``OpenAI-Beta: responses_websockets=2026-02-06``; each request is a
+    ``response.create`` text message and every server message is one event.
+    """
+
+    def __init__(self, url: str, headers: Mapping[str, str], *, timeout: float) -> None:
+        parts = urlsplit(url)
+        secure = parts.scheme in {"https", "wss"}
+        if parts.scheme not in {"https", "wss", "http", "ws"} or not parts.hostname:
+            raise ValueError("websocket URL is invalid")
+        port = parts.port or (443 if secure else 80)
+        raw = socket.create_connection((parts.hostname, port), timeout=timeout)
+        self._socket = ssl.create_default_context().wrap_socket(raw, server_hostname=parts.hostname) \
+            if secure else raw
+        self._buffer = bytearray()
+        key = base64.b64encode(os.urandom(16)).decode()
+        target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+        host = parts.hostname + ("" if parts.port is None else f":{parts.port}")
+        lines = [f"GET {target} HTTP/1.1", f"Host: {host}", "Upgrade: websocket", "Connection: Upgrade",
+                 f"Sec-WebSocket-Key: {key}", "Sec-WebSocket-Version: 13",
+                 *(f"{name}: {value}" for name, value in headers.items())]
+        self._socket.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("utf-8"))
+        while b"\r\n\r\n" not in self._buffer:
+            if len(self._buffer) > 64 * 1024:
+                raise ValueError("websocket handshake headers are too large")
+            chunk = self._socket.recv(4096)
+            if not chunk:
+                raise ConnectionError("websocket handshake closed")
+            self._buffer.extend(chunk)
+        head, _, rest = bytes(self._buffer).partition(b"\r\n\r\n")
+        self._buffer = bytearray(rest)
+        status_line, *header_lines = head.decode("iso-8859-1").split("\r\n")
+        self.status = int(status_line.split(" ")[1]) if len(status_line.split(" ")) > 1 else 0
+        self.headers = http.client.HTTPMessage()  # case-insensitive, like urllib response headers
+        for name, _, value in (line.partition(":") for line in header_lines):
+            self.headers[name.strip()] = value.strip()
+        expected = base64.b64encode(hashlib.sha1((key + _WEBSOCKET_GUID).encode()).digest()).decode()
+        self.upgraded = self.status == 101 and self.headers.get("Sec-WebSocket-Accept") == expected
+
+    def read_rest(self, limit: int) -> bytes:
+        """The non-upgraded response body (for diagnostics), bounded."""
+        while len(self._buffer) <= limit:
+            try:
+                chunk = self._socket.recv(4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            self._buffer.extend(chunk)
+        return bytes(self._buffer[:limit + 1])
+
+    def _exact(self, size: int) -> bytes:
+        while len(self._buffer) < size:
+            chunk = self._socket.recv(max(4096, size - len(self._buffer)))
+            if not chunk:
+                raise ConnectionError("websocket closed")
+            self._buffer.extend(chunk)
+        data = bytes(self._buffer[:size])
+        del self._buffer[:size]
+        return data
+
+    def _send_frame(self, opcode: int, payload: bytes) -> None:
+        mask = os.urandom(4)
+        size = len(payload)
+        header = bytes([0x80 | opcode]) + (
+            bytes([0x80 | size]) if size < 126 else
+            bytes([0x80 | 126]) + size.to_bytes(2, "big") if size < 65536 else
+            bytes([0x80 | 127]) + size.to_bytes(8, "big"))
+        self._socket.sendall(header + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+
+    def send_text(self, text: str) -> None:
+        self._send_frame(0x1, text.encode("utf-8"))
+
+    def receive_text(self, *, deadline: float, limit: int) -> str:
+        message = bytearray()
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("websocket read deadline")
+            self._socket.settimeout(remaining)
+            first, second = self._exact(2)
+            opcode, size = first & 0x0F, second & 0x7F
+            if size == 126:
+                size = int.from_bytes(self._exact(2), "big")
+            elif size == 127:
+                size = int.from_bytes(self._exact(8), "big")
+            mask = self._exact(4) if second & 0x80 else b""
+            if len(message) + size > limit:
+                raise ValueError("websocket message is too large")
+            payload = self._exact(size)
+            if mask:
+                payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+            if opcode == 0x9:
+                self._send_frame(0xA, payload)
+            elif opcode == 0x8:
+                raise ConnectionError("websocket closed by server")
+            elif opcode in {0x1, 0x0}:
+                message.extend(payload)
+                if first & 0x80:
+                    return message.decode("utf-8")
+            elif opcode != 0xA:
+                raise ValueError("websocket opcode is unsupported")
+
+    def close(self) -> None:
+        try:
+            self._send_frame(0x8, (1000).to_bytes(2, "big"))
+        except OSError:
+            pass
+        finally:
+            self._socket.close()
+
+
+def _responses_websocket_terminal(
+    connection: _ResponsesWebSocket, *, deadline: float, request_shape: Mapping[str, Any] | None,
+    timeout_seconds: float | None,
+) -> tuple[dict[str, Any], bytes]:
+    """Read Responses events (one per message) through the terminal event; same rules as SSE."""
+    body = bytearray()
+    terminal_status = {"response.completed": "completed", "response.failed": "failed",
+                       "response.incomplete": "incomplete"}
+
+    def fail(reason_code: str, payload: Mapping[str, Any] | None = None,
+             exception: Exception | None = None) -> _UatProviderFailure:
+        return _UatProviderFailure(
+            reason_code=reason_code, http_status=connection.status, response=payload, body=bytes(body),
+            headers=connection.headers, request_shape=request_shape, failure_phase="websocket_read",
+            transport_exception=exception, request_timeout_seconds=timeout_seconds,
+            remaining_deadline_seconds=max(0.0, deadline - time.monotonic()))
+
+    while True:
+        try:
+            text = connection.receive_text(deadline=deadline, limit=_MAX_RESPONSES_BODY_BYTES)
+        except (TimeoutError, socket.timeout) as exc:
+            raise fail("transport_timeout", exception=exc) from None
+        except ValueError as exc:
+            raise fail("response_too_large" if "too large" in str(exc) else "transport_error", exception=exc) from None
+        except (OSError, UnicodeError) as exc:
+            raise fail("transport_error", exception=exc) from None
+        body.extend(text.encode("utf-8")[: _MAX_RESPONSES_BODY_BYTES + 1 - len(body)])
+        try:
+            event = json.loads(text)
+        except json.JSONDecodeError:
+            raise fail("invalid_json_response") from None
+        if not isinstance(event, Mapping) or not isinstance(event.get("type"), str):
+            raise fail("invalid_top_level_shape", event if isinstance(event, Mapping) else None)
+        if event["type"] == "error":
+            raise fail("provider_error", event)
+        if event["type"] in terminal_status:
+            terminal = event.get("response")
+            if not isinstance(terminal, Mapping) or terminal.get("status") != terminal_status[event["type"]]:
+                raise fail("invalid_top_level_shape", event)
+            return dict(terminal), bytes(body)
 
 
 def _read_responses_sse_terminal(
@@ -4755,6 +4918,7 @@ def diagnostic_deployment_settings(
     *, host: str, port: int, record_raw_uat_interactions: bool,
     temporary_access_enabled: bool, provider_base_url: str,
     typed_evidence_notes: bool = False, model: str = _DEFAULT_CODEX_MODEL, reasoning_effort: str = "high",
+    websocket: bool = False,
 ) -> dict[str, Any]:
     """Pure manifest helper; startup supplies actual resolved settings, not JSON."""
     if type(typed_evidence_notes) is not bool:
@@ -4765,7 +4929,7 @@ def diagnostic_deployment_settings(
         "host": host, "port": port, "temporary_lan_diagnostic": True,
         "record_raw_uat_interactions": record_raw_uat_interactions,
         "temporary_access_enabled": temporary_access_enabled,
-        "provider_transport": "codex_responses", "model": model,
+        "provider_transport": "codex_responses_websocket" if websocket else "codex_responses", "model": model,
         "reasoning_effort": reasoning_effort, "stream_initial_requests": True,
         "provider_endpoint_fingerprint": sha256_json(provider_base_url.rstrip("/")),
     }
@@ -5124,10 +5288,16 @@ class CodexResponsesConversationModel:
         timezone_name: str = _DEFAULT_UAT_TIMEZONE,
         stream_initial_requests: bool = False,
         typed_evidence_notes: bool = False,
+        websocket: bool = False,
     ) -> None:
         normalized_base_url = _normalize_custom_provider_base_url(base_url)
         if type(stream_initial_requests) is not bool:
             raise ContractValidationError("UAT initial streaming mode is invalid")
+        if type(websocket) is not bool:
+            raise ContractValidationError("UAT provider websocket mode is invalid")
+        # Responses WebSocket mode (as Codex CLI): every request is one
+        # response.create message over a ws(s) upgrade of the same /responses URL.
+        self._websocket = websocket
         self._stream_initial_requests = stream_initial_requests
         if type(typed_evidence_notes) is not bool:
             raise ContractValidationError("UAT typed evidence notes mode is invalid")
@@ -6749,6 +6919,44 @@ class CodexResponsesConversationModel:
         for identifier in identifiers:
             self.discard_conversation(identifier)
 
+    def _websocket_round_trip(
+        self, request: urllib.request.Request, request_payload: Mapping[str, Any], *,
+        deadline: float, timeout_seconds: float, request_shape: Mapping[str, Any] | None,
+    ) -> tuple[dict[str, Any], bytes, int, Mapping[str, str]]:
+        """One ``response.create`` over a fresh ws(s) connection; returns (terminal, body, status, headers)."""
+        url = "ws" + self._responses_url[len("http"):]
+        headers = {name: value for name, value in request.header_items()
+                   if name.lower() not in {"content-type", "accept", "accept-encoding", "content-length"}}
+        headers["OpenAI-Beta"] = _RESPONSES_WEBSOCKET_BETA
+
+        def failure(reason_code: str, phase: str, exc: Exception | None = None, **extra: Any) -> _UatProviderFailure:
+            return _UatProviderFailure(
+                reason_code=reason_code, request_shape=request_shape, failure_phase=phase,
+                transport_exception=exc, request_timeout_seconds=timeout_seconds,
+                remaining_deadline_seconds=max(0.0, deadline - time.monotonic()), **extra)
+
+        try:
+            connection = _ResponsesWebSocket(url, headers, timeout=timeout_seconds)
+        except (TimeoutError, socket.timeout) as exc:
+            raise failure("transport_timeout", "websocket_connect", exc) from None
+        except (OSError, ValueError) as exc:
+            raise failure("transport_error", "websocket_connect", exc) from None
+        try:
+            if not connection.upgraded:
+                body = connection.read_rest(_MAX_RESPONSES_BODY_BYTES)
+                raise failure("http_error", "websocket_handshake", http_status=connection.status,
+                              response=_decode_provider_response(body), body=body, headers=connection.headers)
+            message = {"type": "response.create", **{k: v for k, v in request_payload.items() if k != "stream"}}
+            try:
+                connection.send_text(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
+            except OSError as exc:
+                raise failure("transport_error", "websocket_send", exc) from None
+            parsed, body = _responses_websocket_terminal(
+                connection, deadline=deadline, request_shape=request_shape, timeout_seconds=timeout_seconds)
+            return parsed, body, 200, connection.headers
+        finally:
+            connection.close()
+
     def _request_response(
         self, payload: Mapping[str, Any], *, offline_session_id: str | None = None,
     ) -> dict[str, Any]:
@@ -6868,33 +7076,38 @@ class CodexResponsesConversationModel:
                 journal.sent_input_sha256 = contract["input_sha256"]
                 journal.sent_count = len(wire_input)
             failure_phase = "connect_headers"
-            with urllib.request.build_opener(_NoResponsesRedirect()).open(
-                request,
-                timeout=timeout_seconds,
-            ) as response:
-                http_status = response.status
-                response_headers = response.headers
-                failure_phase = "sse_read" if stream_response else "json_read"
-                try:
-                    if stream_response:
-                        assert deadline is not None
-                        parsed, body = _read_responses_sse_terminal(
-                            response,
-                            deadline=deadline,
-                            http_status=http_status,
-                            headers=response_headers,
-                            request_shape=request_shape,
-                            timeout_seconds=timeout_seconds,
-                        )
-                    else:
-                        body = response.read(_MAX_RESPONSES_BODY_BYTES + 1)
-                except _UatProviderFailure as exc:
-                    primary_failure = exc
-                    raise
-                except Exception as exc:
-                    primary_failure = transport_failure(exc)
-                    raise primary_failure from None
-                failure_phase = "close"
+            if self._websocket:
+                parsed, body, http_status, response_headers = self._websocket_round_trip(
+                    request, request_payload, deadline=diagnostic_deadline,
+                    timeout_seconds=timeout_seconds, request_shape=request_shape)
+            else:
+                with urllib.request.build_opener(_NoResponsesRedirect()).open(
+                    request,
+                    timeout=timeout_seconds,
+                ) as response:
+                    http_status = response.status
+                    response_headers = response.headers
+                    failure_phase = "sse_read" if stream_response else "json_read"
+                    try:
+                        if stream_response:
+                            assert deadline is not None
+                            parsed, body = _read_responses_sse_terminal(
+                                response,
+                                deadline=deadline,
+                                http_status=http_status,
+                                headers=response_headers,
+                                request_shape=request_shape,
+                                timeout_seconds=timeout_seconds,
+                            )
+                        else:
+                            body = response.read(_MAX_RESPONSES_BODY_BYTES + 1)
+                    except _UatProviderFailure as exc:
+                        primary_failure = exc
+                        raise
+                    except Exception as exc:
+                        primary_failure = transport_failure(exc)
+                        raise primary_failure from None
+                    failure_phase = "close"
         except urllib.error.HTTPError as exc:
             if primary_failure is not None:
                 raise primary_failure from None
