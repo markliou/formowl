@@ -1783,15 +1783,54 @@ def _select_reviewed_annotation_sources(revision, *, arguments, catalog, deadlin
             annotation_id for annotation_id, identities in descriptors.items()
             if any(_reviewed_identity_matches(target, identity) for identity in identities)
         )
+    selected_ids, relation_hashes = _expand_reviewed_relations(revision, selected_ids)
     matched = []
     for item in revision.reviewed_source_annotations:
         check_source_evidence_deadline(deadline)
         if item["candidate_atom_id"] in selected_ids:
             matched.append(item)
-    hashes = tuple(dict.fromkeys(key for item in matched for key in item["source_hashes"]))
+    hashes = tuple(dict.fromkeys([*(key for item in matched for key in item["source_hashes"]), *relation_hashes]))
     if len(hashes) > 128:
         raise ContractValidationError("UAT reviewed annotation source selection exceeds bound")
     return tuple(item["candidate_atom_id"] for item in matched), hashes, target
+
+
+_FOLLOWED_RELATIONS = frozenset({"updates", "supersedes", "contradicts"})
+_MAX_RELATION_EXPANSION = 32
+
+
+def _expand_reviewed_relations(revision, selected_ids):
+    """Add atoms linked by reviewed updates/supersedes/contradicts, plus their update quotes.
+
+    Additive like the exact-identity expansion: a selected value is never answered
+    without the reviewed statement that changes or contests it.
+    """
+    selected, hashes = set(selected_ids), []
+    added, frontier = 0, set(selected_ids)
+    while frontier and added < _MAX_RELATION_EXPANSION:
+        following = set()
+        for relation in revision.reviewed_source_relations:
+            if relation["relation_type"] not in _FOLLOWED_RELATIONS:
+                continue
+            ends = {relation["source_candidate_atom_id"], relation["target_candidate_atom_id"]}
+            if ends & frontier:
+                hashes.extend(relation["evidence_hashes"])
+                following.update(ends - selected)
+        following = set(sorted(following)[:_MAX_RELATION_EXPANSION - added])
+        selected |= following
+        added += len(following)
+        frontier = following
+    return selected, tuple(dict.fromkeys(hashes))
+
+
+def reviewed_relations_for(revision, candidate_ids, observation_hash=None):
+    """Reviewed relations touching these atoms or quoting this Observation, as ids and types."""
+    ids = set(candidate_ids)
+    return [{"relation_type": r["relation_type"], "source_candidate_id": r["source_candidate_atom_id"],
+             "target_candidate_id": r["target_candidate_atom_id"]}
+            for r in revision.reviewed_source_relations
+            if {r["source_candidate_atom_id"], r["target_candidate_atom_id"]} & ids
+            or (observation_hash is not None and observation_hash in r["evidence_hashes"])]
 
 
 def _reviewed_annotation_literals_match(observation, *, required_terms, target, protected_terms, tokenizer, deadline):
@@ -2087,14 +2126,18 @@ def _build_source_start_semantic_handler(
             nonlocal admitted_context_bytes, context_limit_reached
             observation_hash = sha256_json(observation.to_dict())
             if observation_hash in annotation_hashes:
+                candidate_ids = [entry["candidate_atom_id"] for entry in revision.reviewed_source_annotations
+                                 if entry["candidate_atom_id"] in annotation_ids
+                                 and observation_hash in entry["source_hashes"]]
                 item["source_context"] = {
                     **item.get("source_context", {}),
                     "annotation_pin": revision.reviewed_annotation_pin,
-                    "candidate_ids": [entry["candidate_atom_id"] for entry in revision.reviewed_source_annotations
-                                      if entry["candidate_atom_id"] in annotation_ids
-                                      and observation_hash in entry["source_hashes"]],
+                    "candidate_ids": candidate_ids,
                     "exact_field_proof": False,
                 }
+                relations = reviewed_relations_for(revision, candidate_ids, observation_hash)
+                if relations:
+                    item["source_context"]["reviewed_relations"] = relations
             if query_class == "evidence_lookup" and observation_hash not in admitted_hashes:
                 if observation_hash in deferred_hashes and deferred_replay is None:
                     _trace(trace, "decision", "duplicate_deferred", observation_hash)
@@ -3014,6 +3057,9 @@ def _build_source_start_semantic_handler(
                 "catalog_pin": annotation_catalog["catalog_pin"],
                 "exact_field_proof": False,
             }
+            relations = reviewed_relations_for(revision, annotation_ids)
+            if relations:
+                query_agent["reviewed_annotation_selection"]["reviewed_relations"] = relations
         if auto_exact:
             query_agent["exact_first"] = {
                 "status": exact_payload["status"],

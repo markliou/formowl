@@ -13,6 +13,11 @@ Policy ``contract_validated_target_v1``: approve a candidate atom when its ledge
 atom, the atom is still ``pending_review``/``approved``, it names a non-empty target, and
 its confidence is at least ``--min-confidence``. All of the atom's identity bindings
 (each already exact-span validated against source evidence) are approved with it.
+
+Policy ``contract_validated_relation_v1`` (with ``--relation-run-id``): approve a
+reconciliation relation when its ledger is ``reconciled`` under one of those runs, the
+ledger's relation hash matches the stored relation, and BOTH endpoint atoms are approved
+above. Relation receipts are written as separate pages in the same configuration.
 """
 
 from __future__ import annotations
@@ -35,11 +40,31 @@ CONFIG_ARTIFACT_ID = "formowl_uat_reviewed_annotation_config_v1"
 RECEIPT_ARTIFACT_ID = "formowl_uat_annotation_review_receipt_v1"
 DECISION = "approve_for_uat_source_selection"
 POLICIES = ("contract_validated_target_v1",)
+RELATION_RECEIPT_ARTIFACT_ID = "formowl_uat_relation_review_receipt_v1"
+RELATION_POLICY = "contract_validated_relation_v1"
+RELATION_TYPES = frozenset({"same_fact", "updates", "supersedes", "contradicts", "refines"})
 PAGE_SIZE = 128
 BINDING_KEYS = ("source_revision_sha256", "source_authority_fingerprint", "source_session_binding_fingerprint")
 
 
-def select_entries(store_root: Path, run_ids: set[str], min_confidence: float) -> tuple[list[dict], dict]:
+class ServedReferences:
+    """Observation ids the serving revision can resolve (its source lookup ``reference_locators``)."""
+
+    def __init__(self, sqlite_path: Path | None) -> None:
+        import sqlite3
+
+        self.connection = (sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
+                           if sqlite_path is not None else None)
+
+    def __contains__(self, observation_id: str) -> bool:
+        if self.connection is None:
+            return True
+        return self.connection.execute("SELECT 1 FROM reference_locators WHERE observation_id = ?",
+                                       (observation_id,)).fetchone() is not None
+
+
+def select_entries(store_root: Path, run_ids: set[str], min_confidence: float,
+                   served: ServedReferences | None = None) -> tuple[list[dict], dict]:
     """Pure policy application over the candidate stores; returns sorted entries and counts."""
     from formowl_contract import sha256_json
     from formowl_graph.storage import CandidateAtomStore, SemanticMetadataStore
@@ -68,6 +93,8 @@ def select_entries(store_root: Path, run_ids: set[str], min_confidence: float) -
                 counts["skipped_no_target"] += 1
             elif atom.confidence < min_confidence:
                 counts["skipped_low_confidence"] += 1
+            elif served is not None and any(oid not in served for oid in atom.source_observation_ids):
+                counts["skipped_source_not_served"] += 1
             elif candidate_id in entries:
                 counts["skipped_duplicate"] += 1
             else:
@@ -80,6 +107,40 @@ def select_entries(store_root: Path, run_ids: set[str], min_confidence: float) -
                         sha256_json(binding) for binding in atom.properties.get("identity_bindings", ()))[:16],
                 }
                 counts["approved"] += 1
+    return [entries[key] for key in sorted(entries)], dict(counts)
+
+
+def select_relation_entries(store_root: Path, run_ids: set[str], approved_atoms: set[str],
+                            served: ServedReferences | None = None) -> tuple[list[dict], dict]:
+    from formowl_contract import sha256_json
+    from formowl_graph.storage import CandidateRelationStore, SemanticMetadataStore
+
+    relations, ledgers = CandidateRelationStore(store_root), SemanticMetadataStore(store_root)
+    counts: collections.Counter = collections.Counter()
+    entries = {}
+    for ledger in ledgers.list():
+        if ledger.metadata_type != "cross_unit_reconciliation" or ledger.extractor_run_id not in run_ids:
+            continue
+        if ledger.value.get("reconciliation_status") != "reconciled":
+            counts["ledger_not_reconciled"] += 1
+            continue
+        for relation_id, relation_hash in sorted(ledger.value.get("relation_hashes", {}).items()):
+            relation = relations.get(relation_id)
+            if (relation is None or sha256_json(relation.to_dict()) != relation_hash
+                    or relation.source_semantic_metadata_ids != [ledger.semantic_metadata_id]
+                    or relation.status not in {"pending_review", "approved"}
+                    or relation.relation_type not in RELATION_TYPES):
+                counts["rejected_changed_or_reviewed"] += 1
+            elif not {relation.source_candidate_atom_id, relation.target_candidate_atom_id} <= approved_atoms:
+                counts["skipped_endpoint_not_approved"] += 1
+            elif served is not None and any(span["observation_id"] not in served
+                                            for span in relation.properties.get("evidence_spans", ())):
+                counts["skipped_source_not_served"] += 1
+            else:
+                entries[relation_id] = {"candidate_relation_id": relation_id, "candidate_relation_sha256": relation_hash,
+                                        "semantic_metadata_id": ledger.semantic_metadata_id,
+                                        "semantic_metadata_sha256": sha256_json(ledger.to_dict())}
+                counts[f"approved_{relation.relation_type}"] += 1
     return [entries[key] for key in sorted(entries)], dict(counts)
 
 
@@ -104,6 +165,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--served-output-dir", help="output dir path as mounted in the UAT server")
     parser.add_argument("--served-store-root", help="store root path as mounted in the UAT server")
+    parser.add_argument("--source-lookup-sqlite", type=Path,
+                        help="serving revision's source-lookup.sqlite; approve only sources it can resolve")
+    parser.add_argument("--relation-run-id", action="append", default=[],
+                        help="reconciliation runs whose relations are reviewed with contract_validated_relation_v1")
     parser.add_argument("--approve", action="store_true", help="write the sealed receipts and configuration")
     args = parser.parse_args(argv)
     from formowl_contract import sha256_json
@@ -112,9 +177,15 @@ def main(argv: list[str] | None = None) -> int:
     pins = json.loads(args.activation_pins.read_bytes())
     if any(not isinstance(pins.get(key), str) for key in BINDING_KEYS):
         parser.error("activation pins lack the source binding fingerprints")
-    entries, counts = select_entries(args.store_root, set(args.run_id), args.min_confidence)
+    served = ServedReferences(args.source_lookup_sqlite)
+    entries, counts = select_entries(args.store_root, set(args.run_id), args.min_confidence, served)
+    relation_entries, relation_counts = (select_relation_entries(
+        args.store_root, set(args.relation_run_id), {entry["candidate_atom_id"] for entry in entries}, served)
+        if args.relation_run_id else ([], {}))
     summary = {"policy_version": args.policy, "min_confidence": args.min_confidence,
-               "approval_count": len(entries), "page_count": -(-len(entries) // PAGE_SIZE), "counts": counts}
+               "approval_count": len(entries), "page_count": -(-len(entries) // PAGE_SIZE), "counts": counts,
+               **({"relation_policy_version": RELATION_POLICY, "relation_approval_count": len(relation_entries),
+                   "relation_counts": relation_counts} if args.relation_run_id else {})}
     if not args.approve:
         print(json.dumps({**summary, "written": False}, ensure_ascii=False), flush=True)
         return 0
@@ -134,9 +205,19 @@ def main(argv: list[str] | None = None) -> int:
         name = f"review-receipt-{number:05d}.json"
         pages.append({"review_receipt_path": str(served / name),
                       "review_receipt_sha256": _write_private(args.output_dir / name, receipt)})
+    relation_pages = []
+    for number, start in enumerate(range(0, len(relation_entries), PAGE_SIZE), 1):
+        receipt = {"artifact_id": RELATION_RECEIPT_ARTIFACT_ID, "reviewer_user_id": APPROVER_ACTOR,
+                   "decision": DECISION, "policy_version": RELATION_POLICY, "run_ids": sorted(args.relation_run_id),
+                   "page": number, "reviewed_at": reviewed_at, **{key: pins[key] for key in BINDING_KEYS},
+                   "entries": relation_entries[start:start + PAGE_SIZE]}
+        name = f"relation-receipt-{number:05d}.json"
+        relation_pages.append({"review_receipt_path": str(served / name),
+                               "review_receipt_sha256": _write_private(args.output_dir / name, receipt)})
     config = {"artifact_id": CONFIG_ARTIFACT_ID, "store_root": args.served_store_root or str(args.store_root),
               **{key: pins[key] for key in BINDING_KEYS}, "review_receipt_pages": pages,
-              "policy_version": args.policy, "entries_sha256": sha256_json(entries)}
+              "policy_version": args.policy, "entries_sha256": sha256_json(entries),
+              **({"relation_receipt_pages": relation_pages} if relation_pages else {})}
     config_sha256 = _write_private(args.output_dir / "reviewed-annotations.json", config)
     print(json.dumps({**summary, "written": True, "reviewed_annotations_sha256": config_sha256},
                      ensure_ascii=False), flush=True)
