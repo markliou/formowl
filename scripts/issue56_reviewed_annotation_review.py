@@ -58,7 +58,9 @@ class ServedReferences:
 
     def __contains__(self, observation_id: str) -> bool:
         if self.connection is None:
-            return True
+            # A serving-revision lookup is required for approval.  Keep this
+            # fail-closed for callers that construct the gate without one.
+            return False
         return self.connection.execute("SELECT 1 FROM reference_locators WHERE observation_id = ?",
                                        (observation_id,)).fetchone() is not None
 
@@ -166,11 +168,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--served-output-dir", help="output dir path as mounted in the UAT server")
     parser.add_argument("--served-store-root", help="store root path as mounted in the UAT server")
     parser.add_argument("--source-lookup-sqlite", type=Path,
-                        help="serving revision's source-lookup.sqlite; approve only sources it can resolve")
+                        help="serving revision's source-lookup.sqlite; required with --approve")
     parser.add_argument("--relation-run-id", action="append", default=[],
                         help="reconciliation runs whose relations are reviewed with contract_validated_relation_v1")
     parser.add_argument("--approve", action="store_true", help="write the sealed receipts and configuration")
     args = parser.parse_args(argv)
+    if args.approve and args.source_lookup_sqlite is None:
+        parser.error("--source-lookup-sqlite is required with --approve")
     from formowl_contract import sha256_json
     from formowl_mail.issue56_sealed_source import APPROVER_ACTOR
 

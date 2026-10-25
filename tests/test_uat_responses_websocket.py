@@ -106,6 +106,13 @@ class CodexNativeRequestTests(unittest.TestCase):
         self.assertEqual(_codex_native_request({**base, "tool_choice": "none"}), {"model": "m", "input": []})
         forced = _codex_native_request({**base, "tool_choice": {"type": "function", "name": "b"}})
         self.assertEqual((forced["tools"], "tool_choice" in forced), ([tools[1]], False))
+        self.assertEqual(forced["instructions"], "This step requires calling exactly the b tool before answering.")
+        required = _codex_native_request({**base, "instructions": "Base.", "tool_choice": "required"})
+        self.assertEqual(required["tools"], tools)
+        self.assertEqual(required["instructions"],
+                         "Base.\n\nThis step requires calling exactly one of the provided tools before answering.")
+        # The journal requires every turn's input to extend the previous turn's input.
+        self.assertEqual((forced["input"], required["input"]), ([], []))
 
 
 class CodexNativeWebSocketShapeTests(unittest.TestCase):
@@ -129,6 +136,23 @@ class CodexNativeWebSocketShapeTests(unittest.TestCase):
         self.assertEqual(message["client_metadata"]["ws_request_header_x_openai_internal_codex_responses_lite"], "true")
         self.assertTrue(headers["user-agent"].startswith("codex_exec/0.164.0 ("))
         self.assertEqual(headers["originator"], "codex_exec")
+
+    def test_required_and_named_choices_keep_tools_and_instruct_through_the_developer_message(self) -> None:
+        tools = [{"type": "function", "name": "query"}, {"type": "function", "name": "other"}]
+        for choice, expected_tools, expected_text in (
+            ("required", tools,
+             "This step requires calling exactly one of the provided tools before answering."),
+            ({"type": "function", "name": "query"}, [tools[0]],
+             "This step requires calling exactly the query tool before answering."),
+        ):
+            with self.subTest(choice=choice):
+                payload = _codex_native_request({
+                    "model": "m", "input": [], "tools": tools, "tool_choice": choice,
+                })
+                message, _ = _codex_native_websocket_request(
+                    payload, session_id="00000000-0000-4000-8000-000000000001", installation_id="inst")
+                self.assertEqual(message["input"][0]["tools"][0]["tools"], expected_tools)
+                self.assertEqual(message["input"][1]["content"], [{"type": "input_text", "text": expected_text}])
 
 
 class ResponsesWebSocketTests(unittest.TestCase):

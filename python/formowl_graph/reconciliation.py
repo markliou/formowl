@@ -1,8 +1,9 @@
 """Cross-unit reconciliation of semantic-annotation candidates (SPEC §3.1.1, §6.2.1).
 
 Per-unit reads cannot see relationships across chunks, messages or attachments.
-This pass groups candidate atoms that name the same target AND property (exact
-match after NFKC/casefold; no fuzzy joins), across messages and threads, and asks
+This pass groups candidate atoms that name the same target, property and
+item/row or scoped identity (exact match after NFKC/casefold; no fuzzy joins),
+across messages and threads, and asks
 the model to classify ordered pairs within each bounded group:
 
 ``same_fact``    the same assertion restated (e.g. quoted history); source is the copy
@@ -40,7 +41,7 @@ from formowl_contract import (
 from .candidates import _semantic_spans
 from .local_semantic_reader import Adapter
 
-PROFILE = "cross_unit_reconciliation_v1"
+PROFILE = "cross_unit_reconciliation_v2"
 RELATION_TYPES = ("same_fact", "updates", "supersedes", "contradicts", "refines")
 UPDATE_TYPES = frozenset({"updates", "supersedes"})
 MAX_GROUP = 12
@@ -65,10 +66,22 @@ def _normalize(text: Any) -> str:
     return unicodedata.normalize("NFKC", text).casefold().strip() if isinstance(text, str) else ""
 
 
-def group_key(atom: CandidateAtom) -> tuple[str, str] | None:
+def group_key(atom: CandidateAtom) -> tuple[str, str, str, tuple[tuple[str, str, str], ...]] | None:
     assertion = atom.properties.get("assertion", {})
     target, prop = _normalize(assertion.get("target")), _normalize(assertion.get("property"))
-    return (target, prop) if target and prop else None
+    item_or_row = assertion.get("item_or_row")
+    item_key = _normalize(item_or_row if isinstance(item_or_row, str)
+                          else "" if item_or_row is None else str(item_or_row))
+    bindings = tuple(sorted(
+        (
+            _normalize(binding.get("scope_role")),
+            _normalize(binding.get("type_surface")),
+            _normalize(binding.get("value_surface")),
+        )
+        for binding in atom.properties.get("identity_bindings", ())
+        if isinstance(binding, Mapping) and _normalize(binding.get("scope_role")) != "primary"
+    ))
+    return (target, prop, item_key, bindings) if target and prop else None
 
 
 @dataclass(frozen=True)
@@ -83,8 +96,8 @@ class GroupMember:
 
 
 def build_groups(members: Sequence[GroupMember], *, max_group: int = MAX_GROUP) -> list[list[GroupMember]]:
-    """Same target+property across >=2 messages, time-ordered, cut into windows overlapping by one."""
-    by_key: dict[tuple[str, str], list[GroupMember]] = {}
+    """Same target/property/scope across >=2 messages, cut into overlapping time windows."""
+    by_key: dict[tuple[str, str, str, tuple[tuple[str, str, str], ...]], list[GroupMember]] = {}
     for member in members:
         key = group_key(member.atom)
         if key is not None:
@@ -200,6 +213,8 @@ def _validated_relations(data: Mapping[str, Any], members: Sequence[GroupMember]
             raise ContractValidationError("reconciliation relation is duplicated")
         seen.add((source, target, kind))
         newer, older = members[source], members[target]
+        if group_key(newer.atom) != group_key(older.atom):
+            raise ContractValidationError("reconciliation relation crosses scope")
         spans = _semantic_spans([adapter.span(e) for e in item.get("evidence") or []], observations) \
             if item.get("evidence") else []
         if kind in UPDATE_TYPES:

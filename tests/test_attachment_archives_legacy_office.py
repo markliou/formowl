@@ -15,6 +15,9 @@ from zipfile import ZipFile, ZipInfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
 from formowl_ingestion.extractors.document.attachment import (  # noqa: E402
+    _ParsedContent,
+    _TextBlock,
+    _add_member,
     _declared_kind,
     _parse_content,
     _sniff_kind,
@@ -247,6 +250,31 @@ class ArchiveExpansionTests(unittest.TestCase):
             parsed = _parse_content(buffer.getvalue(), kind="gzip", declared_kind="gzip", max_bytes=_MB,
                                     config={}, archive_budget={"bytes": 0, "members": 5})
         self.assertEqual(_members(parsed), {"values.txt": "expansion_limit"})
+
+    def test_embedded_msg_is_not_parsed_once_the_shared_budget_is_spent(self):
+        parsed = _ParsedContent()
+        parse = mock.Mock(side_effect=AssertionError("embedded msg was parsed"))
+        self.assertTrue(_add_member(
+            parsed, source_name="inner.msg", index=1, size=None, read=None,
+            encrypted=False, container_format="msg", max_bytes=_MB, config={}, depth=0,
+            budget={"bytes": 0, "members": 5}, parse=parse,
+        ))
+        parse.assert_not_called()
+        self.assertEqual(_members(parsed), {"inner.msg": "expansion_limit"})
+
+    def test_embedded_msg_text_charges_bytes_without_negative_budget(self):
+        parsed = _ParsedContent()
+        budget = {"bytes": 2, "members": 5}
+        inner = _ParsedContent(blocks=[_TextBlock(
+            observation_type="paragraph", text="three", location={"block_index": 1}, payload={},
+        )])
+        self.assertTrue(_add_member(
+            parsed, source_name="inner.msg", index=1, size=None, read=None,
+            encrypted=False, container_format="msg", max_bytes=_MB, config={}, depth=0,
+            budget=budget, parse=lambda: inner,
+        ))
+        self.assertEqual(_members(parsed), {"inner.msg": "extracted"})
+        self.assertEqual(budget["bytes"], 0)
 
     def test_unsupported_compression_method_fails_only_that_member(self):
         data = bytearray(_zip({"odd.txt": b"x", "fine.txt": b"fine"}))

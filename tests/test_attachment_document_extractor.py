@@ -273,8 +273,8 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
                     extracted_value=observation.extracted_value,
                 ))
                 assert_no_public_raw_references(observation.to_dict())
-                self.assertEqual(AttachmentDocumentExtractor().version(), "0.7.2")
-                self.assertEqual(result.extractor_run.extractor_version, "0.7.2")
+                self.assertEqual(AttachmentDocumentExtractor().version(), "0.7.3")
+                self.assertEqual(result.extractor_run.extractor_version, "0.7.3")
 
     def test_pdf_reads_only_admitted_pages_once(self) -> None:
         pages = [Mock(), Mock()]
