@@ -57,13 +57,25 @@ class ReconciliationTests(unittest.TestCase):
                                "2026-01-15T09:00:00+08:00", {"subject": "通知"}, {"obs_new": new.to_dict()})
 
     def _run(self, relations, run_id="recon_run_001"):
+        return self._run_members([self.old, self.new], relations, run_id)
+
+    def _run_members(self, members, relations, run_id):
         reader = mock.Mock()
         reader.complete_json.return_value = ({"relations": relations},
                                              {"requested_model": "m", "observed_model": "m",
                                               "request_fingerprint": sha256_json({"r": run_id})})
-        return reconcile_group([self.old, self.new], reader=reader, extractor_run_id=run_id, model_name="m",
+        return reconcile_group(members, reader=reader, extractor_run_id=run_id, model_name="m",
                                semantic_metadata_store=SemanticMetadataStore(self.temp_dir),
                                candidate_relation_store=CandidateRelationStore(self.temp_dir))
+
+    def _with_value(self, member: GroupMember, value: str) -> GroupMember:
+        atom = member.atom.to_dict()
+        atom["properties"] = deepcopy(atom["properties"])
+        atom["properties"]["assertion"]["value"] = value
+        return GroupMember(
+            CandidateAtom.from_dict(atom), member.message_key, member.message_time,
+            member.context, member.observations,
+        )
 
     def _with_item_scope(self, member: GroupMember, item_or_row: str) -> GroupMember:
         atom = member.atom.to_dict()
@@ -123,6 +135,36 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(relation.properties["evidence_spans"][0]["quote"], "交期改為 1/27")
         self.assertEqual(result.ledger.value["reconciliation_status"], "reconciled")
         self.assertEqual(CandidateRelationStore(self.temp_dir).get(relation.candidate_relation_id), relation)
+
+    def test_updates_and_supersedes_require_distinct_values_and_value_bearing_evidence(self) -> None:
+        relation_template = {"source": 1, "target": 0, "relation_type": "updates", "confidence": 0.8,
+                             "evidence": [{"observation_id": "obs_new", "quote": "交期改為 1/27"}]}
+        cases = [
+            ("same_value", self.old, self._with_value(self.new, "１/２０"), "交期改為 1/27",
+             "values must differ"),
+            ("empty_source", self.old, self._with_value(self.new, "  \t"), "交期改為 1/27",
+             "values must be non-empty"),
+            ("empty_target", self._with_value(self.old, "  "), self.new, "交期改為 1/27",
+             "values must be non-empty"),
+            ("evidence_omits_new_value", self.old, self.new, "交期改為", "contain the source value"),
+        ]
+        for index, (case, older, newer, quote, error) in enumerate(cases):
+            for kind in ("updates", "supersedes"):
+                with self.subTest(case=case, kind=kind):
+                    relation = {**relation_template, "relation_type": kind,
+                                "evidence": [{"observation_id": "obs_new", "quote": quote}]}
+                    with self.assertRaisesRegex(ContractValidationError, error):
+                        self._run_members([older, newer], [relation], f"recon_value_bad_{index}_{kind}")
+
+    def test_update_value_and_evidence_comparison_uses_nfkc_casefold(self) -> None:
+        newer = self._with_value(self.new, "１/２７")
+        result = self._run_members(
+            [self.old, newer],
+            [{"source": 1, "target": 0, "relation_type": "updates", "confidence": 0.8,
+              "evidence": [{"observation_id": "obs_new", "quote": "交期改為 1/27"}]}],
+            "recon_nfkc_value_match",
+        )
+        self.assertEqual(len(result.relations), 1)
 
     def test_update_without_later_source_wording_or_against_time_fails_the_group(self) -> None:
         cases = [([{"source": 1, "target": 0, "relation_type": "updates", "confidence": 0.8,

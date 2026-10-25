@@ -41,7 +41,7 @@ from formowl_contract import (
 from .candidates import _semantic_spans
 from .local_semantic_reader import Adapter
 
-PROFILE = "cross_unit_reconciliation_v2"
+PROFILE = "cross_unit_reconciliation_v3"
 RELATION_TYPES = ("same_fact", "updates", "supersedes", "contradicts", "refines")
 UPDATE_TYPES = frozenset({"updates", "supersedes"})
 MAX_GROUP = 12
@@ -52,9 +52,9 @@ INSTRUCTIONS = """你是離線語意整合器。輸入是一組「同一個對�
 
 找出成對事實之間「有原文根據」的關係，source 與 target 用事實的 index：
 - same_fact：同一個陳述被重述（例如回信引用舊信）；source 是重述/引用的那筆，target 是原始那筆。
-- updates：較晚的 source 對同一對象同一屬性給出新值；必須在 source 自己引用的原文中找到表示變更的
-  字句（例如「改為」「延後至」「調整為」「新的交期」），放進 evidence。
-- supersedes：較晚的 source 更正或撤回較早的陳述；evidence 必須是表示更正的原文字句。
+- updates：較晚的 source 對同一對象同一屬性給出不同且非空的新值；必須在 source 自己引用的原文中找到表示變更的
+  字句，並讓至少一段 evidence quote 包含新值本身。
+- supersedes：較晚的 source 更正或撤回較早的陳述；新舊值必須不同且非空，至少一段 evidence quote 必須包含新值本身。
 - contradicts：值不同，但原文沒有說明哪個取代哪個；兩筆都保留。
 - refines：source 為同一對象補充細節（時間、數量、品項），不改變原值。
 規則：較晚的信不代表自動取代較早的信；沒有原文變更字句就不可用 updates/supersedes。
@@ -223,6 +223,14 @@ def _validated_relations(data: Mapping[str, Any], members: Sequence[GroupMember]
             if newer.message_key == older.message_key or (
                     newer.message_time and older.message_time and newer.message_time < older.message_time):
                 raise ContractValidationError("update direction contradicts message time")
+            newer_value = _normalize(newer.atom.properties.get("assertion", {}).get("value"))
+            older_value = _normalize(older.atom.properties.get("assertion", {}).get("value"))
+            if not newer_value or not older_value:
+                raise ContractValidationError("update values must be non-empty")
+            if newer_value == older_value:
+                raise ContractValidationError("update values must differ")
+            if not any(newer_value in _normalize(span["quote"]) for span in spans):
+                raise ContractValidationError("update evidence must contain the source value")
         confidence = item.get("confidence")
         if type(confidence) not in (int, float) or not 0 <= confidence <= 1:
             raise ContractValidationError("reconciliation confidence is invalid")
