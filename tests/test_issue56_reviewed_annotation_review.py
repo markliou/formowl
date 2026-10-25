@@ -238,6 +238,8 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
         self.assertNotIn("sha256:" + "b" * 64, hints)
         self.assertNotIn("sha256:" + "d" * 64, hints)
         self.assertTrue(all(value for value in hints.values()))
+        self.assertIn("kestrel lbp", hints["sha256:" + "a" * 64])
+        self.assertIn("kestrel 楓林標籤機", hints["sha256:" + "c" * 64])
         self.assertTrue(all(term.startswith("sha256:") for term in stats["term_hashes"]))
 
     def test_server_annotation_hint_match_keeps_required_protected_and_identity_literals(
@@ -268,7 +270,7 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
                 ("Kestrel PO 4500123 delivery confirmed",),
                 required_terms=("delivery",),
                 protected_terms={"4500123"},
-                identity_terms=("kestrel",),
+                identity_surfaces=("Kestrel",),
                 tokenizer=profile,
             )
         )
@@ -277,7 +279,7 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
                 ("PO 4500123 delivery confirmed",),
                 required_terms=("delivery",),
                 protected_terms={"4500123"},
-                identity_terms=("kestrel",),
+                identity_surfaces=("Kestrel",),
                 tokenizer=profile,
             )
         )
@@ -286,7 +288,7 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
                 ("Kestrel PO delivery confirmed",),
                 required_terms=("delivery",),
                 protected_terms={"4500123"},
-                identity_terms=("kestrel",),
+                identity_surfaces=("Kestrel",),
                 tokenizer=profile,
             )
         )
@@ -295,7 +297,34 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
                 ("Kestrel PO 4500123",),
                 required_terms=("delivery",),
                 protected_terms={"4500123"},
-                identity_terms=("kestrel",),
+                identity_surfaces=("Kestrel",),
+                tokenizer=profile,
+            )
+        )
+        self.assertTrue(
+            _server_annotation_hint_source_match(
+                ("楓林標籤機 delivery confirmed",),
+                required_terms=("delivery",),
+                protected_terms=set(),
+                identity_surfaces=("楓林標籤機",),
+                tokenizer=profile,
+            )
+        )
+        self.assertFalse(
+            _server_annotation_hint_source_match(
+                ("楓林標籤機 delivery confirmed",),
+                required_terms=("delivery", "latest"),
+                protected_terms=set(),
+                identity_surfaces=("楓林標籤機",),
+                tokenizer=profile,
+            )
+        )
+        self.assertFalse(
+            _server_annotation_hint_source_match(
+                ("NotKestrelX delivery confirmed",),
+                required_terms=("delivery",),
+                protected_terms=set(),
+                identity_surfaces=("Kestrel",),
                 tokenizer=profile,
             )
         )

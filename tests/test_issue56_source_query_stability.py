@@ -21,12 +21,12 @@ from scripts.issue56_source_native_lookup import build_lookup
 
 
 class SourceQueryStabilityTests(unittest.TestCase):
-    def prepare(self, families):
+    def prepare(self, families, *, document_text="cerulean"):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         fixture = fixtures._source_start_preparation_fixture(
-            root, families=families, mail_text="cerulean", document_text="cerulean",
+            root, families=families, mail_text="cerulean", document_text=document_text,
         )
         output = root / "lookup"
         build_lookup(directory=fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
@@ -172,6 +172,68 @@ class SourceQueryStabilityTests(unittest.TestCase):
         self.assertGreater(read_summary["projected_candidate_count"], 0)
         self.assertGreater(read_summary["predicate_passed_count"], 0)
         self.assertTrue(result["citations"])
+
+    def test_reviewed_identity_surface_passes_without_changing_ordinary_results(self):
+        revision, _, arguments = self.prepare(
+            ("document_text",),
+            document_text=(
+                "# Source identity\n\n楓林標籤機 delivery confirmed\n\n"
+                "ordinary delivery result\n"
+            ),
+        )
+        authority = revision.source_records.job_authorities[0]
+        observations = [
+            authority.observation_store.get(reference[1])
+            for reference in revision.source_records.observation_references
+        ]
+        alias_observation = next(item for item in observations if "楓林標籤機" in (item.text or ""))
+        observation_hash = sha256_json(alias_observation.to_dict())
+        reviewed = replace(
+            revision,
+            reviewed_source_annotations=({
+                "candidate_atom_id": "reviewed-kestrel-atom",
+                "target": "Kestrel",
+                "identity_bindings": ({
+                    "scope_role": "primary", "type_surface": "標籤機",
+                    "value_surface": "楓林標籤機",
+                },),
+                "time_roles": (),
+                "property": None,
+                "event_type": None,
+                "source_hashes": (observation_hash,),
+            },),
+        )
+        query = "Find Kestrel delivery evidence"
+        arguments["query_text"] = query
+        arguments["required_terms"] = ["delivery"]
+        arguments["request_contract"]["original_query_hash"] = sha256_json(query)
+        arguments["request_contract"]["requested_fields"] = ["delivery status"]
+
+        ordinary = loader._build_source_start_semantic_handler(revision, mail_tool=False)(arguments)
+        trace = _SourcePhaseTrace({})
+        with _source_phase_trace_scope(trace):
+            annotated = loader._build_source_start_semantic_handler(reviewed, mail_tool=False)(arguments)
+        summary = next(
+            item for item in json.loads(trace.snapshot())["details"]
+            if item.get("name") == "annotation_identity_reads"
+        )
+        self.assertGreater(summary["predicate_passed_count"], 0)
+        self.assertEqual(annotated["citations"], ordinary["citations"])
+        self.assertGreaterEqual(len(ordinary["citations"]), 2)
+
+        arguments["required_terms"] = ["overdue"]
+        arguments["request_contract"]["requested_fields"] = ["overdue status"]
+        arguments["request_contract"]["original_query_hash"] = sha256_json(query)
+        rejected_trace = _SourcePhaseTrace({})
+        with _source_phase_trace_scope(rejected_trace):
+            rejected = loader._build_source_start_semantic_handler(reviewed, mail_tool=False)(arguments)
+        reject_summary = next(
+            item for item in json.loads(rejected_trace.snapshot())["details"]
+            if item.get("name") == "annotation_identity_reads"
+        )
+        self.assertEqual(reject_summary["predicate_passed_count"], 0)
+        self.assertGreater(reject_summary["predicate_rejected_count"], 0)
+        self.assertEqual(rejected["citations"], [])
 
     def test_expanded_wording_and_requested_fields_do_not_change_grounded_shortlist(self):
         revision, handler, arguments = self.prepare(("mail", "document_text"))

@@ -1856,6 +1856,7 @@ def _select_reviewed_annotation_sources(revision, *, arguments, catalog, deadlin
 
 
 _MAX_SERVER_ANNOTATION_HINT_HASHES = 32
+_MAX_SERVER_ANNOTATION_HINT_SURFACES_PER_HASH = 32
 _MAX_SERVER_ANNOTATION_HINT_ATOMS = 4096
 
 
@@ -1950,8 +1951,20 @@ def _server_reviewed_identity_source_hints(revision, *, user_text, tokenizer, de
         )
     )
     hints: dict[str, set[str]] = {}
+    identity_surface_truncated = False
     cap_reached = False
-    for item, matched_terms in matched_atoms:
+    for item, _matched_terms in matched_atoms:
+        surfaces = [item.get("target")]
+        for binding in item.get("identity_bindings", ()):
+            if isinstance(binding, Mapping):
+                surfaces.extend((binding.get("type_surface"), binding.get("value_surface")))
+        normalized_surfaces = {
+            unicodedata.normalize("NFKC", value).casefold().strip()
+            for value in surfaces
+            if isinstance(value, str) and value.strip()
+        }
+        if not normalized_surfaces:
+            continue
         source_hashes = item.get("source_hashes", ())
         for source_hash in source_hashes:
             check_source_evidence_deadline(deadline)
@@ -1963,16 +1976,26 @@ def _server_reviewed_identity_source_hints(revision, *, user_text, tokenizer, de
             if source_hash not in hints and len(hints) >= _MAX_SERVER_ANNOTATION_HINT_HASHES:
                 cap_reached = True
                 break
-            hints.setdefault(source_hash, set()).update(matched_terms)
+            hinted_surfaces = hints.setdefault(source_hash, set())
+            for surface in sorted(normalized_surfaces):
+                if surface in hinted_surfaces:
+                    continue
+                if len(hinted_surfaces) >= _MAX_SERVER_ANNOTATION_HINT_SURFACES_PER_HASH:
+                    identity_surface_truncated = True
+                    break
+                hinted_surfaces.add(surface)
         if cap_reached:
             break
-    frozen_hints = {key: tuple(sorted(value)) for key, value in hints.items()}
+    frozen_hints = {
+        key: tuple(sorted(value)) for key, value in hints.items() if value
+    }
     return frozen_hints, {
         "scanned_atom_count": min(len(annotations), _MAX_SERVER_ANNOTATION_HINT_ATOMS),
         "matched_atom_count": len(matched_atoms),
         "candidate_hash_count": len(frozen_hints),
         "term_hashes": tuple(sorted(sha256_json(term) for term in ordered_terms)),
         "cap_reached": cap_reached,
+        "identity_surface_truncated": identity_surface_truncated,
         "atom_scan_truncated": atom_scan_truncated,
     }
 
@@ -1982,10 +2005,10 @@ def _server_annotation_hint_source_match(
     *,
     required_terms,
     protected_terms,
-    identity_terms,
+    identity_surfaces,
     tokenizer,
 ):
-    """Apply only required/protected/identity hard predicates to hinted sources."""
+    """Apply required/protected predicates and reviewed surface identity to hints."""
     combined = "\n".join(value for value in texts if isinstance(value, str) and value)
     normalized = unicodedata.normalize("NFKC", combined).casefold()
     if any(term.casefold() not in normalized for term in required_terms):
@@ -1993,7 +2016,18 @@ def _server_annotation_hint_source_match(
     source_tokens = set(tokenizer.analyze(combined).tokens)
     if protected_terms and not protected_terms.issubset(source_tokens):
         return False
-    return bool(set(identity_terms).intersection(source_tokens))
+    for surface in identity_surfaces:
+        normalized_surface = unicodedata.normalize("NFKC", surface).casefold().strip()
+        if not normalized_surface:
+            continue
+        # Match H4's complete-term boundary: ASCII neighbors cannot extend an
+        # identifier, while CJK surface matching remains substring capable.
+        pattern = re.compile(
+            r"(?<![a-z0-9])" + re.escape(normalized_surface) + r"(?![a-z0-9])"
+        )
+        if pattern.search(normalized):
+            return True
+    return False
 
 
 _FOLLOWED_RELATIONS = frozenset({"updates", "supersedes", "contradicts"})
@@ -2622,11 +2656,11 @@ def _build_source_start_semantic_handler(
             last_anchor = None
             semantic_hash = sha256_json(observation.to_dict()) if annotation_hashes else None
             semantic_match = semantic_hash in annotation_hashes
-            annotation_hint_terms = annotation_identity_hints.get(
+            annotation_hint_surfaces = annotation_identity_hints.get(
                 sha256_json(observation.to_dict()),
                 (),
             )
-            annotation_hint_match = bool(annotation_hint_terms)
+            annotation_hint_match = bool(annotation_hint_surfaces)
             if annotation_hint_match:
                 annotation_hint_counts["projected"] += 1
             if semantic_match:
@@ -2713,7 +2747,7 @@ def _build_source_start_semantic_handler(
                             (text, parent_text, parent_payload.get("subject")),
                             required_terms=required_terms,
                             protected_terms=protected_terms,
-                            identity_terms=annotation_hint_terms,
+                            identity_surfaces=annotation_hint_surfaces,
                             tokenizer=tokenizer,
                         ):
                             annotation_hint_counts["predicate_rejected"] += 1
@@ -2894,7 +2928,7 @@ def _build_source_start_semantic_handler(
                         ),
                         required_terms=required_terms,
                         protected_terms=protected_terms,
-                        identity_terms=annotation_hint_terms,
+                        identity_surfaces=annotation_hint_surfaces,
                         tokenizer=tokenizer,
                     ):
                         annotation_hint_counts["predicate_rejected"] += 1
@@ -2981,7 +3015,7 @@ def _build_source_start_semantic_handler(
                         (text,),
                         required_terms=required_terms,
                         protected_terms=protected_terms,
-                        identity_terms=annotation_hint_terms,
+                        identity_surfaces=annotation_hint_surfaces,
                         tokenizer=tokenizer,
                     ):
                         annotation_hint_counts["predicate_rejected"] += 1
