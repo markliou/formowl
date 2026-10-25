@@ -14,10 +14,12 @@ from urllib.parse import parse_qs, urlparse
 
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError
+from formowl_contract.primitives import sha256_json
 from formowl_gateway.issue56_uat_runtime import Issue56TemporaryLanQueryService, _browser_projection
 from formowl_mail.human_uat_orchestrator import (
     CodexResponsesConversationModel,
     _UatTurnRequestContractBinder,
+    _annotation_source_fallback_arguments,
     _parse_tool_request,
     UatConversationOutcome,
     _provider_request_shape_snapshot,
@@ -89,6 +91,97 @@ class _QueryService:
 
 
 class MailHumanUatHttpTests(unittest.TestCase):
+    def test_rejected_annotation_field_term_proposal_falls_back_to_cited_source_request(self) -> None:
+        prompt = "請查詢 Kestrel 的交期"
+        catalog = {
+            "entries": [{"annotation_id": "candidate-1", "target": "Kestrel",
+                         "identity_bindings": []}],
+        }
+        catalog["catalog_pin"] = sha256_json(catalog)
+        binder = _UatTurnRequestContractBinder(
+            user_text=prompt,
+            authorized_capability_summary={
+                "source_families": ["mail"], "reviewed_annotation_catalog": catalog,
+            },
+        )
+        descriptor = _actual_query_tool_descriptor()
+        arguments = {
+            "query_text": "查詢 Kestrel 的交期",
+            "required_terms": ["Kestrel", "交期"],
+            "reviewed_annotation_ids": ["candidate-1"],
+            "request_contract": {
+                "original_query_hash": "sha256:" + hashlib.sha256(prompt.encode()).hexdigest(),
+                "query_class": "evidence_lookup",
+                "source_family_scope": ["mail"],
+                "requested_fields": ["交期"],
+                "maximum_claim_strength": "cited_evidence",
+            },
+        }
+        with self.assertRaisesRegex(ContractValidationError, "overlaps a requested output field"):
+            _parse_tool_request(
+                arguments, tool_descriptor=descriptor, request_contract_binder=binder,
+            )
+
+        fallback_arguments = _annotation_source_fallback_arguments(
+            arguments,
+            request_contract_binder=binder,
+            rejection_code="field_term_role_overlap",
+        )
+        self.assertIsNotNone(fallback_arguments)
+        request = _parse_tool_request(
+            fallback_arguments,
+            tool_descriptor=descriptor,
+            request_contract_binder=binder,
+        )
+        self.assertEqual(request.reviewed_annotation_ids, ())
+        self.assertEqual(request.required_terms, ("kestrel",))
+        self.assertEqual(request.request_contract["requested_fields"], ["交期"])
+
+        source_calls = []
+
+        def source_lookup(source_request):
+            source_calls.append(source_request)
+            return {"citations": [{"citation_id": "mail-source-1"}]}
+
+        source_result = source_lookup(request)
+        self.assertEqual(len(source_calls), 1)
+        self.assertEqual(source_result["citations"][0]["citation_id"], "mail-source-1")
+
+    def test_unavailable_annotation_nomination_still_allows_source_lookup(self) -> None:
+        prompt = "請查詢 Kestrel 的交期"
+        catalog = {"entries": [{"annotation_id": "available", "target": "Kestrel",
+                                "identity_bindings": []}]}
+        catalog["catalog_pin"] = sha256_json(catalog)
+        binder = _UatTurnRequestContractBinder(
+            user_text=prompt,
+            authorized_capability_summary={
+                "source_families": ["mail"], "reviewed_annotation_catalog": catalog,
+            },
+        )
+        arguments = {
+            "query_text": "查詢 Kestrel 的交期",
+            "required_terms": ["Kestrel", "交期"],
+            "reviewed_annotation_ids": ["unavailable"],
+            "request_contract": {
+                "original_query_hash": "sha256:" + hashlib.sha256(prompt.encode()).hexdigest(),
+                "query_class": "evidence_lookup", "source_family_scope": ["mail"],
+                "requested_fields": ["交期"], "maximum_claim_strength": "cited_evidence",
+            },
+        }
+        descriptor = _actual_query_tool_descriptor()
+        with self.assertRaisesRegex(ContractValidationError, "annotation ID is unavailable"):
+            _parse_tool_request(arguments, tool_descriptor=descriptor, request_contract_binder=binder)
+        fallback = _annotation_source_fallback_arguments(
+            arguments, request_contract_binder=binder, rejection_code="annotation_id_unavailable",
+        )
+        request = _parse_tool_request(fallback, tool_descriptor=descriptor, request_contract_binder=binder)
+        self.assertEqual(request.reviewed_annotation_ids, ())
+        self.assertEqual(request.required_terms, ("kestrel",))
+        source_result = (lambda source_request: {"citations": [{
+            "citation_id": "source-1", "query": source_request.query_text,
+        }] })(request)
+        self.assertEqual(source_result["citations"][0]["citation_id"], "source-1")
+
     def test_uat_tool_boundary_rejects_raw_terse_copy_and_accepts_typed_expansion(self) -> None:
         prompt = "嘉值交期"
         binder = _UatTurnRequestContractBinder(
