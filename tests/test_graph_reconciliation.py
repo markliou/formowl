@@ -77,6 +77,14 @@ class ReconciliationTests(unittest.TestCase):
             member.context, member.observations,
         )
 
+    def _member_with_source(self, observation_id: str, text: str, value: str, quote: str) -> GroupMember:
+        observation = _observation(observation_id, text)
+        atom = _annotate(self.temp_dir, observation, value, quote)
+        return GroupMember(
+            atom, f"mailocc_{observation_id}", "2026-01-15T09:00:00+08:00",
+            {"subject": "通知"}, {observation_id: observation.to_dict()},
+        )
+
     def _with_item_scope(self, member: GroupMember, item_or_row: str) -> GroupMember:
         atom = member.atom.to_dict()
         atom["properties"] = deepcopy(atom["properties"])
@@ -165,6 +173,37 @@ class ReconciliationTests(unittest.TestCase):
             "recon_nfkc_value_match",
         )
         self.assertEqual(len(result.relations), 1)
+
+    def test_update_value_inside_part_number_is_not_an_independent_word(self) -> None:
+        older = self._with_value(self.old, "20")
+        newer = self._member_with_source(
+            "obs_new_part_number", "通知：PO 4500123 更新料號 SP.Z6L22G001", "22",
+            "更新料號 SP.Z6L22G001",
+        )
+        relation = {"source": 1, "target": 0, "relation_type": "updates", "confidence": 0.8,
+                    "evidence": [{"observation_id": "obs_new_part_number",
+                                  "quote": "更新料號 SP.Z6L22G001"}]}
+        with self.assertRaisesRegex(ContractValidationError, "independent word"):
+            self._run_members([older, newer], [relation], "recon_sku_substring")
+
+    def test_quantity_value_with_ascii_word_boundaries_is_accepted(self) -> None:
+        older = self._with_value(self.old, "280")
+        newer = self._member_with_source(
+            "obs_new_quantity", "通知：PO 4500123 Q'ty: 320 PCS", "320", "Q'ty: 320 PCS",
+        )
+        relation = {"source": 1, "target": 0, "relation_type": "updates", "confidence": 0.8,
+                    "evidence": [{"observation_id": "obs_new_quantity", "quote": "Q'ty: 320 PCS"}]}
+        result = self._run_members([older, newer], [relation], "recon_ascii_boundaries")
+        self.assertEqual(result.relations[0].relation_type, "updates")
+
+    def test_value_adjacent_to_cjk_is_accepted(self) -> None:
+        newer = self._member_with_source(
+            "obs_new_cjk_boundary", "通知：PO 4500123 交期改為1/27", "1/27", "改為1/27",
+        )
+        relation = {"source": 1, "target": 0, "relation_type": "supersedes", "confidence": 0.8,
+                    "evidence": [{"observation_id": "obs_new_cjk_boundary", "quote": "改為1/27"}]}
+        result = self._run_members([self.old, newer], [relation], "recon_cjk_boundary")
+        self.assertEqual(result.relations[0].relation_type, "supersedes")
 
     def test_update_without_later_source_wording_or_against_time_fails_the_group(self) -> None:
         cases = [([{"source": 1, "target": 0, "relation_type": "updates", "confidence": 0.8,

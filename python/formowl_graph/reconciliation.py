@@ -41,7 +41,7 @@ from formowl_contract import (
 from .candidates import _semantic_spans
 from .local_semantic_reader import Adapter
 
-PROFILE = "cross_unit_reconciliation_v3"
+PROFILE = "cross_unit_reconciliation_v4"
 RELATION_TYPES = ("same_fact", "updates", "supersedes", "contradicts", "refines")
 UPDATE_TYPES = frozenset({"updates", "supersedes"})
 MAX_GROUP = 12
@@ -53,8 +53,8 @@ INSTRUCTIONS = """你是離線語意整合器。輸入是一組「同一個對�
 找出成對事實之間「有原文根據」的關係，source 與 target 用事實的 index：
 - same_fact：同一個陳述被重述（例如回信引用舊信）；source 是重述/引用的那筆，target 是原始那筆。
 - updates：較晚的 source 對同一對象同一屬性給出不同且非空的新值；必須在 source 自己引用的原文中找到表示變更的
-  字句，並讓至少一段 evidence quote 包含新值本身。
-- supersedes：較晚的 source 更正或撤回較早的陳述；新舊值必須不同且非空，至少一段 evidence quote 必須包含新值本身。
+  字句，並讓至少一段 evidence quote 以獨立詞包含新值（值前後不能緊鄰 ASCII 英數字；CJK 相鄰可接受）。
+- supersedes：較晚的 source 更正或撤回較早的陳述；新舊值必須不同且非空，至少一段 evidence quote 必須以獨立詞包含新值。
 - contradicts：值不同，但原文沒有說明哪個取代哪個；兩筆都保留。
 - refines：source 為同一對象補充細節（時間、數量、品項），不改變原值。
 規則：較晚的信不代表自動取代較早的信；沒有原文變更字句就不可用 updates/supersedes。
@@ -64,6 +64,27 @@ evidence 的 quote 必須是該 observation 內一段連續原文，逐字照抄
 
 def _normalize(text: Any) -> str:
     return unicodedata.normalize("NFKC", text).casefold().strip() if isinstance(text, str) else ""
+
+
+def _contains_value_as_independent_word(quote: Any, value: Any) -> bool:
+    normalized_quote, normalized_value = _normalize(quote), _normalize(value)
+    if not normalized_value:
+        return False
+    offset = 0
+    while True:
+        position = normalized_quote.find(normalized_value, offset)
+        if position < 0:
+            return False
+        before = normalized_quote[position - 1] if position > 0 else ""
+        after_position = position + len(normalized_value)
+        after = normalized_quote[after_position] if after_position < len(normalized_quote) else ""
+        if not _is_ascii_alphanumeric(before) and not _is_ascii_alphanumeric(after):
+            return True
+        offset = position + 1
+
+
+def _is_ascii_alphanumeric(character: str) -> bool:
+    return character.isascii() and character.isalnum()
 
 
 def group_key(atom: CandidateAtom) -> tuple[str, str, str, tuple[tuple[str, str, str], ...]] | None:
@@ -229,8 +250,8 @@ def _validated_relations(data: Mapping[str, Any], members: Sequence[GroupMember]
                 raise ContractValidationError("update values must be non-empty")
             if newer_value == older_value:
                 raise ContractValidationError("update values must differ")
-            if not any(newer_value in _normalize(span["quote"]) for span in spans):
-                raise ContractValidationError("update evidence must contain the source value")
+            if not any(_contains_value_as_independent_word(span["quote"], newer_value) for span in spans):
+                raise ContractValidationError("update evidence must contain the source value as an independent word")
         confidence = item.get("confidence")
         if type(confidence) not in (int, float) or not 0 <= confidence <= 1:
             raise ContractValidationError("reconciliation confidence is invalid")
