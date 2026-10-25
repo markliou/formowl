@@ -41,7 +41,8 @@ from formowl_mail.human_uat_orchestrator import (  # noqa: E402
     validate_codex_runtime_state,
 )
 
-_MODEL = "gpt-6-luna"
+_MODEL = "gpt-5.6-luna"
+_REASONING_EFFORT = "low"
 _MAX_PROVIDER_API_KEY_BYTES = 16 * 1024
 _MAX_REFERENCE_REPAIR_MANIFEST_BYTES = 1024 * 1024
 
@@ -3098,7 +3099,7 @@ def main() -> int:
             ),
             workspace_dir=runtime_paths.workspace,
             model=_MODEL,
-            reasoning_effort="high",
+            reasoning_effort=_REASONING_EFFORT,
         )
     else:
         if runtime_paths.provider_base_url is None or args.codex_provider_api_key_file is None:
@@ -3111,6 +3112,7 @@ def main() -> int:
             base_url=runtime_paths.provider_base_url,
             api_key=provider_api_key,
             model=_MODEL,
+            reasoning_effort=_REASONING_EFFORT,
             stream_initial_requests=True,
             typed_evidence_notes=True,
         )
@@ -3166,7 +3168,7 @@ def main() -> int:
                     record_raw_uat_interactions=args.record_raw_uat_interactions,
                     temporary_access_enabled=args.temporary_access_code is not None,
                     provider_base_url=runtime_paths.provider_base_url,
-                    typed_evidence_notes=True,
+                    typed_evidence_notes=True, model=_MODEL, reasoning_effort=_REASONING_EFFORT,
                 ) if args.diagnostic_deployment_manifest is not None else None
             ),
         )

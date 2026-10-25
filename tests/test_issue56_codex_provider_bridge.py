@@ -111,7 +111,7 @@ def _binding_attempt(index=1, *, http_status=201, tool_choice="auto"):
               "description": "descriptor-private-sentinel",
               "parameters": {"type": "object", "properties": {}}, "strict": True}]
     shape = orchestrator._provider_request_shape_snapshot({
-        "model": "gpt-6-luna", "tools": tools, "tool_choice": tool_choice,
+        "model": "gpt-5.6-luna", "tools": tools, "tool_choice": tool_choice,
     })
     return orchestrator._provider_attempt_diagnostic(
         attempt=index, elapsed_ms=index, outcome="completed",
@@ -5044,7 +5044,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
             server_thread.join(timeout=5)
 
         self.assertEqual(len(received), 1)
-        self.assertEqual(received[0]["model"], "gpt-6-luna")
+        self.assertEqual(received[0]["model"], "gpt-5.6-luna")
         self.assertEqual(received[0]["reasoning"], {"effort": "high"})
         evidence_tool.assert_not_called()
         self.assertEqual(outcome.response_kind, "clarification")
@@ -5936,7 +5936,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(transport.thread_start["model"], "gpt-6-luna")
+        self.assertEqual(transport.thread_start["model"], "gpt-5.6-luna")
         tool = transport.thread_start["dynamic_tools"][0]
         expected_tool = _actual_query_tool_descriptor()
         self.assertEqual(tool["name"], "query_effective_graph_view")
@@ -5975,7 +5975,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                 )
             },
         )
-        self.assertEqual(outcome.model_name, "codex:gpt-6-luna")
+        self.assertEqual(outcome.model_name, "codex:gpt-5.6-luna")
         self.assertEqual(outcome.citation_ids, ("citation-final",))
         self.assertEqual(outcome.coverage_status, "incomplete")
         self.assertEqual(len(outcome.tool_requests), 3)
@@ -6408,7 +6408,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
             self.assertEqual(paths.provider_env_key, env_key)
             self.assertEqual(validate_codex_runtime_state(paths.state_dir), paths)
             self.assertFalse((paths.codex_home / "auth.json").exists())
-            self.assertEqual(config["model"], "gpt-6-luna")
+            self.assertEqual(config["model"], "gpt-5.6-luna")
             self.assertEqual(config["model_provider"], "formowl_uat_custom")
             provider = config["model_providers"]["formowl_uat_custom"]
             self.assertEqual(provider["base_url"], base_url)
@@ -6502,7 +6502,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
 
         config_response = {
             "config": {
-                "model": "gpt-6-luna",
+                "model": "gpt-5.6-luna",
                 "model_provider": "formowl_uat_custom",
                 "forced_login_method": None,
                 "cli_auth_credentials_store": "file",
