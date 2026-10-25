@@ -7091,7 +7091,7 @@ class CodexResponsesConversationModel:
                     "uuid_valid": str(uuid.UUID(journal.identity)) == journal.identity,
                     "affinity_equal": header == cache_key == journal.identity,
                     "instructions_sha256": _responses_wire_hash(wire["instructions"]),
-                    "tools_sha256": _responses_wire_hash(wire["tools"]),
+                    "tools_sha256": _responses_wire_hash(wire.get("tools", [])),
                     "schema_sha256": _responses_wire_hash(wire["text"]),
                     "input_sha256": "sha256:" + hashlib.sha256(input_bytes).hexdigest(),
                     "input_item_count": len(wire_input),
