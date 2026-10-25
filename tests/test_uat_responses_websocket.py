@@ -11,6 +11,7 @@ import _paths  # noqa: F401
 from formowl_mail.human_uat_orchestrator import (
     CodexResponsesConversationModel,
     _codex_native_request,
+    _codex_native_websocket_request,
     _UatProviderFailure,
 )
 
@@ -105,6 +106,29 @@ class CodexNativeRequestTests(unittest.TestCase):
         self.assertEqual(_codex_native_request({**base, "tool_choice": "none"}), {"model": "m", "input": []})
         forced = _codex_native_request({**base, "tool_choice": {"type": "function", "name": "b"}})
         self.assertEqual((forced["tools"], "tool_choice" in forced), ([tools[1]], False))
+
+
+class CodexNativeWebSocketShapeTests(unittest.TestCase):
+    def test_request_follows_the_codex_responses_lite_shape(self) -> None:
+        tool = {"type": "function", "name": "query", "parameters": {"type": "object"}}
+        message, headers = _codex_native_websocket_request(
+            {"model": "gpt-5.6-luna", "instructions": "Be brief.", "tools": [tool], "reasoning": {"effort": "low"},
+             "input": [{"role": "user", "content": "hi"}, {"type": "function_call_output", "call_id": "c", "output": "x"}],
+             "text": {"format": {"type": "json_schema", "name": "decision", "schema": {}}}, "store": False},
+            session_id="00000000-0000-4000-8000-000000000001", installation_id="inst")
+        self.assertNotIn("instructions", message)
+        self.assertNotIn("tools", message)
+        additional, developer, user, output = message["input"]
+        self.assertEqual(additional["tools"], [{"type": "namespace", "name": "functions", "description": "",
+                                                "tools": [tool]}])
+        self.assertEqual(developer["content"], [{"type": "input_text", "text": "Be brief."}])
+        self.assertEqual(user, {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]})
+        self.assertEqual(output["type"], "function_call_output")
+        self.assertEqual(message["text"]["verbosity"], "low")
+        self.assertEqual(message["reasoning"], {"effort": "low", "context": "all_turns"})
+        self.assertEqual(message["client_metadata"]["ws_request_header_x_openai_internal_codex_responses_lite"], "true")
+        self.assertTrue(headers["user-agent"].startswith("codex_exec/0.164.0 ("))
+        self.assertEqual(headers["originator"], "codex_exec")
 
 
 class ResponsesWebSocketTests(unittest.TestCase):

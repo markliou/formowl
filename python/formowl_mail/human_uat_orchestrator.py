@@ -3467,6 +3467,75 @@ def _codex_native_request(payload: Mapping[str, Any]) -> dict[str, Any]:
     return request
 
 
+_CODEX_NATIVE_VERSION = "0.164.0"
+
+
+def _codex_native_user_agent() -> str:
+    """Codex CLI user-agent shape: ``codex_exec/<ver> (<os> <ver>; <arch>) <terminal> (codex_exec; <ver>)``."""
+    import platform
+
+    try:
+        release = platform.freedesktop_os_release()
+        system = f"{release.get('NAME', platform.system())} {release.get('VERSION_ID', platform.release())}"
+    except OSError:
+        system = f"{platform.system()} {platform.release()}"
+    return (f"codex_exec/{_CODEX_NATIVE_VERSION} ({system}; {platform.machine()}) "
+            f"formowl-uat/0.1.0 (codex_exec; {_CODEX_NATIVE_VERSION})")
+
+
+def _codex_native_websocket_request(
+    payload: Mapping[str, Any], *, session_id: str, installation_id: str,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """The Codex 0.164 WebSocket request (responses lite) for an already Codex-native payload.
+
+    Instructions become a developer message, tools a ``functions`` namespace in an
+    ``additional_tools`` input item, plain-string messages typed content; identity
+    headers and client metadata follow the Codex CLI.
+    """
+    window_id = f"{session_id}:0"
+    metadata = json.dumps({
+        "installation_id": installation_id, "session_id": session_id, "thread_id": session_id,
+        "agent_name": "/root", "turn_id": "", "window_id": window_id, "window_number": 0,
+        "request_kind": "turn", "history_initialization": "new", "thread_source": "user",
+        "sandbox": "seccomp", "sandbox_mode": "read-only", "auto_review_enabled": False,
+        "analytics_enabled": False, "model": payload.get("model"),
+        "reasoning_effort": (payload.get("reasoning") or {}).get("effort"),
+    }, separators=(",", ":"))
+    items: list[Any] = []
+    if payload.get("tools"):
+        items.append({"type": "additional_tools", "id": f"at_{uuid.uuid4()}", "role": "developer",
+                      "tools": [{"type": "namespace", "name": "functions", "description": "",
+                                 "tools": list(payload["tools"])}]})
+    if payload.get("instructions"):
+        items.append({"type": "message", "role": "developer",
+                      "content": [{"type": "input_text", "text": payload["instructions"]}]})
+    for item in payload.get("input") or ():
+        if isinstance(item, Mapping) and isinstance(item.get("content"), str) and item.get("role") in {
+                "user", "developer", "system"}:
+            item = {"type": "message", "role": item["role"],
+                    "content": [{"type": "input_text", "text": item["content"]}]}
+        items.append(item)
+    text = {"verbosity": "low", **({"format": payload["text"]["format"]}
+                                   if isinstance(payload.get("text"), Mapping) and "format" in payload["text"] else {})}
+    message = {
+        "type": "response.create", "model": payload.get("model"), "stream": True, "input": items,
+        "tool_choice": "auto", "parallel_tool_calls": False,
+        "reasoning": {**dict(payload.get("reasoning") or {}), "context": "all_turns"},
+        "store": False, "include": ["reasoning.encrypted_content"], "prompt_cache_key": session_id, "text": text,
+        "client_metadata": {
+            "session_id": session_id, "thread_id": session_id, "turn_id": "", "root_turn_id": "",
+            "ws_request_header_x_openai_internal_codex_responses_lite": "true",
+            "x-codex-turn-metadata": metadata, "x-codex-installation-id": installation_id,
+            "x-codex-window-id": window_id, "x-codex-ws-stream-request-start-ms": str(int(time.time() * 1000)),
+        },
+    }
+    headers = {"user-agent": _codex_native_user_agent(), "originator": "codex_exec",
+               "x-codex-turn-metadata": metadata, "x-codex-beta-features": "remote_compaction_v2",
+               "x-client-request-id": session_id, "session-id": session_id, "thread-id": session_id,
+               "x-codex-window-id": window_id}
+    return message, headers
+
+
 _RESPONSES_WEBSOCKET_BETA = "responses_websockets=2026-02-06"
 # Not part of the Codex WebSocket request: streaming is implicit and the endpoint
 # rejects safety_identifier ("Unsupported parameter"), which Codex CLI never sends.
@@ -5322,6 +5391,7 @@ class CodexResponsesConversationModel:
         if type(codex_native_requests) is not bool:
             raise ContractValidationError("UAT Codex-native request mode is invalid")
         self._codex_native_requests = codex_native_requests
+        self._codex_installation_id = str(uuid.uuid4())
         if type(stream_initial_requests) is not bool:
             raise ContractValidationError("UAT initial streaming mode is invalid")
         if type(websocket) is not bool:
@@ -6959,6 +7029,14 @@ class CodexResponsesConversationModel:
         headers = {name: value for name, value in request.header_items()
                    if name.lower() not in {"content-type", "accept", "accept-encoding", "content-length"}}
         headers["OpenAI-Beta"] = _RESPONSES_WEBSOCKET_BETA
+        native = None
+        if self._codex_native_requests:
+            # The pool's WebSocket entry carries only the Codex client's own requests.
+            session_id = headers.pop("X-codex-pool-session", None) or str(uuid.uuid4())
+            native, identity = _codex_native_websocket_request(
+                request_payload, session_id=session_id, installation_id=self._codex_installation_id)
+            headers = {"Authorization": headers["Authorization"], "OpenAI-Beta": _RESPONSES_WEBSOCKET_BETA,
+                       **identity}
 
         def failure(reason_code: str, phase: str, exc: Exception | None = None, **extra: Any) -> _UatProviderFailure:
             return _UatProviderFailure(
@@ -6977,8 +7055,8 @@ class CodexResponsesConversationModel:
                 body = connection.read_rest(_MAX_RESPONSES_BODY_BYTES)
                 raise failure("http_error", "websocket_handshake", http_status=connection.status,
                               response=_decode_provider_response(body), body=body, headers=connection.headers)
-            message = {"type": "response.create", **{k: v for k, v in request_payload.items()
-                                                     if k not in _RESPONSES_WEBSOCKET_OMITTED_FIELDS}}
+            message = native or {"type": "response.create", **{
+                k: v for k, v in request_payload.items() if k not in _RESPONSES_WEBSOCKET_OMITTED_FIELDS}}
             try:
                 connection.send_text(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
             except OSError as exc:

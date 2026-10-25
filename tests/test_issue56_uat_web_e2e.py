@@ -4259,6 +4259,7 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 stream_initial_requests=True,
                 typed_evidence_notes=True,
                 codex_native_requests=True,
+                websocket=True,
             )
             transport_factory.assert_not_called()
             app_server_model_factory.assert_not_called()

@@ -3115,9 +3115,10 @@ def main() -> int:
             reasoning_effort=_REASONING_EFFORT,
             stream_initial_requests=True,
             typed_evidence_notes=True,
-            # codex-pool only carries native Codex requests; its WebSocket entry is
-            # reserved for the Codex client itself, so non-Codex callers use HTTP.
+            # codex-pool only carries native Codex requests: Codex fields over a
+            # Codex-shaped Responses WebSocket (as Codex CLI 0.164.0).
             codex_native_requests=True,
+            websocket=True,
         )
     if args.temporary_lan_diagnostic:
         ingestion_revision = None
@@ -3172,7 +3173,7 @@ def main() -> int:
                     temporary_access_enabled=args.temporary_access_code is not None,
                     provider_base_url=runtime_paths.provider_base_url,
                     typed_evidence_notes=True, model=_MODEL, reasoning_effort=_REASONING_EFFORT,
-                    codex_native_requests=True,
+                    codex_native_requests=True, websocket=True,
                 ) if args.diagnostic_deployment_manifest is not None else None
             ),
         )
