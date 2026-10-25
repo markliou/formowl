@@ -1168,6 +1168,34 @@ def _reviewed_identity_matches(term, descriptor):
         for field, native in bind_typed_identifier_to_source_schema(term, [kind])})
 
 
+def _partial_reviewed_identity_candidates(entries, user_text):
+    """Find bounded partial candidates; these terms can never become anchors."""
+    profile = load_issue56_target_mail_tokenizer_profile()
+    query_terms = set()
+    for token in profile.analyze(user_text).tokens:
+        normalized = unicodedata.normalize("NFKC", token).casefold().strip()
+        if re.fullmatch(r"[a-z]{3,}", normalized) or re.fullmatch(r"[\u3400-\u9fff]{2,}", normalized):
+            query_terms.add(normalized)
+    if not query_terms:
+        return set()
+    patterns = [re.compile(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])")
+                for term in sorted(query_terms, key=lambda value: (-len(value), value))]
+    eligible = set()
+    for entry in entries:
+        surfaces = [entry["target"]]
+        for binding in entry.get("identity_bindings", ()):
+            for key in ("type_surface", "value_surface"):
+                value = binding.get(key)
+                if value:
+                    surfaces.append(value)
+        if any(pattern.search(unicodedata.normalize("NFKC", surface).casefold())
+               for pattern in patterns for surface in surfaces):
+            eligible.add(entry["annotation_id"])
+            if len(eligible) > 128:
+                return set()
+    return eligible
+
+
 def _reviewed_annotation_scope(entries, *, user_text=None, required_terms=()):
     """Choose an exact reviewed anchor, preserving other scopes as row predicates.
 
@@ -1203,6 +1231,10 @@ def _reviewed_annotation_scope(entries, *, user_text=None, required_terms=()):
             return set(), None, "ambiguous"
         matched.update(identities)
     if not matched:
+        if user_text is not None:
+            partial = _partial_reviewed_identity_candidates(entries, user_text)
+            if partial:
+                return partial, None, "partial_identity"
         return set(), None, "original_identity_required" if user_text is None and not terms else "unknown"
     primary = matched & set().union(*(row["primary"] for row in roles.values()))
     if len(primary) == 1:
@@ -1226,23 +1258,29 @@ def _reviewed_annotation_scope(entries, *, user_text=None, required_terms=()):
 
 
 def bind_reviewed_annotation_identity(entries, *, selected_ids, required_terms, user_text=None):
-    """Bind the same reviewed scope used by the catalog to one literal anchor."""
+    """Bind exact scope to an anchor; partial catalog nominations remain unanchored."""
     def normalize(text):
         return unicodedata.normalize("NFKC", text).casefold().strip()
     eligible, identity, status = _reviewed_annotation_scope(
         entries, user_text=user_text, required_terms=required_terms)
-    if status != "matched" or not set(selected_ids) <= eligible:
+    selected = set(selected_ids)
+    if not selected <= eligible:
+        raise ContractValidationError("UAT reviewed annotation original identity is unknown or ambiguous")
+    if user_text is not None:
+        from .semantic_plan import protected_reference_identifiers
+        normalized_required = " ".join(normalize(term) for term in required_terms or ())
+        # Partial nominations never waive the original protected identifier
+        # constraints. They can suggest sources, but cannot supply an anchor.
+        if not set(protected_reference_identifiers(user_text)) <= set(
+                protected_reference_identifiers(normalized_required)):
+            raise ContractValidationError("UAT reviewed annotation original constraint is not independently bound")
+    if status == "partial_identity":
+        return None
+    if status != "matched":
         raise ContractValidationError("UAT reviewed annotation original identity is unknown or ambiguous")
     descriptors = _reviewed_identity_descriptors(entries)
     universe = set().union(*descriptors.values())
     terms = {normalize(term) for term in required_terms or ()}
-    if user_text is not None:
-        from .semantic_plan import protected_reference_identifiers
-        # The paged view may omit a qualifier's annotation. Original protected
-        # constraints still need literal proof; nominations cannot erase them.
-        if not set(protected_reference_identifiers(user_text)) <= set(
-                protected_reference_identifiers(" ".join(terms))):
-            raise ContractValidationError("UAT reviewed annotation original constraint is not independently bound")
     possible = {term for term in terms if
                 {item for item in universe if _reviewed_identity_matches(term, item)} == {identity}}
     if not possible:
