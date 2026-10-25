@@ -839,6 +839,9 @@ def _graph_source_recovery_is_eligible(
             for step in subqueries
         )
     )
+    # A zero-citation or pending status is not a field-coverage trigger. The
+    # bounded source recheck is authorized only by a nonempty validated field
+    # set with no verified field support.
     field_coverage_miss = bool(requested_fields) and not supported_requested_fields
     eligible_statuses = _GRAPH_SOURCE_RECOVERY_MISS_STATUSES | (
         {"ok"} if field_coverage_miss else set()
@@ -847,7 +850,8 @@ def _graph_source_recovery_is_eligible(
         getattr(result, "answer_citation_hashes", ())
     ) and not field_coverage_miss
     return (
-        request_query_class == getattr(result, "query_class", None) == "evidence_lookup"
+        field_coverage_miss
+        and request_query_class == getattr(result, "query_class", None) == "evidence_lookup"
         and getattr(result, "status", None) in eligible_statuses
         and not citation_suppresses_recovery
         and getattr(result, "exact_result", None) is None
@@ -868,6 +872,38 @@ def _graph_source_recovery_is_eligible(
         )
         and (result_fingerprint_bound or parent_binding_bound)
     )
+
+
+def _identity_only_recheck_terms(
+    required_terms: Sequence[str],
+    *,
+    protected_terms: Sequence[str],
+    reviewed_annotations: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    """Keep protected identifiers and exact reviewed names hard in a recheck.
+
+    Required terms that are neither protected identifiers nor exact reviewed
+    identity surfaces become ranking hints. They do not become source filters.
+    """
+    from formowl_mail.issue56_sealed_source import _reviewed_identity_descriptors
+
+    def normalize(value: str) -> str:
+        return unicodedata.normalize("NFKC", value).casefold().strip()
+    identity_surfaces: set[str] = set()
+    descriptors = _reviewed_identity_descriptors(reviewed_annotations)
+    for values in descriptors.values():
+        identity_surfaces.update(value for _kind, value in values if value)
+    protected = {normalize(value) for value in protected_terms if value}
+    hard = {
+        normalize(term)
+        for term in required_terms
+        if normalize(term) in protected or normalize(term) in identity_surfaces
+    }
+    hard.update(protected)
+    soft = {normalize(term) for term in required_terms if normalize(term) not in hard}
+    if not hard or len(hard) > 8 or not soft:
+        return None
+    return tuple(sorted(hard)), tuple(sorted(soft))
 
 
 def _source_start_capabilities(revision: Issue56IngestionRevision) -> dict[str, Any]:
@@ -4791,6 +4827,25 @@ def build_issue56_production_semantic_retrieval_handler(
                     raise ContractValidationError(
                         "production evidence required terms are invalid"
                     )
+            query_identity_tokens = tuple(
+                span.exact_token
+                for span in tokenizer_profile.analyze(arguments["query_text"]).protected_identifiers
+            )
+            recheck_plan = _identity_only_recheck_terms(
+                required_terms,
+                protected_terms=query_identity_tokens,
+                reviewed_annotations=tuple(
+                    getattr(ingestion_revision, "reviewed_source_annotations", ())
+                ),
+            )
+            recheck_hard_terms, recheck_soft_terms = recheck_plan or ((), ())
+            recheck_variant = "identity_only" if recheck_plan is not None else None
+            recheck_active = False
+            active_required_terms = required_terms
+            initial_required_terms_fingerprint = sha256_json(required_terms)
+            recheck_required_terms_fingerprint = sha256_json(
+                recheck_hard_terms if recheck_plan is not None else required_terms
+            )
             extraction_coverage = ingestion_revision.safe_binding.get(
                 "extraction_coverage",
                 {},
@@ -4820,14 +4875,19 @@ def build_issue56_production_semantic_retrieval_handler(
                 # Bind the normalized hint explicitly for the shared sealed reader;
                 # shortlist hashes still require the same authority and matcher checks.
                 lookup_terms: set[str] = set()
-                for term in (placement.child_terms if placement is not None else required_terms):
+                terms_for_lookup = (
+                    recheck_hard_terms
+                    if recheck_active
+                    else placement.child_terms if placement is not None else required_terms
+                )
+                for term in terms_for_lookup:
                     check_source_evidence_deadline(deadline)
                     lookup_terms.update(tokenizer_profile.analyze(term).tokens)
                 project_source_observation.source_lookup_terms = tuple(sorted(
-                    lookup_terms if required_terms else query_terms
+                    lookup_terms if terms_for_lookup else query_terms
                 ))
                 preferred_terms: set[str] = set()
-                for field in (*requested_fields, *(hint["text"] for hint in field_query_hints)) if required_terms else ():
+                for field in (*requested_fields, *(hint["text"] for hint in field_query_hints)) if terms_for_lookup else ():
                     check_source_evidence_deadline(deadline)
                     preferred_terms.update(tokenizer_profile.analyze(field).tokens)
                 project_source_observation.source_lookup_preferred_terms = tuple(sorted(preferred_terms))
@@ -4867,11 +4927,11 @@ def build_issue56_production_semantic_retrieval_handler(
                 source_text = observation.text or observation.caption or ""
                 if not source_text:
                     return None
-                if required_terms:
+                if active_required_terms:
                     normalized_source_text = (
                         unicodedata.normalize("NFKC", source_text).casefold()
                     )
-                    if not all(term in normalized_source_text for term in required_terms):
+                    if not all(term in normalized_source_text for term in active_required_terms):
                         return None
                     source_tokens: set[str] | None = None
                 else:
@@ -4891,7 +4951,7 @@ def build_issue56_production_semantic_retrieval_handler(
                     observation,
                     citation_hash=observation_hash,
                     lineage=reader_lineage,
-                    focus_terms=(*requested_fields, *required_terms, *sorted(query_terms)),
+                    focus_terms=(*requested_fields, *active_required_terms, *sorted(query_terms)),
                 )
                 if projected is None:
                     return None
@@ -4929,7 +4989,7 @@ def build_issue56_production_semantic_retrieval_handler(
                     _source_mail_observation_match(
                         observation,
                         query_terms=query_terms,
-                        required_terms=required_terms or None,
+                        required_terms=active_required_terms or None,
                         protected_query_tokens=protected_query_tokens,
                         tokenizer_profile=tokenizer_profile,
                         deadline_monotonic=deadline,
@@ -4946,7 +5006,7 @@ def build_issue56_production_semantic_retrieval_handler(
                     observation,
                     citation_hash=observation_hash,
                     lineage=lineage,
-                    focus_terms=(*requested_fields, *required_terms, *sorted(query_terms)),
+                    focus_terms=(*requested_fields, *active_required_terms, *sorted(query_terms)),
                 )
                 if projected is None:
                     return None
@@ -4985,6 +5045,20 @@ def build_issue56_production_semantic_retrieval_handler(
                     source_scope_id,
                     deadline,
                 )
+
+            def rank_recheck_observation(observation: Observation) -> int:
+                values = [observation.text or observation.caption or ""]
+                if observation.modality == "mail":
+                    payload = to_plain(observation.payload or {})
+                    if isinstance(payload, Mapping):
+                        values.extend(
+                            value for value in (
+                                payload.get("subject"), payload.get("normalized_subject"),
+                                payload.get("body_excerpt"),
+                            ) if isinstance(value, str)
+                        )
+                normalized = unicodedata.normalize("NFKC", "\n".join(values)).casefold()
+                return sum(term in normalized for term in recheck_soft_terms)
 
             warning_groups = (
                 getattr(result, "warnings", ()),
@@ -5089,27 +5163,35 @@ def build_issue56_production_semantic_retrieval_handler(
                     stop_reason=stop_reason,
                 )
 
-            double_check = source_evidence_double_check(
-                initial_status=result.status,
-                query_class=str(request_query_class),
-                result_query_class=getattr(result, "query_class", None),
-                initial_warnings=result_warnings,
-                verified_evidence_count=initial_evidence_count,
-                evidence_limit=min(10, requested_evidence_cap),
-                sealed_coverage_complete=sealed_coverage_complete,
-                read_source=(
-                    read_authorized_source_families
-                    if callable(source_reader)
-                    else None
-                ),
-                project_observation=project_source_observation,
-                begin=begin_document_source_projection,
-                excluded_hashes=tuple(
-                    item["citation_hash"] for item in evidence
-                ),
-                requested_fields=requested_fields,
-                supported_requested_fields=supported_requested_fields,
-            )
+            recheck_active = recheck_plan is not None
+            if recheck_active:
+                active_required_terms = recheck_hard_terms
+            try:
+                double_check = source_evidence_double_check(
+                    initial_status=result.status,
+                    query_class=str(request_query_class),
+                    result_query_class=getattr(result, "query_class", None),
+                    initial_warnings=result_warnings,
+                    verified_evidence_count=initial_evidence_count,
+                    evidence_limit=min(10, requested_evidence_cap),
+                    sealed_coverage_complete=sealed_coverage_complete,
+                    read_source=(
+                        read_authorized_source_families
+                        if callable(source_reader)
+                        else None
+                    ),
+                    project_observation=project_source_observation,
+                    begin=begin_document_source_projection,
+                    excluded_hashes=tuple(
+                        item["citation_hash"] for item in evidence
+                    ),
+                    requested_fields=requested_fields,
+                    supported_requested_fields=supported_requested_fields,
+                    candidate_rank=(rank_recheck_observation if recheck_active else None),
+                )
+            finally:
+                recheck_active = False
+                active_required_terms = required_terms
             recovered_evidence, header_groups_truncated = _bounded_mail_header_groups(
                 double_check.evidence, limit=max(0, min(10, requested_evidence_cap) - len(evidence)),
                 byte_limit=max(0, 16 * 1024 - len(json.dumps(evidence, ensure_ascii=False).encode("utf-8"))),
@@ -5125,6 +5207,17 @@ def build_issue56_production_semantic_retrieval_handler(
                 result_status = double_check.status
             else:
                 result_status = public_replan_status or result.status
+            recheck_warnings = list(double_check.warnings)
+            recheck_ran = double_check.scan is not None
+            if recheck_ran and recheck_variant == "identity_only":
+                recheck_warnings = [
+                    warning for warning in recheck_warnings
+                    if warning not in {"complete_no_match", "complete_coverage_incomplete"}
+                ]
+                recheck_warnings.extend((
+                    "identity_only_recheck", "topic_terms_ranked_only", "incomplete",
+                ))
+                result_status = "partial" if evidence else "pending_review"
             source_recovery = {
                 "artifact_id": "formowl_bounded_source_recovery_v1",
                 "source_family": (
@@ -5169,7 +5262,16 @@ def build_issue56_production_semantic_retrieval_handler(
                     for item in recovered_evidence
                 ),
                 "evidence": recovered_evidence,
-                "warnings": list(double_check.warnings),
+                "warnings": sorted(set(recheck_warnings)),
+                "recheck_variant": recheck_variant if recheck_ran else None,
+                "hard_term_count": len(recheck_hard_terms) if recheck_ran else 0,
+                "soft_term_count": len(recheck_soft_terms) if recheck_ran else 0,
+                "initial_required_terms_fingerprint": (
+                    initial_required_terms_fingerprint if recheck_ran else None
+                ),
+                "recheck_required_terms_fingerprint": (
+                    recheck_required_terms_fingerprint if recheck_ran else None
+                ),
             }
             source_recovery["recovery_fingerprint"] = sha256_json(
                 source_recovery
@@ -5207,7 +5309,7 @@ def build_issue56_production_semantic_retrieval_handler(
                 **query_agent_payload,
                 "warnings": list(
                     dict.fromkeys(
-                        (*query_agent_warnings, *double_check.warnings)
+                        (*query_agent_warnings, *recheck_warnings)
                     )
                 ),
                 "context_bundle": context_bundle,

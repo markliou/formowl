@@ -663,6 +663,7 @@ def source_evidence_double_check(
     requested_fields: Sequence[str] = (),
     supported_requested_fields: Sequence[str] = (),
     time_budget_ms: int | None = None,
+    candidate_rank: Callable[[Observation], int] | None = None,
 ) -> SourceEvidenceDoubleCheckResult:
     """One source-neutral recheck, not a new retrieval or authorization path.
 
@@ -697,6 +698,8 @@ def source_evidence_double_check(
         )
     if type(verified_evidence_count) is not int or verified_evidence_count < 0:
         raise ContractValidationError("verified source evidence count is invalid")
+    if candidate_rank is not None and not callable(candidate_rank):
+        raise ContractValidationError("source evidence candidate rank is invalid")
     if normalized_supported_fields and not verified_evidence_count:
         raise ContractValidationError("requested field support requires verified evidence")
 
@@ -770,6 +773,7 @@ def source_evidence_double_check(
         )
     scan = SourceEvidenceScan((), 0, False, "deadline")
     evidence: list[dict[str, Any]] = []
+    ranked_evidence: list[tuple[int, str, dict[str, Any]]] = []
     seen_hashes = set(excluded_hashes)
     callback_count = 0
     trace = _SOURCE_PHASE_TRACE.get()
@@ -793,10 +797,20 @@ def source_evidence_double_check(
             if projected is not None:
                 observation_hash, item = projected
                 if observation_hash not in seen_hashes:
-                    evidence.append(item)
                     seen_hashes.add(observation_hash)
+                    if candidate_rank is None:
+                        evidence.append(item)
+                    else:
+                        rank = candidate_rank(observation)
+                        if isinstance(rank, bool) or not isinstance(rank, int):
+                            raise ContractValidationError(
+                                "source evidence candidate rank is invalid"
+                            )
+                        ranked_evidence.append((rank, observation_hash, item))
+                        ranked_evidence.sort(key=lambda candidate: (-candidate[0], candidate[1]))
+                        del ranked_evidence[evidence_limit:]
             check_source_evidence_deadline(deadline)
-            if len(evidence) >= evidence_limit:
+            if candidate_rank is None and len(evidence) >= evidence_limit:
                 stop_reason = "callback"
                 return False
             return True
@@ -861,6 +875,8 @@ def source_evidence_double_check(
     cell = _trace(trace, "phase", "scan_result", scanned=scan.scanned_observation_count,
                   complete=scan.complete, stop=scan.stop_reason)
     _trace(cell, "finish")
+    if candidate_rank is not None:
+        evidence = [item for _, _, item in ranked_evidence]
     warnings = ["used"]
     if not scan.complete:
         warnings.append("incomplete")

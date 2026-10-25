@@ -3628,9 +3628,23 @@ def _private_graph_recheck_trace(
             warning for warning in warnings if isinstance(warning, str) and warning in {
                 "used", "incomplete", "complete_no_match", "complete_coverage_incomplete",
                 "unavailable", "skipped_exact", "skipped_replan", "skipped_invalid_plan",
-                "skipped_zero_limit",
+                "skipped_zero_limit", "identity_only_recheck", "topic_terms_ranked_only",
             }
         })
+    variant = recovery.get("recheck_variant")
+    if variant in {None, "identity_only"}:
+        safe["recheck_variant"] = variant
+    for key in ("hard_term_count", "soft_term_count"):
+        value = recovery.get(key)
+        if type(value) is int and 0 <= value <= 8:
+            safe[key] = value
+    for key in (
+        "initial_required_terms_fingerprint",
+        "recheck_required_terms_fingerprint",
+    ):
+        value = recovery.get(key)
+        if _is_browser_request_fingerprint(value):
+            safe[key] = value
     scan = recovery.get("scan")
     if isinstance(scan, Mapping):
         count, complete, reason = (
