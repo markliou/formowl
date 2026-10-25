@@ -1847,7 +1847,7 @@ def _select_reviewed_annotation_sources(revision, *, arguments, catalog, deadlin
            nominated_count=len(nominated_ids),
            nominated_id_hashes=sorted(sha256_json(value) for value in nominated_ids)[:128],
            selected_count=len(matched),
-           selected_id_hashes=sorted(sha256_json(item["candidate_atom_id"] for item in matched))[:128],
+           selected_id_hashes=sorted(sha256_json(item["candidate_atom_id"]) for item in matched)[:128],
            relation_expansion_count=relation_trace.get("expanded_atom_count", 0),
            relation_edge_count=relation_trace.get("relation_edge_count", 0),
            relation_id_hashes=relation_trace.get("relation_id_hashes", ()),
@@ -2310,17 +2310,6 @@ def _build_source_start_semantic_handler(
                           relation_expansion_count=0, relation_edge_count=0, relation_id_hashes=[],
                           **catalog_trace)
             _trace(cell, "finish")
-            if arguments.get("reviewed_annotation_ids") or arguments.get("reviewed_annotation_pin") is not None:
-                if query_class != "evidence_lookup" or auto_exact or placement is not None or native_locator is not None:
-                    raise ContractValidationError("UAT reviewed annotation route is unsupported")
-                annotation_ids, annotation_hashes, annotation_target = _select_reviewed_annotation_sources(
-                    revision, arguments={**arguments, "request_contract": request_contract,
-                                         "required_terms": required_terms},
-                    catalog=annotation_catalog, deadline=deadline)
-                cell = _trace(trace, "phase", "project", reviewed_annotation_selection=True,
-                              selected_count=len(annotation_ids), source_count=len(annotation_hashes),
-                              annotation_pin=revision.reviewed_annotation_pin)
-                _trace(cell, "finish")
             # A Query Agent may add presentation instructions to query_text.
             # Rank source candidates by the validated evidence constraints, not
             # those instruction words. Multiword constraints use the same frozen
@@ -2345,6 +2334,31 @@ def _build_source_start_semantic_handler(
                           preferred_term_count=len(project.source_lookup_preferred_terms))
             _trace(cell, "finish")
             check_source_evidence_deadline(deadline)
+            if arguments.get("reviewed_annotation_ids") or arguments.get("reviewed_annotation_pin") is not None:
+                if query_class != "evidence_lookup" or auto_exact or placement is not None or native_locator is not None:
+                    raise ContractValidationError("UAT reviewed annotation route is unsupported")
+                try:
+                    annotation_ids, annotation_hashes, annotation_target = _select_reviewed_annotation_sources(
+                        revision, arguments={**arguments, "request_contract": request_contract,
+                                             "required_terms": required_terms},
+                        catalog=annotation_catalog, deadline=deadline)
+                except _SourceEvidenceDeadlineExceeded:
+                    # Annotation nomination is an optional retrieval hint. A
+                    # slow/stale hint must not suppress the ordinary, separately
+                    # budgeted source path.
+                    annotation_ids, annotation_hashes, annotation_target = (), (), None
+                    fallback = True
+                else:
+                    fallback = bool(nominated_ids and not annotation_ids)
+                cell = _trace(trace, "phase", "project", reviewed_annotation_selection=True,
+                              selected_count=len(annotation_ids), source_count=len(annotation_hashes),
+                              annotation_pin=revision.reviewed_annotation_pin)
+                _trace(cell, "finish")
+                if fallback:
+                    cell = _trace(trace, "phase", "annotation_nomination_fallback",
+                                  annotation_selection_fallback=True, fallback=True,
+                                  fallback_reason="selection_unavailable", selected_count=0)
+                    _trace(cell, "finish")
 
         def project(observation: Observation, scope_id: str, deadline: float):
             nonlocal unresolved_parent_binding, last_anchor

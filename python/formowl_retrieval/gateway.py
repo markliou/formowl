@@ -289,7 +289,7 @@ _TRACE_VALUES = frozenset((*_TRACE_COUNTERS,
     "deadline", "observation_limit", "indexed_shortlist", "indexed_shortlist_miss",
     "source_parent_binding_unresolved", "source_reference_unavailable", "indexed_query_terms_unavailable",
     "source_table_shortlist", "email_message", "email_body_segment", "email_header",
-    "email_attachment_occurrence", "paragraph", "heading",
+    "email_attachment_occurrence", "paragraph", "heading", "annotation_nomination_fallback",
 ))
 
 
@@ -669,11 +669,12 @@ def source_evidence_double_check(
     source revision and seal. The reader must enforce that binding; projection
     must revalidate access, hash and lineage before returning (hash, evidence).
     ``prepare`` reuses pinned runtime configuration before the phase clock;
-    ``begin`` and all reads/projections share one bounded deadline (500ms by
-    default). A server-owned caller may explicitly supply a wider phase budget.
-    The earliest trusted explicit/scoped absolute monotonic deadline also
-    bounds preparation and can only shorten that phase. Neither deadline
-    preempts a blocking callback. With neither supplied, behavior is unchanged.
+    ``begin`` and source reading each receive a bounded phase window (500ms by
+    default); source reading gets a fresh window after query setup. A server-owned
+    caller may explicitly supply a wider phase budget. The earliest trusted
+    explicit/scoped absolute monotonic deadline bounds both windows. Neither
+    deadline preempts a blocking callback. With neither supplied, behavior is
+    unchanged apart from preventing setup from consuming the reader's budget.
     Only certified sealed coverage AND a complete bounded scan prove a miss.
     """
 
@@ -807,16 +808,27 @@ def source_evidence_double_check(
         if prepare is not None:
             prepare()
         check_source_evidence_deadline(deadline_monotonic)
+        # Query preparation (including optional annotation/catalog selection)
+        # has its own bounded window. It must not consume the source reader's
+        # entire evidence budget before the first authorized source read.
+        setup_deadline = time.monotonic() + phase_budget_ms / 1000
+        if deadline_monotonic is not None:
+            setup_deadline = min(setup_deadline, deadline_monotonic)
+        check_source_evidence_deadline(setup_deadline)
+        if begin is not None:
+            begin(setup_deadline)
+        # Start a fresh reader budget after preparation, while retaining the
+        # trusted outer turn deadline as a hard cap.
         deadline = time.monotonic() + phase_budget_ms / 1000
         if deadline_monotonic is not None:
             deadline = min(deadline, deadline_monotonic)
         check_source_evidence_deadline(deadline)
-        if begin is not None:
-            begin(deadline)
-        check_source_evidence_deadline(deadline)
+        preferred_terms = getattr(project_observation, "source_lookup_preferred_terms", ())
+        if not isinstance(preferred_terms, (list, tuple, set, frozenset)):
+            preferred_terms = ()
         with source_evidence_query_terms_scope(
             _source_evidence_query_terms(project_observation),
-            preferred_terms=getattr(project_observation, "source_lookup_preferred_terms", ()),
+            preferred_terms=preferred_terms,
         ):
             scan = read_source(
                 max_observations=SOURCE_EVIDENCE_OBSERVATION_LIMIT,

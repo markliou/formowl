@@ -6,6 +6,7 @@ import json
 import sys
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 import _paths
 from formowl_contract import ContractValidationError, sha256_json
@@ -15,6 +16,7 @@ sys.path.insert(0, str(_paths.ROOT))
 from formowl_gateway.issue56_sealed_source_loader import (  # noqa: E402
     _expand_reviewed_relations,
     _reviewed_annotation_catalog_trace_fields,
+    _select_reviewed_annotation_sources,
     reviewed_relations_for,
 )
 from formowl_mail.issue56_sealed_source import (  # noqa: E402
@@ -40,6 +42,38 @@ def _relation(kind, source, target, evidence=()):
 
 
 class RelationSelectionTests(unittest.TestCase):
+    def test_partial_identity_nomination_selects_only_source_bound_candidates_without_anchor(self) -> None:
+        candidate_id = "atom_reviewed_candidate"
+        source_hash = "sha256:" + "a" * 64
+        revision = SimpleNamespace(
+            reviewed_source_annotations=({
+                "candidate_atom_id": candidate_id,
+                "source_hashes": (source_hash,),
+            },),
+            reviewed_source_relations=(),
+            safe_binding={"source_revision_sha256": BINDING["source_revision_sha256"]},
+            reviewed_annotation_pin="sha256:" + "b" * 64,
+        )
+        catalog = {
+            "source_revision_sha256": BINDING["source_revision_sha256"],
+            "reviewed_annotation_pin": revision.reviewed_annotation_pin,
+        }
+        arguments = {
+            "reviewed_annotation_ids": [candidate_id],
+            "request_contract": {"query_class": "evidence_lookup"},
+        }
+        with mock.patch(
+            "formowl_mail.human_uat_orchestrator.validated_reviewed_annotation_selection",
+            return_value=None,
+        ):
+            selected, hashes, target = _select_reviewed_annotation_sources(
+                revision, arguments=arguments, catalog=catalog, deadline=None,
+            )
+
+        self.assertEqual(selected, (candidate_id,))
+        self.assertEqual(hashes, (source_hash,))
+        self.assertIsNone(target)
+
     def test_selection_follows_updates_and_conflicts_but_not_restatements(self) -> None:
         revision = SimpleNamespace(reviewed_source_relations=(
             _relation("updates", "a", "b", ["sha256:quote_a"]), _relation("contradicts", "c", "b", ["sha256:c"]),
