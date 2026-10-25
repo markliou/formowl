@@ -304,17 +304,12 @@ class LocalOllamaReader:
                 "num_ctx": self.num_ctx, "temperature": 0,
                 **({"retry_feedback_sha256": sha256_json(self.feedback)} if self.feedback else {})}
 
-    def extract_structured_json(self, *, instructions: str, source_unit: Mapping[str, Any],
-                                response_schema: Mapping[str, Any], schema_name: str,
-                                max_input_bytes: int = 256 * 1024, max_output_tokens: int = 8192) -> dict[str, Any]:
-        ids = [o["observation_id"] for o in source_unit["observations"]]
-        max_candidates = response_schema["properties"]["atoms"].get("maxItems") or 128
-        payload = {"model": self.model, "stream": False, "think": False,
-                   "format": flat_schema(ids, min(int(max_candidates), 128), list(source_unit["focus_observation_ids"])),
-                   "messages": [{"role": "system", "content": INSTRUCTIONS},
-                                {"role": "user", "content": json.dumps(presented(source_unit), ensure_ascii=False)},
-                                *([{"role": "user", "content": "上一次標註這個來源單元時有以下問題，請修正後重新輸出完整結果：\n"
-                                    + "\n".join(f"- {item}" for item in self.feedback)}] if self.feedback else [])],
+    def complete_json(self, *, system: str, user: str, schema: Mapping[str, Any], max_output_tokens: int = 8192,
+                      extra_messages: list[dict[str, str]] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+        """One grammar-constrained chat call; returns the parsed object and its execution receipt."""
+        payload = {"model": self.model, "stream": False, "think": False, "format": schema,
+                   "messages": [{"role": "system", "content": system}, {"role": "user", "content": user},
+                                *(extra_messages or [])],
                    "options": {"num_ctx": self.num_ctx, "num_predict": max_output_tokens, "temperature": 0}}
         fingerprint = sha256_json({"endpoint": self.url, "payload": payload})
         self.last = {}
@@ -330,15 +325,28 @@ class LocalOllamaReader:
         if body.get("done_reason") != "stop":
             raise ContractValidationError("offline semantic response is incomplete")
         try:
-            flat = json.loads(body["message"]["content"])
+            data = json.loads(body["message"]["content"])
         except (ValueError, KeyError, TypeError) as exc:
             raise ContractValidationError("offline semantic response is not complete strict JSON") from exc
-        if not isinstance(flat, dict):
+        if not isinstance(data, dict):
             raise ContractValidationError("offline semantic response is not complete strict JSON")
+        observed = body.get("model")
+        return data, {"requested_model": self.model,
+                      "observed_model": observed if isinstance(observed, str) and observed.strip() else None,
+                      "reasoning_effort": "none", "request_fingerprint": fingerprint}
+
+    def extract_structured_json(self, *, instructions: str, source_unit: Mapping[str, Any],
+                                response_schema: Mapping[str, Any], schema_name: str,
+                                max_input_bytes: int = 256 * 1024, max_output_tokens: int = 8192) -> dict[str, Any]:
+        ids = [o["observation_id"] for o in source_unit["observations"]]
+        max_candidates = response_schema["properties"]["atoms"].get("maxItems") or 128
+        feedback = ([{"role": "user", "content": "上一次標註這個來源單元時有以下問題，請修正後重新輸出完整結果：\n"
+                      + "\n".join(f"- {item}" for item in self.feedback)}] if self.feedback else [])
+        flat, receipt = self.complete_json(
+            system=INSTRUCTIONS, user=json.dumps(presented(source_unit), ensure_ascii=False),
+            schema=flat_schema(ids, min(int(max_candidates), 128), list(source_unit["focus_observation_ids"])),
+            max_output_tokens=max_output_tokens, extra_messages=feedback)
         adapter = Adapter({o["observation_id"]: o for o in source_unit["observations"]})
         data = adapter.convert(flat)
         self.last.update(whitespace_relocated=adapter.relocated, problems=adapter.problems, **adapter.counts)
-        observed = body.get("model")
-        return {"data": data, "requested_model": self.model,
-                "observed_model": observed if isinstance(observed, str) and observed.strip() else None,
-                "reasoning_effort": "none", "request_fingerprint": fingerprint}
+        return {"data": data, **receipt}

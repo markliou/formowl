@@ -1,0 +1,105 @@
+from __future__ import annotations
+
+import io
+import json
+import unittest
+from unittest import mock
+
+import _paths
+from formowl_contract import ContractValidationError, Observation, sha256_json
+from formowl_graph.candidates import read_and_store_source_unit
+from formowl_graph.local_semantic_reader import LocalOllamaReader
+from formowl_graph.reconciliation import GroupMember, build_groups, reconcile_group
+from formowl_graph.storage import CandidateAtomStore, CandidateRelationStore, SemanticMetadataStore
+
+OLD = "PO 4500123 交期 1/20"
+NEW = "通知：PO 4500123 交期改為 1/27"
+
+
+def _observation(observation_id: str, text: str) -> Observation:
+    return Observation(
+        observation_id=observation_id, asset_id="asset_recon_001", extractor_run_id="run_recon_source",
+        observation_type="email_body_segment", modality="mail", text=text, location={"body_segment_index": 0},
+        confidence=1.0, created_at="2026-10-25T00:00:00+00:00",
+        permission_scope={"scope_type": "workspace", "visibility": "restricted", "scope_id": "ws_recon"})
+
+
+def _annotate(temp_dir, observation: Observation, value: str, quote: str):
+    record = {"record_type": "claim", "topic": "交期", "subject": "4500123", "subject_label": None,
+              "subject_quote": {"observation_id": observation.observation_id, "quote": "PO 4500123"},
+              "item_or_row": None, "property": "交期", "value": value, "unit": None, "event_type": None,
+              "state": None, "actor": None, "times": [],
+              "evidence": [{"observation_id": observation.observation_id, "quote": quote}], "confidence": 0.9}
+    body = json.dumps({"model": "m", "done_reason": "stop", "message": {"content": json.dumps(
+        {"read_status": "complete", "records": [record], "relations": []}, ensure_ascii=False)}})
+    reader = LocalOllamaReader("http://127.0.0.1:1", "m")
+    with mock.patch("urllib.request.urlopen", return_value=io.BytesIO(body.encode())):
+        result = read_and_store_source_unit(
+            source_unit_id="su_" + observation.observation_id, observations=[observation],
+            expected_observation_hashes={observation.observation_id: sha256_json(observation.to_dict())},
+            source_revision_fingerprint=sha256_json({"revision": 1}),
+            permission_scope_fingerprint=sha256_json(observation.to_dict()["permission_scope"]),
+            source_complete=True, extractor_run_id="semrun_recon_read", ontology_revision_id="ontology_recon",
+            model_name="m", reasoning_effort="none", reader=reader.extract_structured_json,
+            configuration=reader.configuration, semantic_metadata_store=SemanticMetadataStore(temp_dir),
+            candidate_atom_store=CandidateAtomStore(temp_dir), candidate_relation_store=CandidateRelationStore(temp_dir))
+    return result.candidate_atoms[0]
+
+
+class ReconciliationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = _paths.fresh_test_dir("graph-reconciliation")
+        old, new = _observation("obs_old", OLD), _observation("obs_new", NEW)
+        self.old = GroupMember(_annotate(self.temp_dir, old, "1/20", "交期 1/20"), "mailocc_old",
+                               "2026-01-05T09:00:00+08:00", {"subject": "PO"}, {"obs_old": old.to_dict()})
+        self.new = GroupMember(_annotate(self.temp_dir, new, "1/27", "交期改為 1/27"), "mailocc_new",
+                               "2026-01-15T09:00:00+08:00", {"subject": "通知"}, {"obs_new": new.to_dict()})
+
+    def _run(self, relations, run_id="recon_run_001"):
+        reader = mock.Mock()
+        reader.complete_json.return_value = ({"relations": relations},
+                                             {"requested_model": "m", "observed_model": "m",
+                                              "request_fingerprint": sha256_json({"r": run_id})})
+        return reconcile_group([self.old, self.new], reader=reader, extractor_run_id=run_id, model_name="m",
+                               semantic_metadata_store=SemanticMetadataStore(self.temp_dir),
+                               candidate_relation_store=CandidateRelationStore(self.temp_dir))
+
+    def test_groups_need_the_same_target_and_property_across_messages(self) -> None:
+        same_message = GroupMember(self.old.atom, "mailocc_new", None)
+        self.assertEqual(len(build_groups([self.old, self.new])), 1)
+        self.assertEqual(build_groups([self.old]), [])
+        self.assertEqual(build_groups([same_message, self.new]), [])
+
+    def test_update_quoted_from_the_later_source_becomes_a_pending_relation(self) -> None:
+        result = self._run([{"source": 1, "target": 0, "relation_type": "updates", "confidence": 0.8,
+                             "evidence": [{"observation_id": "obs_new", "quote": "交期改為 1/27"}]}])
+        relation = result.relations[0]
+        self.assertEqual((relation.relation_type, relation.status), ("updates", "pending_review"))
+        self.assertEqual(relation.source_candidate_atom_id, self.new.atom.candidate_atom_id)
+        self.assertEqual(relation.properties["evidence_spans"][0]["quote"], "交期改為 1/27")
+        self.assertEqual(result.ledger.value["reconciliation_status"], "reconciled")
+        self.assertEqual(CandidateRelationStore(self.temp_dir).get(relation.candidate_relation_id), relation)
+
+    def test_update_without_later_source_wording_or_against_time_fails_the_group(self) -> None:
+        cases = [([{"source": 1, "target": 0, "relation_type": "updates", "confidence": 0.8,
+                    "evidence": [{"observation_id": "obs_old", "quote": "交期 1/20"}]}], "later source"),
+                 ([{"source": 0, "target": 1, "relation_type": "supersedes", "confidence": 0.8,
+                    "evidence": [{"observation_id": "obs_old", "quote": "交期 1/20"}]}], "message time"),
+                 ([{"source": 1, "target": 0, "relation_type": "updates", "confidence": 0.8, "evidence": []}],
+                  "later source")]
+        for index, (relations, message) in enumerate(cases):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ContractValidationError, message):
+                    self._run(relations, run_id=f"recon_bad_{index}")
+        failed = [m for m in SemanticMetadataStore(self.temp_dir).list() if m.metadata_type == "cross_unit_reconciliation"]
+        self.assertTrue(all(m.value["reconciliation_status"] == "failed" for m in failed))
+        self.assertEqual(CandidateRelationStore(self.temp_dir).list(), [])
+
+    def test_no_relation_is_a_recorded_result_and_a_rerun_reuses_it(self) -> None:
+        first = self._run([])
+        self.assertEqual((first.ledger.value["reconciliation_status"], first.relations), ("reconciled", []))
+        self.assertEqual(self._run([]).ledger.semantic_metadata_id, first.ledger.semantic_metadata_id)
+
+
+if __name__ == "__main__":
+    unittest.main()
