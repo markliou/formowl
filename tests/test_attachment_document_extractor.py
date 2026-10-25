@@ -151,6 +151,19 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
         self.assertFalse(_looks_like_date_format("[h]:mm:ss"))
         self.assertIn("xlsx_1900_phantom_date_serial", result.warnings)
 
+    def test_date_time_serials_are_interpreted_and_rows_carry_them_beside_raw_text(self) -> None:
+        styles = """<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="22"/></cellXfs></styleSheet>"""
+        sheet = """<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>3</v></c><c r="B1" s="1"><v>45257.5</v></c><c r="C1"><v>45257.5</v></c></row></sheetData></worksheet>"""
+        result = self._extract(_xlsx_package(sheet, styles), mime_type=XLSX_MIME, filename="bom.xlsx")
+        row = next(item for item in result.observations if item.observation_type == "table_row")
+        cells = {item.location["cell_index"]: item for item in result.observations
+                 if item.observation_type == "table_cell"}
+        self.assertEqual(row.text, "3\t45257.5\t45257.5")
+        self.assertEqual(row.payload["cell_date_values_iso"], {"2": "2023-11-27T12:00:00"})
+        self.assertEqual(cells[2].payload["native"]["date_value_iso"], "2023-11-27T12:00:00")
+        self.assertEqual(cells[2].payload["native"]["date_serial"], "45257.5")
+        self.assertNotIn("date_value_iso", cells[3].payload["native"])
+
     def test_numeric_precision_and_shared_formula_identity_are_preserved(self) -> None:
         result = self._extract(
             _xlsx_precision_formula_bytes(), mime_type=XLSX_MIME, filename="precision.xlsx"
@@ -260,8 +273,8 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
                     extracted_value=observation.extracted_value,
                 ))
                 assert_no_public_raw_references(observation.to_dict())
-                self.assertEqual(AttachmentDocumentExtractor().version(), "0.7.1")
-                self.assertEqual(result.extractor_run.extractor_version, "0.7.1")
+                self.assertEqual(AttachmentDocumentExtractor().version(), "0.7.2")
+                self.assertEqual(result.extractor_run.extractor_version, "0.7.2")
 
     def test_pdf_reads_only_admitted_pages_once(self) -> None:
         pages = [Mock(), Mock()]

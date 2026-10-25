@@ -100,7 +100,7 @@ class AttachmentDocumentExtractor:
         return "attachment_document_parser"
 
     def version(self) -> str:
-        return "0.7.1"
+        return "0.7.2"
 
     def supported_mime_types(self) -> list[str]:
         # run_extractor uses this as a routing admission check for every child
@@ -1974,15 +1974,21 @@ def _xlsx_cell_value(
         "display_value": None,
         "display_value_status": "unavailable_without_recalculation_or_formatting",
     }
-    if style.get("is_date") and isinstance(typed_value, (int, float)):
+    # Decimal serials (date-times) stay strings in typed_value; interpret them too.
+    serial = typed_value if isinstance(typed_value, (int, float)) else (
+        float(value) if value_type == "number" and _DECIMAL.fullmatch(value) else None)
+    if style.get("is_date") and serial is not None:
         native["date_serial"] = typed_value
-        native["date_value_iso"] = _excel_serial_to_iso(typed_value, date_system)
+        native["date_value_iso"] = _excel_serial_to_iso(serial, date_system)
         native["date_value_status"] = (
             "phantom_1900_leap_day"
-            if date_system == "1900" and typed_value == 60
+            if date_system == "1900" and serial == 60
             else "normalized_excel_serial"
         )
     return value, native
+
+
+_DECIMAL = re.compile(r"[+-]?(?:\d+\.\d*|\d*\.\d+|\d+)(?:[eE][+-]?\d+)?")
 
 
 def _typed_xlsx_value(value: str, value_type: str) -> Any:
@@ -2056,6 +2062,10 @@ def _observations(
             )
             header_paths = candidate_header_paths.get(row_index, {})
             row_text = "\t".join(value for _, value in cells)
+            # Row text keeps raw cell values; date-formatted serials are also given
+            # as their date-system interpretation, keyed by cell index.
+            dates = {str(cell_index): native["date_value_iso"] for cell_index, _ in cells
+                     if (native := table.cell_metadata.get((row_index, cell_index)) or {}).get("date_value_iso")}
             observations.append(
                 _observation(
                     source,
@@ -2064,6 +2074,7 @@ def _observations(
                     row_text,
                     lineage,
                     table_structure=row_structure,
+                    payload={"cell_date_values_iso": dates} if dates else None,
                 )
             )
             for cell_index, value in cells:
