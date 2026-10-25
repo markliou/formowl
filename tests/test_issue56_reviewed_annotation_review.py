@@ -248,6 +248,7 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
         from formowl_gateway.issue56_sealed_source_loader import (
             _server_annotation_hint_source_match,
         )
+        from formowl_mail.query import _source_mail_observation_match
 
         class FrozenProfileFixture:
             @staticmethod
@@ -265,9 +266,38 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
                 )()
 
         profile = FrozenProfileFixture()
+        def observation(text, *, modality="text", payload=None):
+            return Observation(
+                observation_id="obs_annotation_hint", asset_id="asset_annotation_hint",
+                extractor_run_id="run_annotation_hint", observation_type=(
+                    "paragraph" if modality == "text" else "email_body_segment"
+                ), modality=modality, text=text, payload=payload, location={}, confidence=1.0,
+                created_at="2026-10-25T00:00:00+00:00",
+                permission_scope={"scope_type": "workspace", "visibility": "restricted",
+                                  "scope_id": "ws_annotation_hint"},
+            )
+
+        candidate = observation("Kestrel PO 4500123 delivery confirmed")
+        ordinary_match = _source_mail_observation_match(
+            candidate, query_terms=set(), required_terms=("delivery",),
+            protected_query_tokens={"4500123"}, tokenizer_profile=profile,
+        ) is not None
         self.assertTrue(
             _server_annotation_hint_source_match(
-                ("Kestrel PO 4500123 delivery confirmed",),
+                candidate,
+                required_terms=("delivery",),
+                protected_terms={"4500123"},
+                identity_surfaces=("Kestrel",),
+                tokenizer=profile,
+            )
+        )
+        self.assertEqual(ordinary_match, _server_annotation_hint_source_match(
+            candidate, required_terms=("delivery",), protected_terms={"4500123"},
+            identity_surfaces=("Kestrel",), tokenizer=profile,
+        ))
+        self.assertFalse(
+            _server_annotation_hint_source_match(
+                observation("PO 4500123 delivery confirmed"),
                 required_terms=("delivery",),
                 protected_terms={"4500123"},
                 identity_surfaces=("Kestrel",),
@@ -276,7 +306,7 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
         )
         self.assertFalse(
             _server_annotation_hint_source_match(
-                ("PO 4500123 delivery confirmed",),
+                observation("Kestrel PO delivery confirmed"),
                 required_terms=("delivery",),
                 protected_terms={"4500123"},
                 identity_surfaces=("Kestrel",),
@@ -285,16 +315,7 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
         )
         self.assertFalse(
             _server_annotation_hint_source_match(
-                ("Kestrel PO delivery confirmed",),
-                required_terms=("delivery",),
-                protected_terms={"4500123"},
-                identity_surfaces=("Kestrel",),
-                tokenizer=profile,
-            )
-        )
-        self.assertFalse(
-            _server_annotation_hint_source_match(
-                ("Kestrel PO 4500123",),
+                observation("Kestrel PO 4500123"),
                 required_terms=("delivery",),
                 protected_terms={"4500123"},
                 identity_surfaces=("Kestrel",),
@@ -303,7 +324,7 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
         )
         self.assertTrue(
             _server_annotation_hint_source_match(
-                ("楓林標籤機 delivery confirmed",),
+                observation("楓林標籤機 delivery confirmed"),
                 required_terms=("delivery",),
                 protected_terms=set(),
                 identity_surfaces=("楓林標籤機",),
@@ -312,7 +333,7 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
         )
         self.assertFalse(
             _server_annotation_hint_source_match(
-                ("楓林標籤機 delivery confirmed",),
+                observation("楓林標籤機 delivery confirmed"),
                 required_terms=("delivery", "latest"),
                 protected_terms=set(),
                 identity_surfaces=("楓林標籤機",),
@@ -321,13 +342,27 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
         )
         self.assertFalse(
             _server_annotation_hint_source_match(
-                ("NotKestrelX delivery confirmed",),
+                observation("NotKestrelX delivery confirmed"),
                 required_terms=("delivery",),
                 protected_terms=set(),
                 identity_surfaces=("Kestrel",),
                 tokenizer=profile,
             )
         )
+
+        mail_candidate = observation(
+            "body", modality="mail", payload={"subject": "Kestrel delivery", "sender": "ops"}
+        )
+        mail_ordinary = _source_mail_observation_match(
+            mail_candidate, query_terms=set(), required_terms=("delivery",),
+            protected_query_tokens=set(), tokenizer_profile=profile,
+        ) is not None
+        mail_annotated = _server_annotation_hint_source_match(
+            mail_candidate, required_terms=("delivery",), protected_terms=set(),
+            identity_surfaces=("Kestrel",), tokenizer=profile,
+        )
+        self.assertTrue(mail_ordinary)
+        self.assertEqual(mail_ordinary, mail_annotated)
 
     def test_additive_annotation_hashes_preserve_the_ordinary_shortlist(self) -> None:
         from formowl_mail.issue56_sealed_source import IngestionRevisionSourceRecords

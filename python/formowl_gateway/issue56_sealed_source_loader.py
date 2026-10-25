@@ -2001,21 +2001,35 @@ def _server_reviewed_identity_source_hints(revision, *, user_text, tokenizer, de
 
 
 def _server_annotation_hint_source_match(
-    texts,
+    observation,
     *,
     required_terms,
     protected_terms,
     identity_surfaces,
+    identity_context_texts=(),
     tokenizer,
 ):
-    """Apply required/protected predicates and reviewed surface identity to hints."""
-    combined = "\n".join(value for value in texts if isinstance(value, str) and value)
-    normalized = unicodedata.normalize("NFKC", combined).casefold()
-    if any(term.casefold() not in normalized for term in required_terms):
+    """Reuse ordinary source matching, then independently check reviewed identity."""
+    if _source_mail_observation_match(
+        observation,
+        query_terms=set(),
+        required_terms=tuple(required_terms),
+        protected_query_tokens=set(protected_terms),
+        tokenizer_profile=tokenizer,
+    ) is None:
         return False
-    source_tokens = set(tokenizer.analyze(combined).tokens)
-    if protected_terms and not protected_terms.issubset(source_tokens):
-        return False
+    identity_texts = [observation.text or observation.caption or ""]
+    if observation.modality == "mail":
+        payload = to_plain(observation.payload or {})
+        if isinstance(payload, Mapping):
+            identity_texts.extend(
+                value for value in (payload.get("subject"), payload.get("normalized_subject"))
+                if isinstance(value, str)
+            )
+    identity_texts.extend(identity_context_texts)
+    normalized = unicodedata.normalize(
+        "NFKC", "\n".join(value for value in identity_texts if isinstance(value, str) and value)
+    ).casefold()
     for surface in identity_surfaces:
         normalized_surface = unicodedata.normalize("NFKC", surface).casefold().strip()
         if not normalized_surface:
@@ -2744,10 +2758,11 @@ def _build_source_start_semantic_handler(
                         parent_payload = to_plain(parent.payload or {})
                         parent_text = parent.text or parent.caption or ""
                         if not _server_annotation_hint_source_match(
-                            (text, parent_text, parent_payload.get("subject")),
+                            observation,
                             required_terms=required_terms,
                             protected_terms=protected_terms,
                             identity_surfaces=annotation_hint_surfaces,
+                            identity_context_texts=(parent_text, parent_payload.get("subject")),
                             tokenizer=tokenizer,
                         ):
                             annotation_hint_counts["predicate_rejected"] += 1
@@ -2920,15 +2935,14 @@ def _build_source_start_semantic_handler(
                     )
                     parent_payload = to_plain(parent.payload or {}) if parent is not None else {}
                     if not _server_annotation_hint_source_match(
-                        (
-                            observation.text or "",
-                            payload.get("subject"),
-                            parent.text if parent is not None else "",
-                            parent_payload.get("subject"),
-                        ),
+                        observation,
                         required_terms=required_terms,
                         protected_terms=protected_terms,
                         identity_surfaces=annotation_hint_surfaces,
+                        identity_context_texts=(
+                            parent.text if parent is not None else "",
+                            parent_payload.get("subject"),
+                        ),
                         tokenizer=tokenizer,
                     ):
                         annotation_hint_counts["predicate_rejected"] += 1
@@ -3007,12 +3021,11 @@ def _build_source_start_semantic_handler(
                 text = observation.text or observation.caption or ""
                 if not text:
                     return None
-                normalized = unicodedata.normalize("NFKC", text).casefold()
                 if semantic_match or context_anchor is not None:
                     pass  # Reader already revalidated this neighbor against the matched anchor.
                 elif annotation_hint_match:
                     if not _server_annotation_hint_source_match(
-                        (text,),
+                        observation,
                         required_terms=required_terms,
                         protected_terms=protected_terms,
                         identity_surfaces=annotation_hint_surfaces,
@@ -3022,23 +3035,15 @@ def _build_source_start_semantic_handler(
                         _trace(trace, "count", "matcher_rejected")
                         return None
                     annotation_hint_counts["predicate_passed"] += 1
-                elif required_terms:
-                    if not all(term in normalized for term in required_terms):
-                        return None
-                else:
-                    source_tokens = set(tokenizer.analyze(text).tokens)
-                    if not query_terms.intersection(source_tokens):
-                        return None
-                source_tokens = (
-                    set() if context_anchor is not None else set(tokenizer.analyze(text).tokens)
-                )
-                if (
-                    not semantic_match
-                    and not annotation_hint_match
-                    and context_anchor is None
-                    and protected_terms
-                    and not protected_terms.issubset(source_tokens)
-                ):
+                elif _source_mail_observation_match(
+                    observation,
+                    query_terms=query_terms,
+                    required_terms=required_terms or None,
+                    protected_query_tokens=protected_terms,
+                    tokenizer_profile=tokenizer,
+                    require_all_query_terms=False,
+                    deadline_monotonic=deadline,
+                ) is None:
                     return None
                 lineage = source_occurrence_lineage_from_observation(
                     observation,

@@ -1603,30 +1603,38 @@ def _source_mail_observation_match(
     required_terms: tuple[str, ...] | None,
     protected_query_tokens: set[str],
     tokenizer_profile: MailCandidateAdmissionTokenizerProfile | None,
+    require_all_query_terms: bool = True,
     deadline_monotonic: float | None = None,
 ) -> tuple[str, ...] | None:
-    """Match one source-owned mail Observation without exposing raw payloads."""
+    """Match one source-owned Observation with its ordinary searchable fields."""
 
     _check_revision_source_deadline(deadline_monotonic)
-    if observation.modality != "mail" or (required_terms is None and not query_terms):
+    if type(require_all_query_terms) is not bool:
+        raise ContractValidationError("source query term mode is invalid")
+    if observation.modality == "mail":
+        payload = to_plain(observation.payload or {})
+        searchable_values = [observation.text]
+        if isinstance(payload, Mapping):
+            for field_name in (
+                "subject",
+                "normalized_subject",
+                "sender",
+                "from",
+                "to",
+                "cc",
+                "header_name",
+                "header_value",
+                "body_excerpt",
+            ):
+                value = payload.get(field_name)
+                if isinstance(value, str) and value:
+                    searchable_values.append(value)
+    elif observation.modality == "text":
+        searchable_values = [observation.text or observation.caption]
+    else:
         return None
-    payload = to_plain(observation.payload or {})
-    searchable_values = [observation.text]
-    if isinstance(payload, Mapping):
-        for field_name in (
-            "subject",
-            "normalized_subject",
-            "sender",
-            "from",
-            "to",
-            "cc",
-            "header_name",
-            "header_value",
-            "body_excerpt",
-        ):
-            value = payload.get(field_name)
-            if isinstance(value, str) and value:
-                searchable_values.append(value)
+    if required_terms is None and not query_terms:
+        return None
     searchable = " ".join(value for value in searchable_values if isinstance(value, str) and value)
     _check_revision_source_deadline(deadline_monotonic)
     if required_terms is not None:
@@ -1645,7 +1653,9 @@ def _source_mail_observation_match(
         # verified and suppress the bounded source recheck.  Query-agent
         # action words therefore remain part of the legacy lexical contract;
         # callers that need grounded spans must supply ``required_terms``.
-        if not query_terms.issubset(searchable_tokens):
+        matched_query_terms = query_terms.intersection(searchable_tokens)
+        if (not query_terms.issubset(searchable_tokens) if require_all_query_terms
+                else not matched_query_terms):
             return None
     if protected_query_tokens:
         if tokenizer_profile is None:
