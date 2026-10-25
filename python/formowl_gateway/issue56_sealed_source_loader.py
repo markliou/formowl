@@ -885,7 +885,10 @@ def _identity_only_recheck_terms(
     Required terms that are neither protected identifiers nor exact reviewed
     identity surfaces become ranking hints. They do not become source filters.
     """
-    from formowl_mail.issue56_sealed_source import _reviewed_identity_descriptors
+    from formowl_mail.issue56_sealed_source import (
+        _reviewed_identity_descriptors,
+        _reviewed_identity_surface_has_complete_term,
+    )
 
     def normalize(value: str) -> str:
         return unicodedata.normalize("NFKC", value).casefold().strip()
@@ -897,7 +900,8 @@ def _identity_only_recheck_terms(
     hard = {
         normalize(term)
         for term in required_terms
-        if normalize(term) in protected or normalize(term) in identity_surfaces
+        if normalize(term) in protected
+        or _reviewed_identity_surface_has_complete_term(term, identity_surfaces)
     }
     hard.update(protected)
     soft = {normalize(term) for term in required_terms if normalize(term) not in hard}

@@ -1156,7 +1156,10 @@ def _reviewed_identity_descriptors(entries):
         rows = list(entry.get("identity_bindings", ()))
         if not any(row["scope_role"] == "primary" for row in rows):
             rows.append({"type_surface": None, "value_surface": entry["target"]})
-        descriptors[entry["annotation_id"]] = {
+        annotation_id = entry.get("annotation_id", entry.get("candidate_atom_id"))
+        if not isinstance(annotation_id, str) or not annotation_id:
+            raise ContractValidationError("reviewed identity annotation id is invalid")
+        descriptors[annotation_id] = {
             (normalize(row["type_surface"]) if row.get("type_surface") else "", normalize(row["value_surface"]))
             for row in rows}
     return descriptors
@@ -1171,6 +1174,19 @@ def _reviewed_identity_matches(term, descriptor):
         for field, native in bind_typed_identifier_to_source_schema(term, [kind])})
 
 
+def _reviewed_identity_surface_has_complete_term(term, surfaces):
+    """Match a complete normalized term within reviewed surfaces using N2 hint boundaries."""
+    normalized_term = unicodedata.normalize("NFKC", term).casefold().strip()
+    if not normalized_term:
+        return False
+    pattern = re.compile(r"(?<![a-z0-9])" + re.escape(normalized_term) + r"(?![a-z0-9])")
+    return any(
+        isinstance(surface, str)
+        and pattern.search(unicodedata.normalize("NFKC", surface).casefold())
+        for surface in surfaces
+    )
+
+
 def _partial_reviewed_identity_terms(entries, user_text):
     """Return complete query terms found in reviewed labels, never identity anchors."""
     entries = tuple(entries)
@@ -1182,8 +1198,6 @@ def _partial_reviewed_identity_terms(entries, user_text):
             query_terms.add(normalized)
     if not query_terms:
         return ()
-    patterns = [re.compile(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])")
-                for term in sorted(query_terms, key=lambda value: (-len(value), value))]
     surfaces = []
     for entry in entries:
         surfaces.append(entry["target"])
@@ -1197,10 +1211,8 @@ def _partial_reviewed_identity_terms(entries, user_text):
         for surface in surfaces if isinstance(surface, str)
     )
     matches = tuple(
-        term for term, pattern in zip(
-            sorted(query_terms, key=lambda value: (-len(value), value)), patterns,
-        )
-        if any(pattern.search(surface) for surface in normalized_surfaces)
+        term for term in sorted(query_terms, key=lambda value: (-len(value), value))
+        if _reviewed_identity_surface_has_complete_term(term, normalized_surfaces)
     )
     return matches if len(matches) <= 128 else ()
 
