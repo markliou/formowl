@@ -454,6 +454,23 @@ class RequeryProgressTests(unittest.TestCase):
                         self.assertFalse(result.scan.complete)
                         self.assertIn("incomplete", result.warnings)
 
+    def test_source_reader_gets_fresh_budget_after_bounded_query_setup(self):
+        read = mock.Mock(return_value=SourceEvidenceScan((), 0, True, None))
+
+        def slow_setup(_deadline):
+            import time
+            time.sleep(0.02)
+
+        result = source_evidence_double_check(
+            query_class="evidence_lookup", result_query_class="evidence_lookup",
+            initial_status="pending_review", initial_warnings=(), verified_evidence_count=0,
+            evidence_limit=8, sealed_coverage_complete=False, read_source=read,
+            project_observation=mock.Mock(), begin=slow_setup, time_budget_ms=10,
+        )
+
+        self.assertEqual(read.call_count, 1)
+        self.assertTrue(result.scan.complete)
+
     def test_private_trace_retains_attachment_family_without_raw_fields(self):
         trace = {
             "response_stage": "payload_validated", "browser_request_sha256": sha256_json("turn"),
