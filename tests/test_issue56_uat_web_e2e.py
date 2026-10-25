@@ -4254,7 +4254,8 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             responses_model_factory.assert_called_once_with(
                 base_url=runtime_paths.provider_base_url,
                 api_key=provider_api_key,
-                model="gpt-6-luna",
+                model="gpt-5.6-luna",
+                reasoning_effort="low",
                 stream_initial_requests=True,
                 typed_evidence_notes=True,
             )

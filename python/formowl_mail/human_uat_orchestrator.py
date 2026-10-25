@@ -222,7 +222,7 @@ _CODEX_CUSTOM_PROVIDER_LOGIN_METHOD = "custom_provider"
 _CODEX_CUSTOM_PROVIDER_ID = "formowl_uat_custom"
 _CODEX_CUSTOM_PROVIDER_NAME = "FormOwl UAT custom provider"
 _CODEX_CUSTOM_PROVIDER_WIRE_API = "responses"
-_DEFAULT_CODEX_MODEL = "gpt-6-luna"
+_DEFAULT_CODEX_MODEL = "gpt-5.6-luna"
 _CODEX_SYSTEM_SKILL_NAMES = (
     "imagegen",
     "openai-docs",
@@ -4754,7 +4754,7 @@ class VerifiedDiagnosticDeployment:
 def diagnostic_deployment_settings(
     *, host: str, port: int, record_raw_uat_interactions: bool,
     temporary_access_enabled: bool, provider_base_url: str,
-    typed_evidence_notes: bool = False,
+    typed_evidence_notes: bool = False, model: str = _DEFAULT_CODEX_MODEL, reasoning_effort: str = "high",
 ) -> dict[str, Any]:
     """Pure manifest helper; startup supplies actual resolved settings, not JSON."""
     if type(typed_evidence_notes) is not bool:
@@ -4765,8 +4765,8 @@ def diagnostic_deployment_settings(
         "host": host, "port": port, "temporary_lan_diagnostic": True,
         "record_raw_uat_interactions": record_raw_uat_interactions,
         "temporary_access_enabled": temporary_access_enabled,
-        "provider_transport": "codex_responses", "model": _DEFAULT_CODEX_MODEL,
-        "reasoning_effort": "high", "stream_initial_requests": True,
+        "provider_transport": "codex_responses", "model": model,
+        "reasoning_effort": reasoning_effort, "stream_initial_requests": True,
         "provider_endpoint_fingerprint": sha256_json(provider_base_url.rstrip("/")),
     }
 
