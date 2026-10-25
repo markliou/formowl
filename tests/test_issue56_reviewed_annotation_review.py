@@ -103,10 +103,14 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
             matched_terms = sealed_source._partial_reviewed_identity_terms(
                 entries, "Kestrel 標籤機專案 4500",
             )
+            disabled_scope = sealed_source._reviewed_annotation_scope(
+                entries, user_text="Kestrel 標籤機專案 4500",
+            )
             eligible, anchor, status = sealed_source._reviewed_annotation_scope(
-                entries, user_text="Kestrel 標籤機專案 4500")
+                entries, user_text="Kestrel 標籤機專案 4500", allow_partial_identity=True)
         self.assertEqual(eligible, {"atom_latin", "atom_cjk"})
         self.assertEqual(set(matched_terms), {"kestrel", "標籤", "籤機"})
+        self.assertEqual(disabled_scope, (set(), None, "unknown"))
         self.assertIsNone(anchor)
         self.assertEqual(status, "partial_identity")
         annotations = [
@@ -126,11 +130,15 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
         )
         with mock.patch.object(sealed_source, "load_issue56_target_mail_tokenizer_profile",
                                return_value=FrozenProfileFixture()):
+            disabled_catalog = sealed_source.issue56_reviewed_annotation_catalog(
+                revision, user_text="Kestrel 標籤機專案 4500",
+            )
             catalog = sealed_source.issue56_reviewed_annotation_catalog(
-                revision, user_text="Kestrel 標籤機專案 4500")
+                revision, user_text="Kestrel 標籤機專案 4500", allow_partial_identity=True)
+            self.assertEqual(disabled_catalog["view_status"], "unknown")
             self.assertIsNone(sealed_source.bind_reviewed_annotation_identity(
                 entries, selected_ids=eligible, required_terms=(),
-                user_text="Kestrel 標籤機專案 4500"))
+                user_text="Kestrel 標籤機專案 4500", allow_partial_identity=True))
             with self.assertRaisesRegex(ContractValidationError, "unknown or ambiguous"):
                 sealed_source.bind_reviewed_annotation_identity(
                     entries, selected_ids={"atom_number"}, required_terms=(),
