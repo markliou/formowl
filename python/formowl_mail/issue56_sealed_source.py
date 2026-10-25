@@ -1075,7 +1075,7 @@ def _reviewed_identity_descriptors(entries):
         if not any(row["scope_role"] == "primary" for row in rows):
             rows.append({"type_surface": None, "value_surface": entry["target"]})
         descriptors[entry["annotation_id"]] = {
-            (normalize(row["type_surface"]) if row["type_surface"] else "", normalize(row["value_surface"]))
+            (normalize(row["type_surface"]) if row.get("type_surface") else "", normalize(row["value_surface"]))
             for row in rows}
     return descriptors
 
@@ -1105,7 +1105,7 @@ def _reviewed_annotation_scope(entries, *, user_text=None, required_terms=()):
         if not any(row["scope_role"] == "primary" for row in bindings):
             bindings.append({"scope_role": "primary", "type_surface": None, "value_surface": entry["target"]})
         roles[entry["annotation_id"]] = {
-            role: {(normalize(row["type_surface"]) if row["type_surface"] else "", normalize(row["value_surface"]))
+            role: {(normalize(row["type_surface"]) if row.get("type_surface") else "", normalize(row["value_surface"]))
                    for row in bindings if row["scope_role"] == role}
             for role in ("primary", "parent", "group", "item")}
     universe = set().union(*descriptors.values()) if descriptors else set()
