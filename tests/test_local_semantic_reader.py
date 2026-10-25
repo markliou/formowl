@@ -8,7 +8,7 @@ from unittest import mock
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError, Observation, sha256_json
 from formowl_graph.candidates import read_and_store_source_unit
-from formowl_graph.local_semantic_reader import Adapter, LocalOllamaReader, presented
+from formowl_graph.local_semantic_reader import Adapter, LocalOllamaReader, flat_schema, presented
 from formowl_graph.storage import CandidateAtomStore, CandidateRelationStore, SemanticMetadataStore
 
 BODY = "From: Kc Yeh 葉坤杰 ( 中光電 )\nPO No. 4500123 交期 2025/12/08\nPO No. 4500124 交期 2025/12/09"
@@ -83,6 +83,17 @@ class AdapterLocationTests(unittest.TestCase):
         self.assertEqual(self.adapter.counts["invented_label_cleared"], 1)
         self.assertEqual(self.adapter.counts["invented_subject_cleared"], 1)
 
+    def test_fact_evidence_is_limited_to_focus_while_names_may_cite_context(self) -> None:
+        schema = flat_schema(["obs_head", "obs_body"], 8, ["obs_body"])
+        claim = schema["properties"]["records"]["items"]["anyOf"][1]["properties"]
+        self.assertEqual(claim["evidence"]["items"]["properties"]["observation_id"]["enum"], ["obs_body"])
+        subject_quote = claim["subject_quote"]["anyOf"][0]["properties"]["observation_id"]["enum"]
+        self.assertEqual(subject_quote, ["obs_head", "obs_body"])
+
+    def test_read_inventory_is_filled_only_for_a_reported_complete_read(self) -> None:
+        self.assertEqual(self.adapter.convert({"read_status": "complete"})["read_observation_ids"], ["obs_body"])
+        self.assertEqual(self.adapter.convert({"read_status": "incomplete"})["read_observation_ids"], [])
+
     def test_model_view_drops_only_opaque_hashes_and_ids(self) -> None:
         observation = _observation("obs_body", BODY, payload={
             "message_fingerprint": "sha256:" + "a" * 64, "thread_id": "mailthread_0123456789abcdef",
@@ -99,7 +110,7 @@ class LocalReaderContractTests(unittest.TestCase):
     def test_converted_output_passes_the_unchanged_contract_validator(self) -> None:
         temp_dir = _paths.fresh_test_dir("local-semantic-reader")
         observation = _observation("obs_body", BODY)
-        flat = {"read_status": "complete", "read_observation_ids": ["obs_body"], "relations": [],
+        flat = {"read_status": "complete", "relations": [],
                 "records": [_record(
                     subject="4500123", subject_label="PO No.",
                     subject_quote={"observation_id": "obs_body", "quote": "PO No. 4500123"},
@@ -123,7 +134,8 @@ class LocalReaderContractTests(unittest.TestCase):
                 candidate_atom_store=CandidateAtomStore(temp_dir),
                 candidate_relation_store=CandidateRelationStore(temp_dir))
         sent = json.loads(urlopen.call_args.args[0].data)
-        self.assertEqual(sent["format"]["properties"]["read_observation_ids"]["items"]["enum"], ["obs_body"])
+        self.assertNotIn("read_observation_ids", sent["format"]["properties"])
+        self.assertEqual(result.read_ledger.value["coverage_counts"]["missing_observation_count"], 0)
         self.assertEqual(result.read_ledger.value["annotation_status"], "annotated")
         atom = result.candidate_atoms[0]
         self.assertEqual(atom.status, "pending_review")
