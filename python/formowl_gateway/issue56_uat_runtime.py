@@ -551,6 +551,12 @@ class Issue56UatQueryService:
                 ) = _query_agent_runtime_context(
                     self._application,
                     user_text=prompt,
+                    configured_tool_catalog=(
+                        self._provider_tool_catalog
+                        if callable(getattr(
+                            self._conversation_model, "configure_conversation_tools", None,
+                        )) else None
+                    ),
                 )
                 result, responses, outcome = _run_gpt_query_agent(
                     self._conversation_model,
@@ -869,6 +875,12 @@ class Issue56TemporaryLanQueryService:
                 ) = _query_agent_runtime_context(
                     self._application,
                     user_text=prompt,
+                    configured_tool_catalog=(
+                        self._provider_tool_catalog
+                        if callable(getattr(
+                            self._conversation_model, "configure_conversation_tools", None,
+                        )) else None
+                    ),
                 )
                 result, responses, outcome = _run_gpt_query_agent(
                     self._conversation_model,
@@ -1448,34 +1460,39 @@ def _browser_callback_url(
     return callback_url, parsed.scheme == "https"
 
 
-def _query_agent_tool_catalog(application: ConnectedMcpApplication | Any) -> tuple[Mapping[str, Any], ...]:
-    """Initial available catalog only; per-turn selection/validation stays separate."""
+def _query_agent_available_tool_names(application: ConnectedMcpApplication | Any) -> frozenset[str]:
+    """Tool names that may be pinned into a conversation journal catalog."""
     dispatcher = getattr(application, "dispatcher", None)
-    enabled_tool_names = (
-        dispatcher.enabled_tool_names
-        if dispatcher is not None
-        else {"whoami", "query_effective_graph_view"}
-    )
-    if dispatcher is not None:
-        mail_handler = getattr(dispatcher.semantic_gateway, "mail_evidence_handler", None)
-        mail_capabilities = getattr(mail_handler, "authorized_capability_summary", None)
-        source_families = (
-            set(mail_capabilities.get("source_families", ()))
-            if isinstance(mail_capabilities, Mapping)
-            else set()
+    if dispatcher is None:
+        return frozenset({"whoami", "query_effective_graph_view"})
+
+    enabled_tool_names = set(dispatcher.enabled_tool_names)
+    semantic_gateway = dispatcher.semantic_gateway
+    source_families: set[str] = set()
+    for handler_name in ("retrieval_handler", "mail_evidence_handler"):
+        handler = getattr(semantic_gateway, handler_name, None)
+        capabilities = getattr(handler, "authorized_capability_summary", None)
+        if isinstance(capabilities, Mapping):
+            values = capabilities.get("source_families", ())
+            if isinstance(values, (list, tuple, set, frozenset)):
+                source_families.update(value for value in values if isinstance(value, str))
+    if "query_mail_evidence" in enabled_tool_names:
+        # Keep graph when non-mail families are served. Per-turn routing below
+        # applies this set only when a conversation journal is configured.
+        keep_graph = (
+            "query_effective_graph_view" in enabled_tool_names
+            and bool(source_families - {"mail"})
         )
-        if "query_mail_evidence" in enabled_tool_names:
-            # The per-turn selector may route non-mail work (independent
-            # documents, native tables, chat) to the graph tool, so a journal
-            # configured with only the mail tool would reject the first such
-            # turn. Keep the graph tool whenever non-mail families are served.
-            keep_graph = (
-                "query_effective_graph_view" in enabled_tool_names
-                and bool(source_families - {"mail"})
-            )
-            enabled_tool_names = {"whoami", "query_mail_evidence"} | (
-                {"query_effective_graph_view"} if keep_graph else set()
-            )
+        enabled_tool_names = {"whoami", "query_mail_evidence"} | (
+            {"query_effective_graph_view"} if keep_graph else set()
+        )
+    return frozenset(enabled_tool_names)
+
+
+def _query_agent_tool_catalog(application: ConnectedMcpApplication | Any) -> tuple[Mapping[str, Any], ...]:
+    """Return the configured journal catalog from the shared availability rule."""
+    dispatcher = getattr(application, "dispatcher", None)
+    enabled_tool_names = _query_agent_available_tool_names(application)
     descriptors = build_remote_tool_descriptors(
         required_scope=dispatcher.required_scope if dispatcher is not None else "formowl.use",
         enabled_tool_names=enabled_tool_names,
@@ -1509,12 +1526,13 @@ def _query_agent_runtime_context(
     application: ConnectedMcpApplication | Any,
     *,
     user_text: str | None = None,
+    configured_tool_catalog: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[Mapping[str, Any], Mapping[str, Any] | None]:
     dispatcher = getattr(application, "dispatcher", None)
     if dispatcher is None:
         descriptors = build_remote_tool_descriptors(
             required_scope="formowl.use",
-            enabled_tool_names={"whoami", "query_effective_graph_view"},
+            enabled_tool_names=_query_agent_available_tool_names(application),
         )
         descriptor = next(item for item in descriptors if item.name == "query_effective_graph_view")
         return descriptor.model_dump(by_alias=True, exclude_none=True), None
@@ -1557,7 +1575,18 @@ def _query_agent_runtime_context(
         (item for item in descriptors if item.name == preferred_tool_name),
         None,
     )
-    if descriptor is None:
+    if configured_tool_catalog is not None:
+        configured_names = {
+            item.get("name") for item in configured_tool_catalog
+            if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+        }
+        configured_names.intersection_update(_query_agent_available_tool_names(application))
+        if descriptor is None or descriptor.name not in configured_names:
+            descriptor = next(
+                (item for item in descriptors if item.name in configured_names),
+                None,
+            )
+    if descriptor is None and configured_tool_catalog is None:
         descriptor = next(
             (
                 item
