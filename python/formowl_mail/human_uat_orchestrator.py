@@ -3450,6 +3450,23 @@ def _provider_transport_cause_diagnostic(exception: Exception) -> dict[str, Any]
     return safe
 
 
+def _codex_native_request(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Only fields a native Codex request carries (codex-pool rejects the rest).
+
+    Codex never caps output length and never forces a tool choice. A forbidden
+    tool phase ("none") is kept by offering no tools; a forced tool ("required" or a
+    named function) becomes that tool alone under the model's own choice.
+    """
+    request = {key: value for key, value in payload.items() if key not in {"max_output_tokens", "tool_choice"}}
+    choice = payload.get("tool_choice")
+    if choice == "none":
+        for key in ("tools", "parallel_tool_calls"):
+            request.pop(key, None)
+    elif isinstance(choice, Mapping) and choice.get("name"):
+        request["tools"] = [tool for tool in payload.get("tools", ()) if tool.get("name") == choice["name"]]
+    return request
+
+
 _RESPONSES_WEBSOCKET_BETA = "responses_websockets=2026-02-06"
 # Not part of the Codex WebSocket request: streaming is implicit and the endpoint
 # rejects safety_identifier ("Unsupported parameter"), which Codex CLI never sends.
@@ -3500,8 +3517,14 @@ class _ResponsesWebSocket:
         self.upgraded = self.status == 101 and self.headers.get("Sec-WebSocket-Accept") == expected
 
     def read_rest(self, limit: int) -> bytes:
-        """The non-upgraded response body (for diagnostics), bounded."""
+        """The non-upgraded response body (for diagnostics), bounded by size, framing and 2 s."""
+        length = self.headers.get("Content-Length")
+        expected = int(length) if length and length.isdigit() else None
+        self._socket.settimeout(2.0)
         while len(self._buffer) <= limit:
+            if (expected is not None and len(self._buffer) >= expected
+                    or expected is None and self._buffer.endswith(b"0\r\n\r\n")):
+                break
             try:
                 chunk = self._socket.recv(4096)
             except OSError:
@@ -4921,7 +4944,7 @@ def diagnostic_deployment_settings(
     *, host: str, port: int, record_raw_uat_interactions: bool,
     temporary_access_enabled: bool, provider_base_url: str,
     typed_evidence_notes: bool = False, model: str = _DEFAULT_CODEX_MODEL, reasoning_effort: str = "high",
-    websocket: bool = False,
+    websocket: bool = False, codex_native_requests: bool = False,
 ) -> dict[str, Any]:
     """Pure manifest helper; startup supplies actual resolved settings, not JSON."""
     if type(typed_evidence_notes) is not bool:
@@ -4934,6 +4957,7 @@ def diagnostic_deployment_settings(
         "temporary_access_enabled": temporary_access_enabled,
         "provider_transport": "codex_responses_websocket" if websocket else "codex_responses", "model": model,
         "reasoning_effort": reasoning_effort, "stream_initial_requests": True,
+        "codex_native_requests": codex_native_requests,
         "provider_endpoint_fingerprint": sha256_json(provider_base_url.rstrip("/")),
     }
 
@@ -5292,8 +5316,12 @@ class CodexResponsesConversationModel:
         stream_initial_requests: bool = False,
         typed_evidence_notes: bool = False,
         websocket: bool = False,
+        codex_native_requests: bool = False,
     ) -> None:
         normalized_base_url = _normalize_custom_provider_base_url(base_url)
+        if type(codex_native_requests) is not bool:
+            raise ContractValidationError("UAT Codex-native request mode is invalid")
+        self._codex_native_requests = codex_native_requests
         if type(stream_initial_requests) is not bool:
             raise ContractValidationError("UAT initial streaming mode is invalid")
         if type(websocket) is not bool:
@@ -7023,6 +7051,8 @@ class CodexResponsesConversationModel:
                 request_payload["stream"] = True
             else:
                 request_payload.setdefault("stream", False)
+            if self._codex_native_requests:
+                request_payload = _codex_native_request(request_payload)
             request_shape = _provider_request_shape_snapshot(request_payload)
             request = urllib.request.Request(
                 self._responses_url,

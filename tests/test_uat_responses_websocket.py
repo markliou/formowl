@@ -8,7 +8,11 @@ import threading
 import unittest
 
 import _paths  # noqa: F401
-from formowl_mail.human_uat_orchestrator import CodexResponsesConversationModel, _UatProviderFailure
+from formowl_mail.human_uat_orchestrator import (
+    CodexResponsesConversationModel,
+    _codex_native_request,
+    _UatProviderFailure,
+)
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -90,6 +94,17 @@ def _completed(text: str) -> dict:
         "status": "completed", "model": "gpt-5.6-luna",
         "output": [{"type": "message", "role": "assistant", "status": "completed",
                     "content": [{"type": "output_text", "text": text}]}]}}
+
+
+class CodexNativeRequestTests(unittest.TestCase):
+    def test_only_codex_fields_remain_and_tool_phases_keep_their_meaning(self) -> None:
+        tools = [{"type": "function", "name": "a"}, {"type": "function", "name": "b"}]
+        base = {"model": "m", "input": [], "tools": tools, "parallel_tool_calls": False, "max_output_tokens": 9}
+        self.assertEqual(_codex_native_request({**base, "tool_choice": "auto"}),
+                         {"model": "m", "input": [], "tools": tools, "parallel_tool_calls": False})
+        self.assertEqual(_codex_native_request({**base, "tool_choice": "none"}), {"model": "m", "input": []})
+        forced = _codex_native_request({**base, "tool_choice": {"type": "function", "name": "b"}})
+        self.assertEqual((forced["tools"], "tool_choice" in forced), ([tools[1]], False))
 
 
 class ResponsesWebSocketTests(unittest.TestCase):
