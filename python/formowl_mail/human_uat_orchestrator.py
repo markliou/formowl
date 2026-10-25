@@ -1104,6 +1104,61 @@ class UatEvidenceToolRequest:
         ))
 
 
+def _required_terms_overlapping_output_fields(
+    user_text: str,
+    terms: Sequence[str],
+    requested_fields: set[str],
+    *,
+    anchor: str | None,
+) -> set[str]:
+    """Return proposed terms rejected as output-field predicates.
+
+    Keep this predicate shared by validation and the annotation-only source
+    fallback so the fallback cannot reinterpret the role check.
+    """
+    non_literal_terms = tuple(
+        term for term in terms
+        if not _is_explicit_literal_content_term(
+            user_text, term, require_explicit_intent=True,
+        )
+    )
+    role_terms = set(non_literal_terms)
+    composite_role_terms: set[str] = set()
+    for term in non_literal_terms:
+        composite = re.fullmatch(r"(.+?)\s*(?:的|之|['’]s\b|:)\s*([^,，;；。!?？]+)", term)
+        if composite is not None and composite[1].strip():
+            composite_role_terms.add(composite[2].strip())
+    role_terms.update(composite_role_terms)
+    identity_terms = set(protected_reference_identifiers(user_text))
+    if anchor is not None:
+        identity_terms.add(anchor)
+    original_fields = _original_requested_field_spans(user_text)
+    overlapping: set[str] = set()
+    for field in requested_fields | original_fields:
+        for role_term in role_terms:
+            if re.search(
+                r"(?<![a-z0-9_./-])" + re.escape(role_term) + r"(?![a-z0-9_./-])",
+                field,
+            ) is None:
+                continue
+            for proposed in non_literal_terms:
+                composite = re.fullmatch(
+                    r"(.+?)\s*(?:的|之|['’]s\b|:)\s*([^,，;；。!?？]+)", proposed,
+                )
+                derived = composite is not None and composite[2].strip() == role_term
+                direct = proposed == role_term
+                if not direct and not derived:
+                    continue
+                identity_exempt = (
+                    not derived and role_term not in composite_role_terms
+                    and proposed in identity_terms
+                    and (proposed != field or field not in requested_fields)
+                )
+                if not identity_exempt:
+                    overlapping.add(proposed)
+    return overlapping
+
+
 class _UatTurnRequestContractBinder:
     """Bind one capability-scoped request contract to all tool calls in a turn."""
 
@@ -1602,41 +1657,8 @@ class _UatTurnRequestContractBinder:
                 raise ContractValidationError(
                     "UAT evidence required term is a temporal predicate, not literal content"
                 )
-            # Decorated fields can still overlap a content constraint. Reject
-            # ambiguous roles for repair, never guess which term to remove.
-            # ASCII identifier fragments do not count; CJK spans need no spaces.
-            role_terms = set(non_literal_terms)
-            composite_role_terms: set[str] = set()
-            for term in non_literal_terms:
-                # A grounded subject/property phrase is not a literal predicate
-                # merely because it occurs in the request. Inspect, never rewrite.
-                composite = re.fullmatch(r"(.+?)\s*(?:的|之|['’]s\b|:)\s*([^,，;；。!?？]+)", term)
-                if composite is not None and composite[1].strip():
-                    composite_role_terms.add(composite[2].strip())
-            role_terms.update(composite_role_terms)
-            # Keep derived roles even when the same text is also a standalone
-            # identity. One candidate term cannot erase another term's overlap.
-            # A full protected target may decorate an output label without
-            # becoming an output-field filter. Exempt only that standalone
-            # identity, not property words or composite subject/property terms.
-            # Keep every required term intact; an identifier-only field remains
-            # ambiguous and must still be repaired.
-            identity_terms = set(protected_reference_identifiers(self._normalized_user_text))
-            if anchor is not None:
-                identity_terms.add(anchor)
-            # Provider labels may translate the original output slot. Keep
-            # those structural roles for validation only, not as new filters
-            # or rewritten contract fields. Standalone identities retain their
-            # existing exemption; composite-derived properties never borrow it.
-            original_fields = _original_requested_field_spans(self._normalized_user_text)
-            if any(
-                re.search(r"(?<![a-z0-9_./-])" + re.escape(term) + r"(?![a-z0-9_./-])", field)
-                is not None
-                and not (term not in composite_role_terms and term in non_literal_terms
-                         and term in identity_terms
-                         and (term != field or field not in requested_fields))
-                for field in requested_fields | original_fields
-                for term in role_terms
+            if _required_terms_overlapping_output_fields(
+                self._normalized_user_text, terms, requested_fields, anchor=anchor,
             ):
                 raise ContractValidationError(
                     "UAT evidence required term overlaps a requested output field; clarify field/term roles"
@@ -4496,6 +4518,8 @@ _PLANNER_REJECTION_CODES = {
     "UAT reviewed annotation ID is unavailable": "annotation_id_unavailable",
     "UAT reviewed annotation catalog is unavailable": "annotation_catalog_unavailable",
     "UAT reviewed annotation identity is not independently bound": "annotation_identity_unbound",
+    "UAT reviewed annotation original constraint is not independently bound":
+        "annotation_original_constraint_unbound",
     "UAT reviewed annotation original identity is unknown or ambiguous": "annotation_identity_ambiguous",
 }
 
@@ -6725,6 +6749,7 @@ class CodexResponsesConversationModel:
                         )
                     else:
                         validation_stage = {"stage": "argument_schema"}
+                        request = None
                         try:
                             request = _parse_tool_request(
                                 parsed_arguments,
@@ -6741,15 +6766,45 @@ class CodexResponsesConversationModel:
                                 tool_attempt=formowl_attempts,
                             )
                             _record_private_citation_stage(rejection)
-                            stop_reason = "invalid_arguments"
-                            if formowl_attempts >= _MAX_TOOL_CALLS_PER_TURN:
-                                formowl_halted = True
-                            tool_output = _execution_control_envelope(
-                                reason="invalid_arguments",
-                                remaining_mcp_calls=(_MAX_TOOL_CALLS_PER_TURN - formowl_attempts),
-                                validation_code=rejection["rejection_code"],
+                            fallback_arguments = _annotation_source_fallback_arguments(
+                                parsed_arguments,
+                                request_contract_binder=request_contract_binder,
+                                rejection_code=rejection["rejection_code"],
                             )
-                        else:
+                            fallback_request = None
+                            if fallback_arguments is not None:
+                                fallback_stage = {"stage": "argument_schema"}
+                                try:
+                                    fallback_request = _parse_tool_request(
+                                        fallback_arguments,
+                                        tool_descriptor=formowl_tool,
+                                        request_contract_binder=request_contract_binder,
+                                        _validation_stage=fallback_stage,
+                                    )
+                                except (ContractValidationError, RuntimeError):
+                                    fallback_request = None
+                            if fallback_request is not None:
+                                _record_private_citation_stage({
+                                    "stage": "annotation_nomination_fallback",
+                                    "rejection_code": rejection["rejection_code"],
+                                    "nominated_count": len(parsed_arguments.get("reviewed_annotation_ids", ())),
+                                    "selected_count": 0,
+                                    "source_fallback": True,
+                                    "query_hash": "sha256:" + hashlib.sha256(
+                                        fallback_request.query_text.encode("utf-8")
+                                    ).hexdigest(),
+                                })
+                                request = fallback_request
+                            else:
+                                stop_reason = "invalid_arguments"
+                                if formowl_attempts >= _MAX_TOOL_CALLS_PER_TURN:
+                                    formowl_halted = True
+                                tool_output = _execution_control_envelope(
+                                    reason="invalid_arguments",
+                                    remaining_mcp_calls=(_MAX_TOOL_CALLS_PER_TURN - formowl_attempts),
+                                    validation_code=rejection["rejection_code"],
+                                )
+                        if request is not None:
                             query_fingerprint = _tool_request_fingerprint(request)
                             # Hint-only differences are identity metadata, not new evidence work.
                             hard_fingerprint = _tool_request_fingerprint(
@@ -8510,6 +8565,78 @@ def _parse_tool_request(
     request_contract_binder.bind(request.request_contract, table_query=table_query)
     request_contract_binder._required_term_placement = placement
     return replace(request, required_term_placement=placement)
+
+
+def _annotation_source_fallback_arguments(
+    arguments: Mapping[str, Any],
+    *,
+    request_contract_binder: _UatTurnRequestContractBinder,
+    rejection_code: str,
+) -> dict[str, Any] | None:
+    """Drop only a rejected optional nomination and its miscast output terms.
+
+    The regular validator still rejects the original plan. This creates a fresh
+    source-only proposal with the same query, scope and output contract.
+    """
+    annotation_rejections = {
+        "annotation_ids_type_invalid", "annotation_ids_count_invalid",
+        "annotation_id_format_invalid", "annotation_ids_duplicate",
+        "annotation_pin_format_invalid", "annotation_query_class_invalid",
+        "annotation_route_unsupported", "annotation_catalog_pin_mismatch",
+        "annotation_id_unavailable", "annotation_catalog_unavailable",
+        "annotation_identity_unbound", "annotation_identity_ambiguous",
+        "annotation_original_constraint_unbound",
+        "field_term_role_overlap",
+    }
+    nominated = arguments.get("reviewed_annotation_ids")
+    if (
+        rejection_code not in annotation_rejections
+        or not isinstance(nominated, (list, tuple))
+        or not nominated
+        or arguments.get("table_query") is not None
+        or any(arguments.get(key) is not None for key in (
+            "exact_field", "exact_inventory_kind", "cursor",
+        ))
+    ):
+        return None
+    fallback = dict(arguments)
+    fallback["reviewed_annotation_ids"] = []
+    fallback.pop("reviewed_annotation_pin", None)
+    contract = arguments.get("request_contract")
+    candidate_terms = arguments.get("required_terms")
+    if rejection_code == "field_term_role_overlap" and (
+        not isinstance(contract, Mapping)
+        or contract.get("query_class") != "evidence_lookup"
+        or not isinstance(candidate_terms, list)
+    ):
+        return None
+    if (
+        isinstance(contract, Mapping)
+        and contract.get("query_class") == "evidence_lookup"
+        and isinstance(candidate_terms, list)
+    ):
+        normalized_fields = {
+            unicodedata.normalize("NFKC", field.strip()).casefold()
+            for field in contract.get("requested_fields", ())
+            if isinstance(field, str)
+        }
+        overlapping = _required_terms_overlapping_output_fields(
+            request_contract_binder._normalized_user_text,
+            tuple(unicodedata.normalize("NFKC", term.strip()).casefold()
+                  for term in candidate_terms if isinstance(term, str)),
+            normalized_fields,
+            anchor=(request_contract_binder._reference_binding or {}).get("identifier"),
+        )
+        retained = [
+            term for term in candidate_terms
+            if isinstance(term, str)
+            and unicodedata.normalize("NFKC", term.strip()).casefold() not in overlapping
+        ]
+        if retained:
+            fallback["required_terms"] = retained
+        elif overlapping:
+            fallback.pop("required_terms", None)
+    return fallback
 
 
 def _parse_public_term_request(arguments: Mapping[str, Any]) -> _PublicTermRequest:
