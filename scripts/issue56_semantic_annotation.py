@@ -135,14 +135,142 @@ def build_scope(jobs: list[tuple[str, str, str | None]], month: str, focus_chars
     return units, counts
 
 
+def build_document_scope(
+    jobs: list[tuple[str, str, str | None]],
+    focus_chars: int,
+    source_lookup_sqlite: str | Path,
+):
+    """Build document_text units only from helpers in the serving revision lookup."""
+    import sqlite3
+
+    from formowl_contract import ContractValidationError, sha256_json
+    from formowl_ingestion.storage.records import JobStore, ObservationStore
+
+    if not jobs or any(attach_job for _, _, attach_job in jobs):
+        raise ContractValidationError("document scope requires explicit jobs without attachment jobs")
+    lookup = Path(source_lookup_sqlite)
+    if not lookup.is_file() or lookup.is_symlink():
+        raise ContractValidationError("document scope source lookup is unavailable")
+    manifest_path = lookup.with_name("source-lookup-manifest.json")
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        raise ContractValidationError("document scope source lookup manifest is unavailable")
+    lookup_manifest = json.loads(manifest_path.read_bytes())
+    lookup_sha256 = lookup_manifest.get("sqlite_sha256")
+    if not isinstance(lookup_sha256, str) or not lookup_sha256.startswith("sha256:"):
+        raise ContractValidationError("document scope source lookup seal is invalid")
+    connection = sqlite3.connect(f"file:{lookup}?mode=ro", uri=True)
+    try:
+        rows = connection.execute(
+            "SELECT job_index, observation_id, observation_hash "
+            "FROM helpers WHERE source_family = 'document_text' "
+            "ORDER BY job_index, observation_id"
+        ).fetchall()
+    finally:
+        connection.close()
+    if not rows:
+        raise ContractValidationError("document scope has no serving document_text helpers")
+
+    job_records: dict[int, tuple[str, object]] = {}
+    stores: dict[str, ObservationStore] = {}
+    for job_index in sorted({row[0] for row in rows if type(row[0]) is int}):
+        if not 0 <= job_index < len(jobs):
+            raise ContractValidationError("document scope helper job index is invalid")
+        root, job_id, _ = jobs[job_index]
+        job = JobStore(root).get(job_id)
+        if job is None or job.status != "succeeded":
+            raise ContractValidationError("document scope job binding is unavailable")
+        job_records[job_index] = (root, job)
+        stores.setdefault(root, ObservationStore(root, create_directory=False))
+
+    grouped: dict[tuple[int, str], list[tuple[object, int]]] = collections.defaultdict(list)
+    seen: set[tuple[int, str]] = set()
+    type_counts: collections.Counter = collections.Counter()
+    total_text_chars = 0
+    for job_index, observation_id, observation_hash in rows:
+        if type(job_index) is not int or job_index not in job_records:
+            raise ContractValidationError("document scope helper job index is invalid")
+        root, job = job_records[job_index]
+        if observation_id not in job.observation_ids:
+            raise ContractValidationError("document scope helper is outside its bound job")
+        observation = stores[root].get(observation_id)
+        if (
+            observation is None
+            or sha256_json(observation.to_dict()) != observation_hash
+            or observation.modality != "text"
+            or observation.observation_type not in {"heading", "paragraph"}
+            or observation.asset_id != job.asset_id
+        ):
+            raise ContractValidationError("document scope helper binding is invalid")
+        key = (job_index, observation_id)
+        if key in seen:
+            raise ContractValidationError("document scope helper is duplicated")
+        seen.add(key)
+        length = len(observation.text or "")
+        grouped[(job_index, observation.asset_id)].append((observation, length))
+        type_counts[observation.observation_type] += 1
+        total_text_chars += length
+
+    units = []
+    for (job_index, asset_id), observations in sorted(grouped.items()):
+        def order_key(item):
+            observation = item[0]
+            location = observation.location or {}
+            block = location.get("block_index", 0)
+            line = location.get("line_start", location.get("line", 0))
+            return (
+                block if type(block) is int else 0,
+                line if type(line) is int else 0,
+                observation.observation_id,
+            )
+
+        ordered = sorted(observations, key=order_key)
+        parts = chunks(
+            [(observation.observation_id, length) for observation, length in ordered],
+            focus_chars,
+        ) or [[]]
+        for part_index, part in enumerate(parts):
+            units.append({
+                "unit_id": f"document:{job_index}:{asset_id}:{part_index}",
+                "kind": "document_text",
+                "store": jobs[job_index][0],
+                "parent": asset_id,
+                "observation_ids": part,
+                "focus_observation_ids": part,
+            })
+
+    counts = {
+        "source_family": "document_text",
+        "source_observations": len(seen),
+        "documents": len(grouped),
+        "annotation_units": len(units),
+        "observation_types": dict(sorted(type_counts.items())),
+        "average_text_length_chars": total_text_chars / len(seen),
+        "source_lookup_sha256": lookup_sha256,
+        "source_revision_sha256": lookup_manifest.get("source_revision_sha256"),
+    }
+    return units, counts
+
+
 def scope_command(args) -> int:
     jobs = [(store, mail, attach or None) for store, mail, attach in args.job]
-    units, counts = build_scope(jobs, args.month, args.focus_chars)
+    if args.source_family == "document_text":
+        if args.month is not None or args.source_lookup_sqlite is None:
+            raise SystemExit("document_text scope requires --source-lookup-sqlite and does not use --month")
+        units, counts = build_document_scope(jobs, args.focus_chars, args.source_lookup_sqlite)
+    else:
+        if args.month is None or args.source_lookup_sqlite is not None:
+            raise SystemExit("mail scope requires --month and does not use --source-lookup-sqlite")
+        units, counts = build_scope(jobs, args.month, args.focus_chars)
     out = Path(args.output)
     with out.open("w") as handle:
         for unit in units:
             handle.write(json.dumps(unit) + "\n")
-    manifest = {"scope_rule": f"Date header month == {args.month}; attachments by lineage source_key",
+    manifest = {"scope_rule": (
+                    "serving source lookup family == document_text"
+                    if args.source_family == "document_text"
+                    else f"Date header month == {args.month}; attachments by lineage source_key"
+                ),
+                "source_family": args.source_family,
                 "focus_chars": args.focus_chars, "excluded_types": sorted(STRUCTURAL | {CELL}), "counts": counts,
                 "units_sha256": "sha256:" + hashlib.sha256(out.read_bytes()).hexdigest()}
     Path(f"{out}.manifest.json").write_text(json.dumps(manifest, indent=1, default=dict))
@@ -425,7 +553,9 @@ def main(argv: list[str] | None = None) -> int:
     scope = commands.add_parser("scope")
     scope.add_argument("--job", nargs=3, action="append", required=True, metavar=("STORE", "MAIL_JOB", "ATTACH_JOB"),
                        help="ATTACH_JOB may be '' when attachments live in the mail job")
-    scope.add_argument("--month", required=True)
+    scope.add_argument("--source-family", choices=("mail", "document_text"), default="mail")
+    scope.add_argument("--source-lookup-sqlite", help="serving revision lookup; required for document_text scope")
+    scope.add_argument("--month")
     scope.add_argument("--focus-chars", type=int, default=3500)
     scope.add_argument("--output", required=True)
     run = commands.add_parser("run")
