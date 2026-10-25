@@ -47,8 +47,9 @@ Reviewer composition:
   allowed even when worker metadata is unavailable. This changes neither the independent
   three-reviewer acceptance gate nor the safety, provenance, permission, and
   incomplete-is-not-absence rules.
-- The 2026-10-15 requested UAT model is `gpt-6-luna` with
-  `reasoning_effort=high`. Runtime/provider support, observed model binding, and
+- The 2026-10-25 user override requests UAT answer model `gpt-5.6-luna` with
+  `reasoning_effort=low`, superseding the dated 2026-10-15 request for
+  `gpt-6-luna/high`. Runtime/provider support, observed model binding, and
   browser acceptance remain pending. Review must distinguish the requested
   policy from actual runtime evidence; a documentation change proves no rollout.
   Worker requests remain sol/high. Preserve dated earlier model evidence with

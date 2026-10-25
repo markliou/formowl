@@ -2144,12 +2144,13 @@ of the observed model, effort, or worker identity; it does not prohibit
 continuing explicitly bounded work through an available execution path.
 The methodology authority and independent three-reviewer gate remain unchanged.
 
-Under the **2026-10-15 user authorization**, the requested UAT model is
-`gpt-6-luna` with `reasoning_effort=high`. Runtime/provider support, the observed
-model/effort binding, and browser acceptance remain pending. Record requested
-and observed identities separately; this policy change does not prove support
-or rollout. Dated earlier model evidence retains its original identity and
-claim boundary. Development worker policy remains `gpt-6.1-sol`/`high`.
+Under the **2026-10-25 user override**, the requested UAT answer model is
+`gpt-5.6-luna` with `reasoning_effort=low`, superseding the dated 2026-10-15
+request for `gpt-6-luna/high`. Runtime/provider support, the observed model/effort
+binding, and browser acceptance remain pending. Record requested and observed
+identities separately; this policy change does not prove support or rollout.
+Dated earlier model evidence retains its original identity and claim boundary.
+Development worker policy remains `gpt-6.1-sol`/`high`.
 
 The same authorization permits downtime repair within Master's bounded recovery
 assignment. Master records a time-based recovery plan with milestones, time
