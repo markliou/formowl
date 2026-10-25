@@ -319,6 +319,106 @@ def report_command(args) -> int:
     return 0
 
 
+def _message_contexts(units: dict, needed: set[str], stores: dict) -> dict[str, dict]:
+    """Date (UTC ISO, for ordering), subject and sender of each needed message, from its header Observations."""
+    from datetime import timezone
+
+    contexts = {}
+    for unit in units.values():
+        if unit["kind"] != "mail" or unit["parent"] not in needed or not unit["unit_id"].endswith(":0"):
+            continue
+        store = stores[unit["store"]]
+        context, when = {}, None
+        for observation_id in unit["observation_ids"]:
+            o = store.get(observation_id)
+            name = (o.payload or {}).get("header_name", "").lower() if o.observation_type == "email_header" else ""
+            if name == "date":
+                try:
+                    when = email.utils.parsedate_to_datetime(o.payload.get("header_value")).astimezone(
+                        timezone.utc).isoformat()
+                except Exception:
+                    when = None
+            elif name in ("subject", "from"):
+                context[name] = o.payload.get("header_value") or o.text
+        contexts[unit["parent"]] = {"time": when, "context": context}
+    return contexts
+
+
+def reconcile_command(args) -> int:
+    from formowl_contract import sha256_json
+    from formowl_graph.local_semantic_reader import LocalOllamaReader
+    from formowl_graph.reconciliation import GroupMember, build_groups, reconcile_group
+    from formowl_graph.storage import CandidateAtomStore, CandidateRelationStore, SemanticMetadataStore
+    from formowl_ingestion.storage.records import ObservationStore
+
+    out = Path(args.output)
+    units = {json.loads(line)["unit_id"]: json.loads(line) for line in open(args.units)}
+    annotated = {}
+    for row in map(json.loads, (out / "progress.jsonl").open()):
+        if row["run"] in args.run_id and row["status"] == "annotated" and row.get("ledger"):
+            annotated[row["unit"]] = row["ledger"]
+    atoms_store, ledgers = CandidateAtomStore(out), SemanticMetadataStore(out)
+    stores = {unit["store"]: ObservationStore(unit["store"]) for unit in units.values()}
+    contexts = _message_contexts(units, {units[u]["parent"] for u in annotated}, stores)
+    members = []
+    for unit_id, ledger_id in sorted(annotated.items()):
+        unit, ledger = units[unit_id], ledgers.get(ledger_id)
+        message = contexts.get(unit["parent"], {"time": None, "context": {}})
+        for candidate_id, candidate_hash in sorted(ledger.value["candidate_hashes"].items()):
+            atom = atoms_store.get(candidate_id)
+            if atom is None or sha256_json(atom.to_dict()) != candidate_hash:
+                continue  # relations, or a changed record that must not be reconciled
+            members.append(GroupMember(
+                atom=atom, message_key=unit["parent"], message_time=message["time"],
+                context={**message["context"], "source_kind": unit["kind"]},
+                observations={oid: stores[unit["store"]].get(oid).to_dict() for oid in atom.source_observation_ids}))
+    groups = build_groups(members)
+    sizes = collections.Counter(len(group) for group in groups)
+    print(json.dumps({"members": len(members), "groups": len(groups), "group_sizes": dict(sorted(sizes.items()))}),
+          flush=True)
+    if args.dry_run:
+        return 0
+    progress_path = out / "reconcile-progress.jsonl"
+    done = set()
+    if progress_path.exists():
+        done = {row["group"] for row in map(json.loads, progress_path.open()) if row["run"] == args.reconcile_run_id}
+    work: queue.Queue = queue.Queue()
+    for group in groups[:args.limit]:
+        key = sha256_json(sorted(m.atom.candidate_atom_id for m in group))
+        if key not in done:
+            work.put((key, group))
+    lock = threading.Lock()
+    relation_store = CandidateRelationStore(out)
+
+    def lane(url: str) -> None:
+        reader = LocalOllamaReader(url, args.model)
+        while True:
+            try:
+                key, group = work.get_nowait()
+            except queue.Empty:
+                return
+            started, row = time.time(), {"run": args.reconcile_run_id, "group": key, "size": len(group),
+                                         "lane": url.rsplit(":", 1)[-1]}
+            try:
+                result = reconcile_group(group, reader=reader, extractor_run_id=args.reconcile_run_id,
+                                         model_name=args.model, semantic_metadata_store=ledgers,
+                                         candidate_relation_store=relation_store)
+                row.update(status="reconciled", relations=collections.Counter(r.relation_type for r in result.relations),
+                           ledger=result.ledger.semantic_metadata_id)
+            except Exception as exc:
+                row.update(status="failed", reason=str(exc)[:120])
+            row.update(seconds=round(time.time() - started, 1))
+            with lock, progress_path.open("a") as handle:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    threads = [threading.Thread(target=lane, args=(url,)) for url in args.urls.split(",")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -333,6 +433,15 @@ def main(argv: list[str] | None = None) -> int:
     retry.add_argument("--from-run", required=True)
     for sub in (run, retry):
         _run_arguments(sub)
+    reconcile = commands.add_parser("reconcile", help="cross-unit relations over annotated candidates")
+    reconcile.add_argument("--units", required=True)
+    reconcile.add_argument("--output", required=True)
+    reconcile.add_argument("--run-id", action="append", required=True, help="annotation runs to read")
+    reconcile.add_argument("--reconcile-run-id", required=True)
+    reconcile.add_argument("--model", default="hf.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf:latest")
+    reconcile.add_argument("--urls", default=os.environ.get("FORMOWL_OLLAMA_URLS", "http://127.0.0.1:11434"))
+    reconcile.add_argument("--dry-run", action="store_true", help="only count groups")
+    reconcile.add_argument("--limit", type=int, help="run only the first N groups (diagnostic)")
     report = commands.add_parser("report", help="per-scope ledger summary over one or more runs")
     report.add_argument("--units", required=True)
     report.add_argument("--output", required=True)
@@ -342,6 +451,8 @@ def main(argv: list[str] | None = None) -> int:
         return scope_command(args)
     if args.command == "report":
         return report_command(args)
+    if args.command == "reconcile":
+        return reconcile_command(args)
     if args.command == "retry":
         if args.from_run == args.run_id:
             parser.error("a retry needs a NEW run id")
