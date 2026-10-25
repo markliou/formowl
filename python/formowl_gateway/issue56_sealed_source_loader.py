@@ -2291,6 +2291,16 @@ def _build_source_start_semantic_handler(
         annotation_identity_hints: dict[str, tuple[str, ...]] = {}
         annotation_hint_counts = {"projected": 0, "predicate_passed": 0,
                                   "predicate_rejected": 0}
+        annotation_identity_reads_cell = None
+
+        def finish_annotation_identity_reads() -> None:
+            if annotation_identity_reads_cell is None:
+                return
+            _trace(annotation_identity_reads_cell, "finish",
+                   projected_candidate_count=annotation_hint_counts["projected"],
+                   predicate_passed_count=annotation_hint_counts["predicate_passed"],
+                   predicate_rejected_count=annotation_hint_counts["predicate_rejected"],
+                   admitted_candidate_count=len(admitted_hashes.intersection(annotation_identity_hints)))
 
         def cache_overflow(item):
             # This seam receives a fully guarded/projected unit, never a source ref.
@@ -2437,7 +2447,7 @@ def _build_source_start_semantic_handler(
                 annotation_ids, \
                 annotation_hashes, \
                 annotation_target
-            nonlocal annotation_identity_hints
+            nonlocal annotation_identity_hints, annotation_identity_reads_cell
             check_source_evidence_deadline(deadline)
 
             analysis = tokenizer.analyze(query_text)
@@ -2494,6 +2504,14 @@ def _build_source_start_semantic_handler(
                                atom_scan_truncated=hint_stats["atom_scan_truncated"],
                                selection_deadline_exceeded=hint_stats.get("selection_deadline_exceeded", False))
             _trace(hint_cell, "finish")
+            # Reserve this bounded summary slot before per-observation trace
+            # details can fill the request's 256-cell budget. Otherwise a
+            # healthy or deadline-limited scan can silently lose the only
+            # annotation-read/predicate counters at finalization.
+            annotation_identity_reads_cell = _trace(
+                trace, "phase", "annotation_identity_reads",
+                candidate_hash_count=len(annotation_identity_hints),
+            )
             catalog_trace = _reviewed_annotation_catalog_trace_fields(annotation_catalog)
             nominated_ids = tuple(arguments.get("reviewed_annotation_ids") or ())
             cell = _trace(
@@ -3226,6 +3244,7 @@ def _build_source_start_semantic_handler(
                             else scan.stop_reason
                         )
                         if incomplete_reason == "callback" or time.monotonic() >= kwargs["deadline_monotonic"]:
+                            finish_annotation_identity_reads()
                             return RevisionOwnedMailSourceScan((), scanned, False, incomplete_reason)
                         if incomplete_reason == "context_limit":
                             # A native row exhausted its reader-local context,
@@ -3275,6 +3294,7 @@ def _build_source_start_semantic_handler(
                         if incomplete_reason in {"callback", "context_limit"} or time.monotonic() >= kwargs["deadline_monotonic"]:
                             _trace(engine_cell, "finish", scanned=scanned - family_start_scanned,
                                    complete=False, stop=incomplete_reason)
+                            finish_annotation_identity_reads()
                             return RevisionOwnedMailSourceScan(
                                 (), scanned, False, incomplete_reason,
                             )
@@ -3306,13 +3326,7 @@ def _build_source_start_semantic_handler(
                 incomplete_reason = "context_limit"
             if incomplete_reason is None and unresolved_parent_binding:
                 incomplete_reason = "source_parent_binding_unresolved"
-            hint_read_cell = _trace(trace, "phase", "annotation_identity_reads",
-                                    candidate_hash_count=len(annotation_identity_hints))
-            _trace(hint_read_cell, "finish",
-                   projected_candidate_count=annotation_hint_counts["projected"],
-                   predicate_passed_count=annotation_hint_counts["predicate_passed"],
-                   predicate_rejected_count=annotation_hint_counts["predicate_rejected"],
-                   admitted_candidate_count=len(admitted_hashes.intersection(annotation_identity_hints)))
+            finish_annotation_identity_reads()
             return RevisionOwnedMailSourceScan(
                 (), scanned, incomplete_reason is None, incomplete_reason,
             )
