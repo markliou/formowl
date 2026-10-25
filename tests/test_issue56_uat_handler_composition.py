@@ -117,9 +117,20 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
                 result=result,
                 request_contract_summary=request_contract_summary,
                 query_agent_payload=payload,
+                requested_fields=("subject",),
+                supported_requested_fields=(),
             )
         )
-        for status in ("ok", "unsupported", "permission_denied", "error", "replan_required"):
+        self.assertFalse(loader._graph_source_recovery_is_eligible(
+            arguments=arguments,
+            request_query_class="evidence_lookup",
+            result=result,
+            request_contract_summary=request_contract_summary,
+            query_agent_payload=payload,
+            requested_fields=(),
+            supported_requested_fields=(),
+        ))
+        for status in ("unsupported", "permission_denied", "error", "replan_required"):
             with self.subTest(status=status):
                 rejected_values = vars(result).copy()
                 rejected_values["status"] = status
@@ -131,6 +142,8 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
                         result=rejected,
                         request_contract_summary=request_contract_summary,
                         query_agent_payload=payload,
+                        requested_fields=("subject",),
+                        supported_requested_fields=(),
                     )
                 )
         self.assertFalse(
@@ -140,6 +153,8 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
                 result=result,
                 request_contract_summary=request_contract_summary,
                 query_agent_payload=payload,
+                requested_fields=("subject",),
+                supported_requested_fields=(),
             )
         )
         self.assertFalse(
@@ -152,6 +167,8 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
                     **payload,
                     "stop_reason": "provider_error",
                 },
+                requested_fields=("subject",),
+                supported_requested_fields=(),
             )
         )
         self.assertFalse(
@@ -167,6 +184,8 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
                         "status": "unsupported",
                     }],
                 },
+                requested_fields=("subject",),
+                supported_requested_fields=(),
             )
         )
         omitted_fingerprint = {
@@ -191,6 +210,8 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
                 result=result,
                 request_contract_summary=request_contract_summary,
                 query_agent_payload=omitted_fingerprint,
+                requested_fields=("subject",),
+                supported_requested_fields=(),
             )
         )
         for key in ("query_hash", "plan_fingerprint", "request_contract_fingerprint"):
@@ -209,6 +230,8 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
                         result=result,
                         request_contract_summary=request_contract_summary,
                         query_agent_payload=tampered,
+                        requested_fields=("subject",),
+                        supported_requested_fields=(),
                     )
                 )
 
@@ -1289,7 +1312,7 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
                                 "original_query_hash": sha256_json(query),
                                 "query_class": "evidence_lookup",
                                 "source_family_scope": [family],
-                                "requested_fields": [],
+                                "requested_fields": ["source evidence"],
                                 "maximum_claim_strength": "cited_evidence",
                             },
                         }
@@ -1360,6 +1383,122 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(recovery["scan"], {
                     "scanned_observation_count": 1, "complete": False, "stop_reason": "deadline",
                 })
+
+    def test_graph_recheck_keeps_identity_hard_and_ranks_topic_without_filtering(self) -> None:
+        fixture = self._posting_shortlist_fixture(
+            "document_text", requester_user_id=loader.APPROVER_ACTOR,
+        )
+        identity_only = replace(
+            fixture.observation,
+            observation_id="observation_identity_only",
+            text="ZX-421 background evidence",
+        )
+        topic_hit = replace(
+            fixture.observation,
+            observation_id="observation_topic_hit",
+            text="ZX-421 quarterly status evidence",
+        )
+        candidates = (identity_only, topic_hit)
+        candidate_hashes = {sha256_json(item.to_dict()): item for item in candidates}
+        original_load = fixture.authority.load_indexed_observation.side_effect
+
+        def load_candidate(observation_id, *, expected_observation_hash, expected_job_fingerprint):
+            candidate = next((item for item in candidates if item.observation_id == observation_id), None)
+            if candidate is not None:
+                self.assertEqual(expected_observation_hash, sha256_json(candidate.to_dict()))
+                self.assertEqual(expected_job_fingerprint, fixture.authority.job_fingerprint)
+                return candidate
+            return original_load(
+                observation_id,
+                expected_observation_hash=expected_observation_hash,
+                expected_job_fingerprint=expected_job_fingerprint,
+            )
+
+        fixture.authority.load_indexed_observation.side_effect = load_candidate
+        original_helper = fixture.helper.copy()
+        fixture.store.helper_for_hash.side_effect = lambda value: (
+            {**original_helper, "observation_id": candidate_hashes[value].observation_id,
+             "observation_hash": value}
+            if value in candidate_hashes else None
+        )
+        fixture.store.source_family_lexical_lookup.return_value = sorted(candidate_hashes)
+        fixture.records.observation_references = [
+            reference for reference in fixture.records.observation_references
+            if reference[1] != fixture.observation.observation_id
+        ] + [
+            [0, item.observation_id, sha256_json(item.to_dict())] for item in candidates
+        ]
+        runtime = _contract_only_runtime()
+        seal = sha256_json({
+            "job_fingerprint": fixture.authority.job_fingerprint,
+            "source_references": fixture.records.observation_references,
+        })
+        with (
+            patch.object(issue56_sealed_source, "load_issue56_target_runtime_components",
+                         return_value=runtime),
+            patch.object(hybrid, "_load_pinned_issue56_runtime_components",
+                         return_value=runtime),
+        ):
+            revision = build_issue56_ingestion_revision(
+                observations=(fixture.earlier,), bundles=(),
+                source_binding={
+                    "source_authority_fingerprint": seal,
+                    "extraction_coverage": {"source_completeness_certified": False},
+                },
+                requester_user_id=loader.APPROVER_ACTOR,
+                workspace_id=loader.WORKSPACE_ID,
+                source_authority_fingerprint=seal,
+            )
+            revision = replace(
+                revision,
+                source_records=fixture.records,
+                job_authorities=(fixture.authority,),
+            )
+            handler = loader.build_issue56_production_semantic_retrieval_handler(
+                ingestion_revision=revision,
+                query_agent_planner=lambda original, steps, _profile, _limit: (
+                    original if not steps else None
+                ),
+            )
+
+        query = "ZX-421 quarterly"
+        payload = handler({
+            "query_text": query,
+            "requester_user_id": loader.APPROVER_ACTOR,
+            "workspace_id": loader.WORKSPACE_ID,
+            "session_id": "graph-recheck-identity-hard",
+            "required_terms": ["ZX-421", "quarterly"],
+            "request_contract": {
+                "original_query_hash": sha256_json(query),
+                "query_class": "evidence_lookup",
+                "source_family_scope": ["document_text"],
+                "requested_fields": ["status"],
+                "maximum_claim_strength": "cited_evidence",
+            },
+        })
+        expected_hard_lookup = tuple(sorted(runtime.tokenizer_profile.analyze("zx-421").tokens))
+        lookup_call = fixture.store.source_family_lexical_lookup.call_args
+        self.assertIsNotNone(lookup_call)
+        self.assertEqual(lookup_call.args[0], expected_hard_lookup)
+        self.assertEqual(lookup_call.kwargs["source_family"], "document_text")
+        self.assertEqual(lookup_call.kwargs["limit"], 256)
+        self.assertGreaterEqual(lookup_call.kwargs["timeout_ms"], 1)
+        self.assertLessEqual(lookup_call.kwargs["timeout_ms"], 500)
+        self.assertEqual(fixture.store.source_family_lexical_lookup.call_count, 1)
+        recovery = payload["query_agent"]["context_bundle"]["source_recovery"]
+        self.assertEqual(recovery["recheck_variant"], "identity_only")
+        self.assertEqual((recovery["hard_term_count"], recovery["soft_term_count"]), (1, 1))
+        self.assertNotEqual(
+            recovery["initial_required_terms_fingerprint"],
+            recovery["recheck_required_terms_fingerprint"],
+        )
+        self.assertEqual(payload["status"], "partial")
+        self.assertEqual(payload["coverage"]["status"], "incomplete")
+        self.assertIn("identity_only_recheck", payload["query_agent"]["warnings"])
+        self.assertEqual(
+            [item["citation_hash"] for item in payload["evidence"]],
+            [sha256_json(topic_hit.to_dict()), sha256_json(identity_only.to_dict())],
+        )
 
     def test_posting_shortlist_without_references_remains_incomplete(self) -> None:
         for family in ("mail", "document_text"):

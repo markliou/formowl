@@ -314,7 +314,7 @@ Keep this file at most300 lines; archive distinct lossless preimages before repl
 Preserve all old FAILs/BLOCKs and unchecked work. The current user’s bounded weekend
 recovery/testing grant supersedes stale docs-only next-action constraints, but each
 implementation/operator/source/provider/browser action still needs its explicit owner/scope.
-No automatic replay, autonomous monitoring, descendants or release permission follows from this log.
+No automatic replay, autonomous monitoring, descendants or release permission follows from this log. U1/U2 report: `/tmp/herdr-bus/codex-to-claude-workorder-20261026u.md` (U2 blocked on private revision access).
 
 ## Immutable history
 [Complete distinct pre-edit history](../archive/2026-10-17/weekend-r37-contract-correction-preedit/root/docs/agent-goals/handoff-log.md) retains every earlier checkpoint, failure, archive pointer and superseded status.

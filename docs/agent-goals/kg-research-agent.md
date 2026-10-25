@@ -173,6 +173,8 @@ python3 scripts/methodology_authority_check.py --require-ready
 ```
 exiting zero.
 
+## 2026-10-26 bounded U work
+U1 implemented with focused verification; U2 private revision inventory blocked by mode 0700. Report: `/tmp/herdr-bus/codex-to-claude-workorder-20261026u.md`.
 ## Immutable history
 [Complete distinct pre-edit history](../archive/2026-10-17/weekend-r37-contract-correction-preedit/root/docs/agent-goals/kg-research-agent.md) retains every earlier checkpoint, failure, archive pointer and superseded status.
 [SHA256 manifest](../archive/2026-10-17/weekend-r37-contract-correction-preedit/SHA256SUMS.json) binds all eight preimages; old archives remain unchanged. Historical evidence is not a standing dispatch or retry authorization.

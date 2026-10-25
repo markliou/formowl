@@ -59,6 +59,7 @@ class KgFirstCrossResourceRetrievalTests(unittest.TestCase):
             ((" ｄｅａｄｌｉｎｅ ",), ("deadline",), 1, False),
             ((), (), 1, False),
             ((), (), 0, True),
+            (("owner",), (), 0, True),
         ):
             with self.subTest(requested=requested, supported=supported, count=count):
                 reader = Mock(return_value=SourceEvidenceScan((), 0, False, "deadline"))
