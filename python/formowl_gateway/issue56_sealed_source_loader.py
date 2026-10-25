@@ -1855,6 +1855,147 @@ def _select_reviewed_annotation_sources(revision, *, arguments, catalog, deadlin
     return tuple(item["candidate_atom_id"] for item in matched), hashes, target
 
 
+_MAX_SERVER_ANNOTATION_HINT_HASHES = 32
+_MAX_SERVER_ANNOTATION_HINT_ATOMS = 4096
+
+
+def _server_reviewed_identity_source_hints(revision, *, user_text, tokenizer, deadline):
+    """Return additive, source-hash hints from complete query/identity token matches.
+
+    This is deliberately independent of model catalog nominations. The returned
+    hashes remain hints only: the normal sealed helper, Observation, permission,
+    lineage, and citation checks still own source access.
+    """
+    annotations = tuple(getattr(revision, "reviewed_source_annotations", ()))
+    if not annotations:
+        return {}, {
+            "scanned_atom_count": 0,
+            "matched_atom_count": 0,
+            "candidate_hash_count": 0,
+            "term_hashes": (),
+            "cap_reached": False,
+            "atom_scan_truncated": False,
+        }
+
+    normalized_terms = {
+        unicodedata.normalize("NFKC", token).casefold().strip()
+        for token in tokenizer.analyze(user_text).tokens
+        if isinstance(token, str)
+    }
+    terms = {
+        term
+        for term in normalized_terms
+        if re.fullmatch(r"[a-z]{3,}", term) or re.fullmatch(r"[\u3400-\u9fff]{2,}", term)
+    }
+    # Chinese tokenizers may emit both a complete run and overlapping bigrams.
+    # Keep the longest complete query tokens so a common bigram cannot broaden
+    # an identity match beyond the user's full CJK token.
+    cjk_terms = {term for term in terms if re.fullmatch(r"[\u3400-\u9fff]+", term)}
+    terms = {
+        term
+        for term in terms
+        if term not in cjk_terms or not any(term != other and term in other for other in cjk_terms)
+    }
+    ordered_terms = tuple(sorted(terms, key=lambda value: (-len(value), value)))
+    if not ordered_terms:
+        return {}, {
+            "scanned_atom_count": 0,
+            "matched_atom_count": 0,
+            "candidate_hash_count": 0,
+            "term_hashes": (),
+            "cap_reached": False,
+            "atom_scan_truncated": False,
+        }
+
+    patterns = {
+        term: re.compile(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])")
+        for term in ordered_terms
+        if re.fullmatch(r"[a-z]+", term)
+    }
+    matched_atoms = []
+    atom_scan_truncated = False
+    for item in annotations[:_MAX_SERVER_ANNOTATION_HINT_ATOMS]:
+        check_source_evidence_deadline(deadline)
+        surfaces = [item.get("target")]
+        surfaces.extend(
+            binding.get("value_surface")
+            for binding in item.get("identity_bindings", ())
+            if isinstance(binding, Mapping)
+        )
+        normalized_surfaces = tuple(
+            unicodedata.normalize("NFKC", value).casefold()
+            for value in surfaces
+            if isinstance(value, str) and value.strip()
+        )
+        matched_terms = tuple(
+            term
+            for term in ordered_terms
+            if any(
+                patterns[term].search(surface) if term in patterns else term in surface
+                for surface in normalized_surfaces
+            )
+        )
+        if matched_terms:
+            matched_atoms.append((item, matched_terms))
+    if len(annotations) > _MAX_SERVER_ANNOTATION_HINT_ATOMS:
+        atom_scan_truncated = True
+
+    # Deterministic ranking favors identities matching more complete query
+    # terms. The atom ID is only an internal tie-breaker and never enters trace.
+    matched_atoms.sort(
+        key=lambda pair: (
+            -len(pair[1]),
+            unicodedata.normalize("NFKC", str(pair[0].get("target", ""))).casefold(),
+            str(pair[0].get("candidate_atom_id", "")),
+        )
+    )
+    hints: dict[str, set[str]] = {}
+    cap_reached = False
+    for item, matched_terms in matched_atoms:
+        source_hashes = item.get("source_hashes", ())
+        for source_hash in source_hashes:
+            check_source_evidence_deadline(deadline)
+            if (
+                not isinstance(source_hash, str)
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", source_hash) is None
+            ):
+                continue
+            if source_hash not in hints and len(hints) >= _MAX_SERVER_ANNOTATION_HINT_HASHES:
+                cap_reached = True
+                break
+            hints.setdefault(source_hash, set()).update(matched_terms)
+        if cap_reached:
+            break
+    frozen_hints = {key: tuple(sorted(value)) for key, value in hints.items()}
+    return frozen_hints, {
+        "scanned_atom_count": min(len(annotations), _MAX_SERVER_ANNOTATION_HINT_ATOMS),
+        "matched_atom_count": len(matched_atoms),
+        "candidate_hash_count": len(frozen_hints),
+        "term_hashes": tuple(sorted(sha256_json(term) for term in ordered_terms)),
+        "cap_reached": cap_reached,
+        "atom_scan_truncated": atom_scan_truncated,
+    }
+
+
+def _server_annotation_hint_source_match(
+    texts,
+    *,
+    required_terms,
+    protected_terms,
+    identity_terms,
+    tokenizer,
+):
+    """Apply only required/protected/identity hard predicates to hinted sources."""
+    combined = "\n".join(value for value in texts if isinstance(value, str) and value)
+    normalized = unicodedata.normalize("NFKC", combined).casefold()
+    if any(term.casefold() not in normalized for term in required_terms):
+        return False
+    source_tokens = set(tokenizer.analyze(combined).tokens)
+    if protected_terms and not protected_terms.issubset(source_tokens):
+        return False
+    return bool(set(identity_terms).intersection(source_tokens))
+
+
 _FOLLOWED_RELATIONS = frozenset({"updates", "supersedes", "contradicts"})
 _MAX_RELATION_EXPANSION = 32
 
@@ -2147,6 +2288,9 @@ def _build_source_start_semantic_handler(
         annotation_ids: tuple[str, ...] = ()
         annotation_hashes: tuple[str, ...] = ()
         annotation_target: str | None = None
+        annotation_identity_hints: dict[str, tuple[str, ...]] = {}
+        annotation_hint_counts = {"projected": 0, "predicate_passed": 0,
+                                  "predicate_rejected": 0}
 
         def cache_overflow(item):
             # This seam receives a fully guarded/projected unit, never a source ref.
@@ -2287,7 +2431,13 @@ def _build_source_start_semantic_handler(
             return observation_hash, item
 
         def begin(deadline: float) -> None:
-            nonlocal query_terms, protected_terms, annotation_ids, annotation_hashes, annotation_target
+            nonlocal \
+                query_terms, \
+                protected_terms, \
+                annotation_ids, \
+                annotation_hashes, \
+                annotation_target
+            nonlocal annotation_identity_hints
             check_source_evidence_deadline(deadline)
 
             analysis = tokenizer.analyze(query_text)
@@ -2301,47 +2451,123 @@ def _build_source_start_semantic_handler(
             # the governed context walk.
             if required_terms and len(required_terms) == 1 and len(protected_terms) > 1:
                 protected_terms = set(required_terms)
+            if (
+                query_class == "evidence_lookup"
+                and not auto_exact
+                and placement is None
+                and native_locator is None
+            ):
+                try:
+                    annotation_identity_hints, hint_stats = _server_reviewed_identity_source_hints(
+                        revision,
+                        user_text=query_text,
+                        tokenizer=tokenizer,
+                        deadline=deadline,
+                    )
+                except _SourceEvidenceDeadlineExceeded:
+                    annotation_identity_hints, hint_stats = (
+                        {},
+                        {
+                            "scanned_atom_count": 0,
+                            "matched_atom_count": 0,
+                            "candidate_hash_count": 0,
+                            "term_hashes": (),
+                            "cap_reached": False,
+                            "atom_scan_truncated": False,
+                            "selection_deadline_exceeded": True,
+                        },
+                    )
+            else:
+                annotation_identity_hints, hint_stats = {}, {
+                    "scanned_atom_count": 0, "matched_atom_count": 0,
+                    "candidate_hash_count": 0, "term_hashes": (),
+                    "cap_reached": False, "atom_scan_truncated": False,
+                    "selection_deadline_exceeded": False,
+                }
+            hint_cell = _trace(trace, "phase", "annotation_identity_hints",
+                               scanned_atom_count=hint_stats["scanned_atom_count"],
+                               matched_atom_count=hint_stats["matched_atom_count"],
+                               candidate_hash_count=hint_stats["candidate_hash_count"],
+                               term_count=len(hint_stats["term_hashes"]),
+                               term_hashes=hint_stats["term_hashes"],
+                               cap_reached=hint_stats["cap_reached"],
+                               atom_scan_truncated=hint_stats["atom_scan_truncated"],
+                               selection_deadline_exceeded=hint_stats.get("selection_deadline_exceeded", False))
+            _trace(hint_cell, "finish")
             catalog_trace = _reviewed_annotation_catalog_trace_fields(annotation_catalog)
             nominated_ids = tuple(arguments.get("reviewed_annotation_ids") or ())
-            cell = _trace(trace, "phase", "project", reviewed_annotation_catalog=True,
-                          nominated_count=len(nominated_ids),
-                          nominated_id_hashes=sorted(sha256_json(value) for value in nominated_ids)[:128],
-                          selected_count=0, selected_id_hashes=[],
-                          relation_expansion_count=0, relation_edge_count=0, relation_id_hashes=[],
-                          **catalog_trace)
+            cell = _trace(
+                trace,
+                "phase",
+                "project",
+                reviewed_annotation_catalog=True,
+                nominated_count=len(nominated_ids),
+                nominated_id_hashes=sorted(sha256_json(value) for value in nominated_ids)[:128],
+                selected_count=0,
+                selected_id_hashes=[],
+                relation_expansion_count=0,
+                relation_edge_count=0,
+                relation_id_hashes=[],
+                **catalog_trace,
+            )
             _trace(cell, "finish")
             # A Query Agent may add presentation instructions to query_text.
             # Rank source candidates by the validated evidence constraints, not
             # those instruction words. Multiword constraints use the same frozen
             # profile as the source postings; the full matcher remains unchanged.
             lookup_terms = set()
-            for term in (placement.child_terms if placement is not None else required_terms):
+            for term in placement.child_terms if placement is not None else required_terms:
                 check_source_evidence_deadline(deadline)
                 lookup_terms.update(tokenizer.analyze(term).tokens)
-            project.source_lookup_terms = tuple(sorted(
-                lookup_terms if required_terms else query_terms
-            ))
+            project.source_lookup_terms = tuple(
+                sorted(lookup_terms if required_terms else query_terms)
+            )
             if query_class == "evidence_lookup" and not auto_exact:
                 for field in requested_fields:
                     check_source_evidence_deadline(deadline)
                     field_terms.append(set(tokenizer.analyze(field).tokens))
             preferred_terms: set[str] = set()
-            for field in (*requested_fields, *(hint["text"] for hint in field_query_hints)) if required_terms else ():
+            for field in (
+                (*requested_fields, *(hint["text"] for hint in field_query_hints))
+                if required_terms
+                else ()
+            ):
                 check_source_evidence_deadline(deadline)
                 preferred_terms.update(tokenizer.analyze(field).tokens)
             project.source_lookup_preferred_terms = tuple(sorted(preferred_terms))
-            cell = _trace(trace, "phase", "lookup_terms", required_term_count=len(project.source_lookup_terms),
-                          preferred_term_count=len(project.source_lookup_preferred_terms))
+            cell = _trace(
+                trace,
+                "phase",
+                "lookup_terms",
+                required_term_count=len(project.source_lookup_terms),
+                preferred_term_count=len(project.source_lookup_preferred_terms),
+            )
             _trace(cell, "finish")
             check_source_evidence_deadline(deadline)
-            if arguments.get("reviewed_annotation_ids") or arguments.get("reviewed_annotation_pin") is not None:
-                if query_class != "evidence_lookup" or auto_exact or placement is not None or native_locator is not None:
+            if (
+                arguments.get("reviewed_annotation_ids")
+                or arguments.get("reviewed_annotation_pin") is not None
+            ):
+                if (
+                    query_class != "evidence_lookup"
+                    or auto_exact
+                    or placement is not None
+                    or native_locator is not None
+                ):
                     raise ContractValidationError("UAT reviewed annotation route is unsupported")
                 try:
-                    annotation_ids, annotation_hashes, annotation_target = _select_reviewed_annotation_sources(
-                        revision, arguments={**arguments, "request_contract": request_contract,
-                                             "required_terms": required_terms},
-                        catalog=annotation_catalog, deadline=deadline)
+                    annotation_ids, annotation_hashes, annotation_target = (
+                        _select_reviewed_annotation_sources(
+                            revision,
+                            arguments={
+                                **arguments,
+                                "request_contract": request_contract,
+                                "required_terms": required_terms,
+                            },
+                            catalog=annotation_catalog,
+                            deadline=deadline,
+                        )
+                    )
                 except _SourceEvidenceDeadlineExceeded:
                     # Annotation nomination is an optional retrieval hint. A
                     # slow/stale hint must not suppress the ordinary, separately
@@ -2350,14 +2576,26 @@ def _build_source_start_semantic_handler(
                     fallback = True
                 else:
                     fallback = bool(nominated_ids and not annotation_ids)
-                cell = _trace(trace, "phase", "project", reviewed_annotation_selection=True,
-                              selected_count=len(annotation_ids), source_count=len(annotation_hashes),
-                              annotation_pin=revision.reviewed_annotation_pin)
+                cell = _trace(
+                    trace,
+                    "phase",
+                    "project",
+                    reviewed_annotation_selection=True,
+                    selected_count=len(annotation_ids),
+                    source_count=len(annotation_hashes),
+                    annotation_pin=revision.reviewed_annotation_pin,
+                )
                 _trace(cell, "finish")
                 if fallback:
-                    cell = _trace(trace, "phase", "annotation_nomination_fallback",
-                                  annotation_selection_fallback=True, fallback=True,
-                                  fallback_reason="selection_unavailable", selected_count=0)
+                    cell = _trace(
+                        trace,
+                        "phase",
+                        "annotation_nomination_fallback",
+                        annotation_selection_fallback=True,
+                        fallback=True,
+                        fallback_reason="selection_unavailable",
+                        selected_count=0,
+                    )
                     _trace(cell, "finish")
 
         def project(observation: Observation, scope_id: str, deadline: float):
@@ -2366,12 +2604,23 @@ def _build_source_start_semantic_handler(
             last_anchor = None
             semantic_hash = sha256_json(observation.to_dict()) if annotation_hashes else None
             semantic_match = semantic_hash in annotation_hashes
+            annotation_hint_terms = annotation_identity_hints.get(
+                sha256_json(observation.to_dict()),
+                (),
+            )
+            annotation_hint_match = bool(annotation_hint_terms)
+            if annotation_hint_match:
+                annotation_hint_counts["projected"] += 1
             if semantic_match:
                 # Only the reviewed identity anchor may be source-linked rather
                 # than repeated in a child paragraph. ALL other literals survive.
                 if not _reviewed_annotation_literals_match(
-                    observation, required_terms=required_terms, target=annotation_target,
-                    protected_terms=protected_terms, tokenizer=tokenizer, deadline=deadline,
+                    observation,
+                    required_terms=required_terms,
+                    target=annotation_target,
+                    protected_terms=protected_terms,
+                    tokenizer=tokenizer,
+                    deadline=deadline,
                 ):
                     return None
             if deferred_replay is not None:
@@ -2379,7 +2628,9 @@ def _build_source_start_semantic_handler(
                 if observation is not cached_observation or scope_id != cached_scope:
                     raise ContractValidationError("source-start deferred binding is invalid")
                 return admit(observation, item, scope_id)
-            if placement is not None and (active_family != "mail" or observation.observation_type != "email_body_segment"):
+            if placement is not None and (
+                active_family != "mail" or observation.observation_type != "email_body_segment"
+            ):
                 return None
             if observation.observation_id in table_evidence:
                 return admit(observation, table_evidence[observation.observation_id], scope_id)
@@ -2395,12 +2646,16 @@ def _build_source_start_semantic_handler(
             if active_family == "mail":
                 payload = to_plain(observation.payload or {})
                 location = to_plain(observation.location)
-                if observation.observation_type == "email_attachment_occurrence" or _is_attachment_text_observation(observation):
+                if (
+                    observation.observation_type == "email_attachment_occurrence"
+                    or _is_attachment_text_observation(observation)
+                ):
                     if (
                         (active_selector is not None and scope_id != active_selector)
                         or (active_selector is None and scope_id not in source.source_scope_ids)
                         or not authorized_permission_scope_matches(
-                            observation.permission_scope, authorized_source=source,
+                            observation.permission_scope,
+                            authorized_source=source,
                             source_kind=AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND,
                         )
                     ):
@@ -2418,23 +2673,46 @@ def _build_source_start_semantic_handler(
                         unresolved_parent_binding = True
                         _trace(trace, "count", "parent_unresolved")
                         return None
-                    lineage = _attachment_child_lineages({
-                        parent.observation_id: parent, observation.observation_id: observation,
-                    })[observation.observation_id]
+                    lineage = _attachment_child_lineages(
+                        {
+                            parent.observation_id: parent,
+                            observation.observation_id: observation,
+                        }
+                    )[observation.observation_id]
                     if native_locator is not None and (
-                        type(location.get("page")) is not int or location["page"] != native_locator["page"]
+                        type(location.get("page")) is not int
+                        or location["page"] != native_locator["page"]
                     ):
                         return None
                     text = observation.text or observation.caption or ""
                     normalized = unicodedata.normalize("NFKC", text).casefold()
                     if semantic_match:
                         pass  # Reviewed identity/field binding; source guards above still apply.
+                    elif annotation_hint_match:
+                        parent_payload = to_plain(parent.payload or {})
+                        parent_text = parent.text or parent.caption or ""
+                        if not _server_annotation_hint_source_match(
+                            (text, parent_text, parent_payload.get("subject")),
+                            required_terms=required_terms,
+                            protected_terms=protected_terms,
+                            identity_terms=annotation_hint_terms,
+                            tokenizer=tokenizer,
+                        ):
+                            annotation_hint_counts["predicate_rejected"] += 1
+                            _trace(trace, "count", "matcher_rejected")
+                            return None
+                        annotation_hint_counts["predicate_passed"] += 1
                     elif required_terms:
                         if not all(term in normalized for term in required_terms):
                             return None
                     elif not query_terms.issubset(set(tokenizer.analyze(text).tokens)):
                         return None
-                    if not semantic_match and protected_terms and not protected_terms.issubset(set(tokenizer.analyze(text).tokens)):
+                    if (
+                        not semantic_match
+                        and not annotation_hint_match
+                        and protected_terms
+                        and not protected_terms.issubset(set(tokenizer.analyze(text).tokens))
+                    ):
                         return None
                     parent_payload = parent.payload or {}
                     message_fingerprint = parent_payload.get("message_fingerprint")
@@ -2446,7 +2724,9 @@ def _build_source_start_semantic_handler(
                         "source_type": "mail_attachment_text",
                         "source_observation_id": observation.observation_id,
                         "email_message_id": stable_resource_contract_id(
-                            "emailmsg", "EmailMessage", {"message_fingerprint": message_fingerprint},
+                            "emailmsg",
+                            "EmailMessage",
+                            {"message_fingerprint": message_fingerprint},
                         ),
                         "message_occurrence_id": lineage.message_occurrence_id,
                         "snippet": public_text(text),
@@ -2459,26 +2739,49 @@ def _build_source_start_semantic_handler(
                             "child_asset_id": lineage.child_asset_id,
                             "parent_attachment_observation_id": lineage.parent_attachment_observation_id,
                             **{
-                                key: value for key, value in location.items()
-                                if key in {"page", "paragraph_index", "block_index", "slide", "shape_index", "list_item_index"}
-                                and type(value) is int and value >= 1
+                                key: value
+                                for key, value in location.items()
+                                if key
+                                in {
+                                    "page",
+                                    "paragraph_index",
+                                    "block_index",
+                                    "slide",
+                                    "shape_index",
+                                    "list_item_index",
+                                }
+                                and type(value) is int
+                                and value >= 1
                             },
                         },
                         "revision_binding": {
-                            "source_authority_fingerprint": revision.safe_binding["source_authority_fingerprint"],
-                            "source_session_binding_fingerprint": revision.safe_binding["source_session_binding_fingerprint"],
+                            "source_authority_fingerprint": revision.safe_binding[
+                                "source_authority_fingerprint"
+                            ],
+                            "source_session_binding_fingerprint": revision.safe_binding[
+                                "source_session_binding_fingerprint"
+                            ],
                         },
                     }
                     if active_selector is not None:
                         snippet_payload["mail_import_session_id"] = active_selector
                     check_source_evidence_deadline(deadline)
                     snippet = _mail_header_context(
-                        observation, _safe_snippet(snippet_payload),
-                        mail_parents_by_occurrence.get((
-                            scope_id, parent.asset_id,
-                            (_attachment_mail_parent_link(parent) or {}).get("parent_extractor_run_id", parent.extractor_run_id),
-                            lineage.message_occurrence_id,
-                        )), source=source, scope_id=scope_id, attachment_parent=parent,
+                        observation,
+                        _safe_snippet(snippet_payload),
+                        mail_parents_by_occurrence.get(
+                            (
+                                scope_id,
+                                parent.asset_id,
+                                (_attachment_mail_parent_link(parent) or {}).get(
+                                    "parent_extractor_run_id", parent.extractor_run_id
+                                ),
+                                lineage.message_occurrence_id,
+                            )
+                        ),
+                        source=source,
+                        scope_id=scope_id,
+                        attachment_parent=parent,
                     )
                     return admit(observation, snippet, scope_id)
                 occurrence_id = location.get("message_occurrence_id")
@@ -2487,7 +2790,8 @@ def _build_source_start_semantic_handler(
                     (active_selector is not None and scope_id != active_selector)
                     or (active_selector is None and scope_id not in source.source_scope_ids)
                     or observation.modality != "mail"
-                    or observation.observation_type not in REVISION_SOURCE_FALLBACK_OBSERVATION_TYPES
+                    or observation.observation_type
+                    not in REVISION_SOURCE_FALLBACK_OBSERVATION_TYPES
                     or not authorized_permission_scope_matches(
                         observation.permission_scope,
                         authorized_source=source,
@@ -2497,44 +2801,88 @@ def _build_source_start_semantic_handler(
                     _trace(trace, "count", "scope_rejected")
                     return None
                 lineage = source_occurrence_lineage_from_observation(
-                    observation, authorized_source=source,
+                    observation,
+                    authorized_source=source,
                 )
                 if (
                     observation.observation_type == "email_message"
                     and isinstance(message_fingerprint, str)
                     and isinstance(occurrence_id, str)
                 ):
-                    mail_parents_by_occurrence[(
-                        scope_id, observation.asset_id, observation.extractor_run_id, occurrence_id,
-                    )] = (
-                        observation
-                    )
+                    mail_parents_by_occurrence[
+                        (
+                            scope_id,
+                            observation.asset_id,
+                            observation.extractor_run_id,
+                            occurrence_id,
+                        )
+                    ] = observation
                 if native_locator is not None:
                     return None  # Outer headers are dependent metadata, never a page hit.
-                if not semantic_match and placement is None and context_anchor is None and (
-                    _source_mail_observation_match(
-                        observation,
-                        query_terms=query_terms,
-                        required_terms=required_terms or None,
-                        protected_query_tokens=protected_terms,
-                        tokenizer_profile=tokenizer,
-                        deadline_monotonic=deadline,
-                    ) is None
+                if (
+                    not semantic_match
+                    and not annotation_hint_match
+                    and placement is None
+                    and context_anchor is None
+                    and (
+                        _source_mail_observation_match(
+                            observation,
+                            query_terms=query_terms,
+                            required_terms=required_terms or None,
+                            protected_query_tokens=protected_terms,
+                            tokenizer_profile=tokenizer,
+                            deadline_monotonic=deadline,
+                        )
+                        is None
+                    )
                 ):
                     _trace(trace, "count", "matcher_rejected")
                     return None
                 if message_fingerprint is None and isinstance(occurrence_id, str):
                     parent = mail_parents_by_occurrence.get(
-                        (scope_id, observation.asset_id, observation.extractor_run_id, occurrence_id)
+                        (
+                            scope_id,
+                            observation.asset_id,
+                            observation.extractor_run_id,
+                            occurrence_id,
+                        )
                     )
                     if placement is not None:
                         pair = _SOURCE_OCCURRENCE_PAIR.get()
                         parent = pair[1] if pair is not None and pair[0] is observation else None
-                    message_fingerprint = (parent.payload or {}).get("message_fingerprint") if parent else None
+                    message_fingerprint = (
+                        (parent.payload or {}).get("message_fingerprint") if parent else None
+                    )
                 if not isinstance(message_fingerprint, str) or not isinstance(occurrence_id, str):
                     unresolved_parent_binding = True
                     _trace(trace, "count", "parent_unresolved")
                     return None
+                if annotation_hint_match:
+                    parent = mail_parents_by_occurrence.get(
+                        (
+                            scope_id,
+                            observation.asset_id,
+                            observation.extractor_run_id,
+                            occurrence_id,
+                        ),
+                    )
+                    parent_payload = to_plain(parent.payload or {}) if parent is not None else {}
+                    if not _server_annotation_hint_source_match(
+                        (
+                            observation.text or "",
+                            payload.get("subject"),
+                            parent.text if parent is not None else "",
+                            parent_payload.get("subject"),
+                        ),
+                        required_terms=required_terms,
+                        protected_terms=protected_terms,
+                        identity_terms=annotation_hint_terms,
+                        tokenizer=tokenizer,
+                    ):
+                        annotation_hint_counts["predicate_rejected"] += 1
+                        _trace(trace, "count", "matcher_rejected")
+                        return None
+                    annotation_hint_counts["predicate_passed"] += 1
                 snippet_payload = {
                     "source_type": {
                         "email_body_segment": "mail_body_segment",
@@ -2543,7 +2891,8 @@ def _build_source_start_semantic_handler(
                     }[observation.observation_type],
                     "source_observation_id": observation.observation_id,
                     "email_message_id": stable_resource_contract_id(
-                        "emailmsg", "EmailMessage",
+                        "emailmsg",
+                        "EmailMessage",
                         {"message_fingerprint": message_fingerprint},
                     ),
                     "message_occurrence_id": occurrence_id,
@@ -2566,17 +2915,30 @@ def _build_source_start_semantic_handler(
                     snippet_payload["mail_import_session_id"] = active_selector
                 if placement is not None:
                     snippet = _placement_mail_group(
-                        placement, observation, scope_id, _safe_snippet(snippet_payload), source=source,
-                        protected_terms=protected_terms, tokenizer=tokenizer,
+                        placement,
+                        observation,
+                        scope_id,
+                        _safe_snippet(snippet_payload),
+                        source=source,
+                        protected_terms=protected_terms,
+                        tokenizer=tokenizer,
                     )
                     if snippet is None:
                         return None
                 else:
                     snippet = _mail_header_context(
-                        observation, _safe_snippet(snippet_payload),
-                        mail_parents_by_occurrence.get((
-                            scope_id, observation.asset_id, observation.extractor_run_id, occurrence_id,
-                        )), source=source, scope_id=scope_id,
+                        observation,
+                        _safe_snippet(snippet_payload),
+                        mail_parents_by_occurrence.get(
+                            (
+                                scope_id,
+                                observation.asset_id,
+                                observation.extractor_run_id,
+                                occurrence_id,
+                            )
+                        ),
+                        source=source,
+                        scope_id=scope_id,
                     )
             elif active_family == "document_text":
                 if (
@@ -2596,6 +2958,18 @@ def _build_source_start_semantic_handler(
                 normalized = unicodedata.normalize("NFKC", text).casefold()
                 if semantic_match or context_anchor is not None:
                     pass  # Reader already revalidated this neighbor against the matched anchor.
+                elif annotation_hint_match:
+                    if not _server_annotation_hint_source_match(
+                        (text,),
+                        required_terms=required_terms,
+                        protected_terms=protected_terms,
+                        identity_terms=annotation_hint_terms,
+                        tokenizer=tokenizer,
+                    ):
+                        annotation_hint_counts["predicate_rejected"] += 1
+                        _trace(trace, "count", "matcher_rejected")
+                        return None
+                    annotation_hint_counts["predicate_passed"] += 1
                 elif required_terms:
                     if not all(term in normalized for term in required_terms):
                         return None
@@ -2603,11 +2977,20 @@ def _build_source_start_semantic_handler(
                     source_tokens = set(tokenizer.analyze(text).tokens)
                     if not query_terms.intersection(source_tokens):
                         return None
-                source_tokens = set() if context_anchor is not None else set(tokenizer.analyze(text).tokens)
-                if not semantic_match and context_anchor is None and protected_terms and not protected_terms.issubset(source_tokens):
+                source_tokens = (
+                    set() if context_anchor is not None else set(tokenizer.analyze(text).tokens)
+                )
+                if (
+                    not semantic_match
+                    and not annotation_hint_match
+                    and context_anchor is None
+                    and protected_terms
+                    and not protected_terms.issubset(source_tokens)
+                ):
                     return None
                 lineage = source_occurrence_lineage_from_observation(
-                    observation, authorized_source=source,
+                    observation,
+                    authorized_source=source,
                 )
                 snippet = {
                     "snippet": public_text(text),
@@ -2655,7 +3038,8 @@ def _build_source_start_semantic_handler(
                 # Quoted history remains evidence, never an authored event.
                 snippet["source_context"] = {
                     "relationship": "native_identifier_occurrence",
-                    "authored_assertion_verified": False, "event_date_verified": False,
+                    "authored_assertion_verified": False,
+                    "event_date_verified": False,
                 }
                 snippet["snippet"] = (
                     "[native identifier occurrence; not proof of an authored update or event date] "
@@ -2669,6 +3053,7 @@ def _build_source_start_semantic_handler(
         def read_source(**kwargs: Any) -> RevisionOwnedMailSourceScan:
             nonlocal active_family, active_selector, context_anchor
             nonlocal reserved_native_slots, deferred_replay, context_limit_reached
+
             def consume(observation: Observation, scope: str) -> bool:
                 return kwargs["observation_callback"](observation, scope) and (
                     query_class == "evidence_lookup" or not context_limit_reached
@@ -2687,12 +3072,17 @@ def _build_source_start_semantic_handler(
             remaining = max(0, kwargs["max_observations"] - source_budget["reads"])
             scanned = 0
             families = [
-                family for family in request_contract["source_family_scope"]
+                family
+                for family in request_contract["source_family_scope"]
                 if family in available_families
             ]
-            if native_locator is None and query_class != "exact_set_or_inventory" and "mail" in families and exact_lookup is not None and revision.exact_lookup_manifest.get(
-                "counts", {}
-            ).get("inline_authorized_row", 0):
+            if (
+                native_locator is None
+                and query_class != "exact_set_or_inventory"
+                and "mail" in families
+                and exact_lookup is not None
+                and revision.exact_lookup_manifest.get("counts", {}).get("inline_authorized_row", 0)
+            ):
                 families.append("mail_inline_table")
             # Reviewed hashes are already pinned to the source revision. Use
             # only their sealed helper metadata to prioritize the corresponding
@@ -2700,10 +3090,11 @@ def _build_source_start_semantic_handler(
             # sole hydration path. This avoids spending an ordinary family's
             # fractional slice on a preferred mail parent before its child can
             # be emitted, without changing the shared deadline or read cap.
+            preferred_annotation_hashes = tuple(dict.fromkeys(annotation_hashes))
             preferred_families: set[str] = set()
             helper_for_hash = getattr(records.runtime_store, "helper_for_hash", None)
-            if annotation_hashes and callable(helper_for_hash):
-                for observation_hash in annotation_hashes:
+            if preferred_annotation_hashes and callable(helper_for_hash):
+                for observation_hash in preferred_annotation_hashes:
                     helper = helper_for_hash(observation_hash)
                     if isinstance(helper, Mapping):
                         family = helper.get("retrieval_source_family")
@@ -2713,36 +3104,53 @@ def _build_source_start_semantic_handler(
                             preferred_families.add("document_text")
             native_counts = revision.exact_lookup_manifest.get("counts", {})
             pending_native = {
-                family for family in families
-                if native_locator is None and query_class == "evidence_lookup" and exact_lookup is not None
-                and native_counts.get({
-                    "attachment_table": "attachment_authorized_row",
-                    "mail_inline_table": "inline_authorized_row",
-                }.get(family), 0) > 0
+                family
+                for family in families
+                if native_locator is None
+                and query_class == "evidence_lookup"
+                and exact_lookup is not None
+                and native_counts.get(
+                    {
+                        "attachment_table": "attachment_authorized_row",
+                        "mail_inline_table": "inline_authorized_row",
+                    }.get(family),
+                    0,
+                )
+                > 0
             }
             # Do not invert starvation at tiny limits: leave the first ordinary
             # representation room for its atomic mail pair (or nonmail item).
-            reservation_limit = max(0, limit - source_budget["evidence"] - (2 if "mail" in families else 1))
+            reservation_limit = max(
+                0, limit - source_budget["evidence"] - (2 if "mail" in families else 1)
+            )
             # Combine adjacent native engines, never authorization families or
             # their admission slots. Interleaved scopes retain the legacy path.
             engines = [(family,) for family in families]
             for index in range(len(families) - 1):
-                pair = tuple(families[index:index + 2])
-                if (len(pending_native) == 2 and set(pair) == pending_native
-                        and set(pair) != {"attachment_table", "mail_inline_table"}):
-                    engines[index:index + 2] = [pair]
+                pair = tuple(families[index : index + 2])
+                if (
+                    len(pending_native) == 2
+                    and set(pair) == pending_native
+                    and set(pair) != {"attachment_table", "mail_inline_table"}
+                ):
+                    engines[index : index + 2] = [pair]
                     break
+
             def preferred_engine(engine: tuple[str, ...]) -> bool:
-                return any(item in preferred_families or item == "attachment_table"
-                           for item in engine)
+                return any(
+                    item in preferred_families or item == "attachment_table" for item in engine
+                )
+
             # When mail and attachment tables share a turn, the mail reader
             # can consume the bounded source budget before the native table
             # engine starts. Give the attachment table its first bounded
             # slice so a native PO/item row is not starved by body context.
-            engines.sort(key=lambda engine: (
-                not preferred_engine(engine),
-                not any(item == "attachment_table" for item in engine),
-            ))
+            engines.sort(
+                key=lambda engine: (
+                    not preferred_engine(engine),
+                    not any(item == "attachment_table" for item in engine),
+                )
+            )
 
             def begin_native_family(family: str) -> None:
                 nonlocal active_family, reserved_native_slots
@@ -2849,7 +3257,10 @@ def _build_source_start_semantic_handler(
                         context_anchor_callback=lambda item, scope: query_class != "exact_set_or_inventory" and item is last_anchor,
                         context_callback=consume_context,
                         _allow_parallel_hydration=query_class == "evidence_lookup",
-                        **({"preferred_observation_hashes": annotation_hashes} if annotation_hashes else {}),
+                        **({"preferred_observation_hashes": annotation_hashes}
+                           if annotation_hashes else {}),
+                        **({"additive_observation_hashes": tuple(annotation_identity_hints)}
+                           if annotation_identity_hints else {}),
                     )
                     if not isinstance(scan, RevisionOwnedMailSourceScan):
                         raise ContractValidationError("source-start scan result is invalid")
@@ -2895,6 +3306,13 @@ def _build_source_start_semantic_handler(
                 incomplete_reason = "context_limit"
             if incomplete_reason is None and unresolved_parent_binding:
                 incomplete_reason = "source_parent_binding_unresolved"
+            hint_read_cell = _trace(trace, "phase", "annotation_identity_reads",
+                                    candidate_hash_count=len(annotation_identity_hints))
+            _trace(hint_read_cell, "finish",
+                   projected_candidate_count=annotation_hint_counts["projected"],
+                   predicate_passed_count=annotation_hint_counts["predicate_passed"],
+                   predicate_rejected_count=annotation_hint_counts["predicate_rejected"],
+                   admitted_candidate_count=len(admitted_hashes.intersection(annotation_identity_hints)))
             return RevisionOwnedMailSourceScan(
                 (), scanned, incomplete_reason is None, incomplete_reason,
             )

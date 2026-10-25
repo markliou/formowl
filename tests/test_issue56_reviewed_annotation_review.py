@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import _paths
-from formowl_contract import ContractValidationError, Observation, sha256_json
+from formowl_contract import ContractValidationError, Observation, PermissionScope, sha256_json
 from formowl_graph.candidates import read_and_store_source_unit
 from formowl_graph.local_semantic_reader import LocalOllamaReader
 from formowl_graph.storage import CandidateAtomStore, CandidateRelationStore, SemanticMetadataStore
@@ -170,6 +170,255 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
                 too_many, user_text="Kestrel project"), (set(), None, "unknown"))
             self.assertEqual(sealed_source._reviewed_annotation_scope(
                 exact, user_text="Kestrel"), ({"atom_exact"}, ("", "kestrel"), "matched"))
+
+
+    def test_server_identity_hints_use_complete_reviewed_terms_and_cap_hashes(self) -> None:
+        from formowl_gateway.issue56_sealed_source_loader import (
+            _MAX_SERVER_ANNOTATION_HINT_HASHES,
+            _server_reviewed_identity_source_hints,
+        )
+
+        class FrozenProfileFixture:
+            @staticmethod
+            def analyze(value):
+                import re
+
+                tokens = set(re.findall(r"[a-z]+|[\u3400-\u9fff]+|\d+", value.casefold()))
+                for run in re.findall(r"[\u3400-\u9fff]+", value):
+                    tokens.update(run[index : index + 2] for index in range(len(run) - 1))
+                return type("Tokenized", (), {"tokens": frozenset(tokens)})()
+
+        annotations = [
+            {
+                "candidate_atom_id": "atom_exact",
+                "target": "Kestrel LBP",
+                "identity_bindings": [],
+                "source_hashes": ["sha256:" + "a" * 64],
+            },
+            {
+                "candidate_atom_id": "atom_boundary",
+                "target": "NotKestrelX",
+                "identity_bindings": [],
+                "source_hashes": ["sha256:" + "b" * 64],
+            },
+            {
+                "candidate_atom_id": "atom_cjk",
+                "target": "Kestrel 楓林標籤機",
+                "identity_bindings": [],
+                "source_hashes": ["sha256:" + "c" * 64],
+            },
+            {
+                "candidate_atom_id": "atom_number",
+                "target": "4500123",
+                "identity_bindings": [],
+                "source_hashes": ["sha256:" + "d" * 64],
+            },
+        ]
+        annotations.extend(
+            {
+                "candidate_atom_id": f"atom_cap_{index:02d}",
+                "target": "Kestrel service",
+                "identity_bindings": [],
+                "source_hashes": ["sha256:" + f"{index + 10:064x}"],
+            }
+            for index in range(40)
+        )
+        revision = SimpleNamespace(reviewed_source_annotations=tuple(annotations))
+        profile = FrozenProfileFixture()
+        hints, stats = _server_reviewed_identity_source_hints(
+            revision,
+            user_text="Kestrel 標籤機 4500",
+            tokenizer=profile,
+            deadline=10**20,
+        )
+        self.assertLessEqual(len(hints), _MAX_SERVER_ANNOTATION_HINT_HASHES)
+        self.assertTrue(stats["cap_reached"])
+        self.assertIn("sha256:" + "a" * 64, hints)
+        self.assertIn("sha256:" + "c" * 64, hints)
+        self.assertNotIn("sha256:" + "b" * 64, hints)
+        self.assertNotIn("sha256:" + "d" * 64, hints)
+        self.assertTrue(all(value for value in hints.values()))
+        self.assertTrue(all(term.startswith("sha256:") for term in stats["term_hashes"]))
+
+    def test_server_annotation_hint_match_keeps_required_protected_and_identity_literals(
+        self,
+    ) -> None:
+        from formowl_gateway.issue56_sealed_source_loader import (
+            _server_annotation_hint_source_match,
+        )
+
+        class FrozenProfileFixture:
+            @staticmethod
+            def analyze(value):
+                import re
+
+                return type(
+                    "Tokenized",
+                    (),
+                    {
+                        "tokens": frozenset(
+                            re.findall(r"[a-z]+|\d+|[\u3400-\u9fff]+", value.casefold())
+                        )
+                    },
+                )()
+
+        profile = FrozenProfileFixture()
+        self.assertTrue(
+            _server_annotation_hint_source_match(
+                ("Kestrel PO 4500123 delivery confirmed",),
+                required_terms=("delivery",),
+                protected_terms={"4500123"},
+                identity_terms=("kestrel",),
+                tokenizer=profile,
+            )
+        )
+        self.assertFalse(
+            _server_annotation_hint_source_match(
+                ("PO 4500123 delivery confirmed",),
+                required_terms=("delivery",),
+                protected_terms={"4500123"},
+                identity_terms=("kestrel",),
+                tokenizer=profile,
+            )
+        )
+        self.assertFalse(
+            _server_annotation_hint_source_match(
+                ("Kestrel PO delivery confirmed",),
+                required_terms=("delivery",),
+                protected_terms={"4500123"},
+                identity_terms=("kestrel",),
+                tokenizer=profile,
+            )
+        )
+        self.assertFalse(
+            _server_annotation_hint_source_match(
+                ("Kestrel PO 4500123",),
+                required_terms=("delivery",),
+                protected_terms={"4500123"},
+                identity_terms=("kestrel",),
+                tokenizer=profile,
+            )
+        )
+
+    def test_additive_annotation_hashes_preserve_the_ordinary_shortlist(self) -> None:
+        from formowl_mail.issue56_sealed_source import IngestionRevisionSourceRecords
+        from formowl_retrieval.gateway import source_evidence_query_terms_scope
+
+        scope = PermissionScope.project("project_reviewed_hint")
+        observations = [
+            Observation(
+                observation_id=f"obs_{index}",
+                asset_id="asset_reviewed_hint",
+                extractor_run_id="run_reviewed_hint",
+                observation_type="paragraph",
+                modality="text",
+                text=text,
+                location={"line_start": index + 1, "line_end": index + 1},
+                confidence=1.0,
+                created_at="2026-10-26T00:00:00+00:00",
+                permission_scope=scope,
+            )
+            for index, text in enumerate(
+                ("Kestrel approved delivery", "ordinary result one", "ordinary result two")
+            )
+        ]
+        hashes = {item.observation_id: sha256_json(item.to_dict()) for item in observations}
+        job_fingerprint = "sha256:" + "e" * 64
+        asset = SimpleNamespace(
+            source_ref={
+                "source_system": "local",
+                "source_type": "file",
+                "source_id": "project.md",
+                "source_key": "project.md",
+            },
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            lifecycle_state="active",
+            asset_id="asset_reviewed_hint",
+            content_hash="sha256:" + "f" * 64,
+        )
+
+        class RuntimeStore:
+            workspace_id = "workspace_formowl"
+
+            def __init__(self):
+                self.helpers = {}
+                for item in observations:
+                    self.helpers[hashes[item.observation_id]] = {
+                        "observation_id": item.observation_id,
+                        "observation_hash": hashes[item.observation_id],
+                        "source_scope_id": scope.scope_id,
+                        "permission_scope": scope.to_dict(),
+                        "retrieval_source_family": "document_text",
+                        "reference": {"job_index": 0, "job_fingerprint": job_fingerprint},
+                    }
+
+            def helper_for_hash(self, observation_hash):
+                return self.helpers.get(observation_hash)
+
+            def source_family_lexical_lookup(self, query_terms, **_kwargs):
+                self.seen_query_terms = tuple(query_terms)
+                return [hashes["obs_1"], hashes["obs_2"]]
+
+        runtime_store = RuntimeStore()
+
+        def load_observation(
+            observation_id, *, expected_observation_hash, expected_job_fingerprint
+        ):
+            observation = next(
+                item for item in observations if item.observation_id == observation_id
+            )
+            if (
+                expected_job_fingerprint != job_fingerprint
+                or expected_observation_hash != hashes[observation_id]
+            ):
+                raise ContractValidationError("source guard rejected fixture binding")
+            return observation
+
+        authority = SimpleNamespace(
+            asset=asset,
+            job_fingerprint=job_fingerprint,
+            permission_scope=scope.to_dict(),
+            load_indexed_observation=mock.Mock(side_effect=load_observation),
+        )
+        records = IngestionRevisionSourceRecords(
+            runtime_store=runtime_store,
+            job_authorities=(authority,),
+            requester_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            observation_references=[
+                [0, item.observation_id, hashes[item.observation_id]] for item in observations
+            ],
+        )
+        delivered = []
+        with source_evidence_query_terms_scope(("ordinary",)):
+            scan = records.scan_authorized_observations(
+                source_family="document_text",
+                source_scope_ids=(scope.scope_id,),
+                max_observations=3,
+                deadline_monotonic=10**20,
+                additive_observation_hashes=(hashes["obs_0"],),
+                observation_callback=lambda observation, _scope: delivered.append(
+                    observation.observation_id
+                )
+                or True,
+            )
+        self.assertEqual(delivered, ["obs_0", "obs_1", "obs_2"])
+        self.assertTrue(scan.complete)
+        self.assertEqual(runtime_store.seen_query_terms, ("ordinary",))
+        self.assertEqual(authority.load_indexed_observation.call_count, 3)
+
+        runtime_store.helpers[hashes["obs_0"]]["observation_hash"] = "sha256:" + "0" * 64
+        rejected_callback = mock.Mock(return_value=True)
+        with source_evidence_query_terms_scope(("ordinary",)):
+            with self.assertRaisesRegex(ContractValidationError, "helper hash mismatch"):
+                records.scan_authorized_observations(
+                    source_family="document_text", source_scope_ids=(scope.scope_id,),
+                    max_observations=3, deadline_monotonic=10**20,
+                    additive_observation_hashes=(hashes["obs_0"],),
+                    observation_callback=rejected_callback,
+                )
+        rejected_callback.assert_not_called()
 
 
 if __name__ == "__main__":

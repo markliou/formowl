@@ -1490,6 +1490,7 @@ class IngestionRevisionSourceRecords:
         context_callback: Callable[[Observation, Observation, str], bool] | None = None,
         _allow_parallel_hydration: bool = False,
         preferred_observation_hashes: Sequence[str] = (),
+        additive_observation_hashes: Sequence[str] = (),
     ) -> RevisionOwnedMailSourceScan:
         """Read only sealed references, independent of retrieval helpers."""
 
@@ -1915,8 +1916,11 @@ class IngestionRevisionSourceRecords:
         # authoritative read. Merely seeing an index candidate proves nothing.
         shortlist_hashes: set[str] = set()
         shortlist_seen_hashes: set[str] = set()
-        should_shortlist = bool(preferred_observation_hashes) or bool(query_terms) and callable(
-            getattr(self.runtime_store, "source_family_lexical_lookup", None)
+        should_shortlist = (
+            bool(preferred_observation_hashes)
+            or bool(additive_observation_hashes)
+            or bool(query_terms)
+            and callable(getattr(self.runtime_store, "source_family_lexical_lookup", None))
         )
         if should_shortlist:
             if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
@@ -1935,6 +1939,7 @@ class IngestionRevisionSourceRecords:
             # original callback/deadline still govern the shared actual budget.
             preferred_cap = shortlist_cap - 1 if query_terms else shortlist_cap
             shortlisted = list(dict.fromkeys(preferred_observation_hashes))[:preferred_cap]
+            preferred_shortlist_count = len(shortlisted)
             _trace(trace, "shortlist", shortlisted)
 
             def shortlist_keys():
@@ -1942,6 +1947,20 @@ class IngestionRevisionSourceRecords:
                 # This is lazy: each preferred key is hydrated/emitted before
                 # the generator resumes to perform ANY broad lexical lookup.
                 yield from tuple(shortlisted)
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    shortlist_stop = "deadline"
+                    return
+                if scanned >= max_observations:
+                    shortlist_stop = "observation_limit"
+                    return
+                additive = list(
+                    dict.fromkeys(
+                        key for key in additive_observation_hashes if key not in shortlisted
+                    )
+                )[:32]
+                shortlisted.extend(additive)
+                _trace(trace, "shortlist", additive)
+                yield from additive
                 if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                     shortlist_stop = "deadline"
                     return
@@ -1973,7 +1992,7 @@ class IngestionRevisionSourceRecords:
                     shortlist_stop = "deadline"
                     return
                 ordinary = list(dict.fromkeys(key for key in baseline if key not in shortlisted))[
-                    :shortlist_cap - len(shortlisted)]
+                    :shortlist_cap - preferred_shortlist_count]
                 shortlisted.extend(ordinary)
                 _trace(trace, "shortlist", ordinary)
                 yield from ordinary
@@ -2046,9 +2065,15 @@ class IngestionRevisionSourceRecords:
             def hydrated_shortlist():
                 pool, pending, errors = None, window_reads, []
                 entries = iter(candidates())
-                parallel = _allow_parallel_hydration and not preferred_observation_hashes and indexed_source and all(
-                    _parallel_file_store(self.job_authorities[index])
-                    for index in source_scope_by_job_index
+                parallel = (
+                    _allow_parallel_hydration
+                    and not preferred_observation_hashes
+                    and not additive_observation_hashes
+                    and indexed_source
+                    and all(
+                        _parallel_file_store(self.job_authorities[index])
+                        for index in source_scope_by_job_index
+                    )
                 )
 
                 def prepare_parent_reads(hydrated):
@@ -2340,7 +2365,9 @@ class IngestionRevisionSourceRecords:
             observations=tuple(selected),
             scanned_observation_count=scanned,
             complete=not (pending_mail_children or pending_attachment_children),
-            stop_reason="source_parent_binding_unresolved" if pending_mail_children or pending_attachment_children else None,
+            stop_reason="source_parent_binding_unresolved"
+            if pending_mail_children or pending_attachment_children
+            else None,
         )
 
     def scan_authorized_observations(
@@ -2356,14 +2383,22 @@ class IngestionRevisionSourceRecords:
         context_callback: Callable[[Observation, Observation, str], bool] | None = None,
         _allow_parallel_hydration: bool = False,
         preferred_observation_hashes: Sequence[str] = (),
+        additive_observation_hashes: Sequence[str] = (),
     ) -> RevisionOwnedMailSourceScan:
         """Read one authorized source family through sealed job references."""
 
         if type(_allow_parallel_hydration) is not bool:
             raise ContractValidationError("source hydration opt-in is invalid")
-        if (len(preferred_observation_hashes) > 128
-                or any(not isinstance(key, str) or _SHA256_RE.fullmatch(key) is None for key in preferred_observation_hashes)):
+        if len(preferred_observation_hashes) > 128 or any(
+            not isinstance(key, str) or _SHA256_RE.fullmatch(key) is None
+            for key in preferred_observation_hashes
+        ):
             raise ContractValidationError("reviewed source shortlist is invalid")
+        if len(additive_observation_hashes) > 32 or any(
+            not isinstance(key, str) or _SHA256_RE.fullmatch(key) is None
+            for key in additive_observation_hashes
+        ):
+            raise ContractValidationError("additive annotation source shortlist is invalid")
         if source_family not in {"mail", "document_text"}:
             raise ContractValidationError("source fallback family is invalid")
         if (
@@ -2402,7 +2437,8 @@ class IngestionRevisionSourceRecords:
         if observation_callback is not None and not callable(observation_callback):
             raise ContractValidationError("source fallback callback is invalid")
         if context_callback is not None and (
-            not callable(context_callback) or not callable(context_anchor_callback)
+            not callable(context_callback)
+            or not callable(context_anchor_callback)
             or not callable(observation_callback)
         ):
             raise ContractValidationError("source context callbacks are invalid")
@@ -2418,6 +2454,7 @@ class IngestionRevisionSourceRecords:
             context_callback=context_callback,
             _allow_parallel_hydration=_allow_parallel_hydration,
             preferred_observation_hashes=preferred_observation_hashes,
+            additive_observation_hashes=additive_observation_hashes,
         )
 
     def scan_neighbor_context(

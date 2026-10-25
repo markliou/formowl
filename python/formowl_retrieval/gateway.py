@@ -288,7 +288,8 @@ _TRACE_VALUES = frozenset((*_TRACE_COUNTERS,
     "attachment_table", "mail_inline_table", "evidence_lookup", "exact_set_or_inventory",
     "deadline", "observation_limit", "indexed_shortlist", "indexed_shortlist_miss",
     "source_parent_binding_unresolved", "source_reference_unavailable", "indexed_query_terms_unavailable",
-    "source_table_shortlist", "email_message", "email_body_segment", "email_header",
+    "source_table_shortlist", "annotation_identity_hints", "annotation_identity_reads",
+    "email_message", "email_body_segment", "email_header",
     "email_attachment_occurrence", "paragraph", "heading", "annotation_nomination_fallback",
 ))
 
