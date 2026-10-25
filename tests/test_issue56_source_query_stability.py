@@ -1,5 +1,7 @@
 """Synthetic bounded-source scheduling regressions; no live sources/providers."""
 
+from dataclasses import replace
+import json
 from pathlib import Path
 import shutil
 import tempfile
@@ -14,6 +16,7 @@ from formowl_mail.import_workflow import CompletedIngestionJobAuthority
 from formowl_mail.issue56_sealed_source import load_issue56_ingestion_revision
 from formowl_mail.query import RevisionOwnedMailSourceScan
 from formowl_retrieval.gateway import source_evidence_query_terms_scope
+from formowl_retrieval.gateway import _SourcePhaseTrace, _SOURCE_PHASE_TRACE, _source_phase_trace_scope
 from scripts.issue56_source_native_lookup import build_lookup
 
 
@@ -120,6 +123,55 @@ class SourceQueryStabilityTests(unittest.TestCase):
             self.assertEqual(scan.scanned_observation_count, 2)
             self.assertFalse(scan.complete)
             self.assertEqual(scan.stop_reason, "indexed_shortlist")
+
+    def test_annotation_hint_read_summary_survives_full_trace_detail_budget(self):
+        revision, handler, arguments = self.prepare(("document_text",))
+        authority = revision.source_records.job_authorities[0]
+        observation = next(
+            authority.observation_store.get(reference[1])
+            for reference in revision.source_records.observation_references
+            if authority.observation_store.get(reference[1]).text == "cerulean"
+        )
+        observation_hash = sha256_json(observation.to_dict())
+        reviewed = replace(
+            revision,
+            reviewed_source_annotations=({
+                "candidate_atom_id": "reviewed-cerulean-atom",
+                "target": "cerulean",
+                "identity_bindings": (),
+                "time_roles": (),
+                "property": None,
+                "event_type": None,
+                "source_hashes": (observation_hash,),
+            },),
+        )
+        handler = loader._build_source_start_semantic_handler(reviewed, mail_tool=False)
+        trace = _SourcePhaseTrace({})
+        original_scan = type(reviewed.source_records).scan_authorized_observations
+
+        def fill_trace_after_hint_calculation(records, **kwargs):
+            active_trace = _SOURCE_PHASE_TRACE.get()
+            for _ in range(256):
+                cell = active_trace.phase("fixture_trace_pressure")
+                if cell is not None:
+                    cell.finish()
+            return original_scan(records, **kwargs)
+
+        with _source_phase_trace_scope(trace), patch.object(
+            type(reviewed.source_records), "scan_authorized_observations",
+            autospec=True, side_effect=fill_trace_after_hint_calculation,
+        ):
+            result = handler(arguments)
+
+        snapshot = json.loads(trace.snapshot())
+        read_summary = next(
+            item for item in snapshot["details"]
+            if item.get("name") == "annotation_identity_reads"
+        )
+        self.assertEqual(read_summary["candidate_hash_count"], 1)
+        self.assertGreater(read_summary["projected_candidate_count"], 0)
+        self.assertGreater(read_summary["predicate_passed_count"], 0)
+        self.assertTrue(result["citations"])
 
     def test_expanded_wording_and_requested_fields_do_not_change_grounded_shortlist(self):
         revision, handler, arguments = self.prepare(("mail", "document_text"))
