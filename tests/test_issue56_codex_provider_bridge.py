@@ -29,6 +29,7 @@ import formowl_mail.human_uat_orchestrator as orchestrator
 from formowl_gateway.issue56_uat_runtime import (
     Issue56TemporaryLanQueryService,
     _run_gpt_query_agent,
+    _query_agent_tool_catalog,
     _query_agent_runtime_context,
     _browser_projection,
     _safe_provider_diagnostic as runtime_project,
@@ -1380,7 +1381,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         self.assertEqual(tool_descriptor["name"], "query_effective_graph_view")
         self.assertIsNone(capabilities)
 
-    def test_query_agent_context_routes_chinese_mail_and_keeps_chat_on_graph(self) -> None:
+    def test_query_agent_context_stays_within_configured_tool_catalog(self) -> None:
         graph_descriptor = SimpleNamespace(
             name="query_effective_graph_view",
             model_dump=lambda **_kwargs: _actual_query_tool_descriptor(),
@@ -1407,10 +1408,17 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
             ),
         )
 
+        def descriptors_for_enabled_names(*, enabled_tool_names, **_kwargs):
+            return [
+                descriptor for descriptor in (graph_descriptor, mail_descriptor)
+                if descriptor.name in enabled_tool_names
+            ]
+
         with mock.patch(
             "formowl_gateway.issue56_uat_runtime.build_remote_tool_descriptors",
-            return_value=[graph_descriptor, mail_descriptor],
+            side_effect=descriptors_for_enabled_names,
         ):
+            mail_only_catalog = _query_agent_tool_catalog(application)
             mail_tool, _ = _query_agent_runtime_context(
                 application,
                 user_text="劉一帆的信件",
@@ -1423,10 +1431,41 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                 application,
                 user_text="幫我寫一封信",
             )
+            journal_greeting_tool, _ = _query_agent_runtime_context(
+                application,
+                user_text="你好，今天好嗎？",
+                configured_tool_catalog=mail_only_catalog,
+            )
+            self.assertEqual(
+                {item["name"] for item in mail_only_catalog},
+                {"query_mail_evidence"},
+            )
+            self.assertEqual(journal_greeting_tool["name"], "query_mail_evidence")
+            self.assertIn(
+                journal_greeting_tool["name"],
+                {item["name"] for item in mail_only_catalog},
+            )
+
+            capability_summary["source_families"] = ["mail", "document_text"]
+            mail_and_document_catalog = _query_agent_tool_catalog(application)
+            document_greeting_tool, _ = _query_agent_runtime_context(
+                application,
+                user_text="你好，今天好嗎？",
+                configured_tool_catalog=mail_and_document_catalog,
+            )
 
         self.assertEqual(mail_tool["name"], "query_mail_evidence")
         self.assertEqual(greeting_tool["name"], "query_effective_graph_view")
         self.assertEqual(writing_tool["name"], "query_effective_graph_view")
+        self.assertEqual(
+            {item["name"] for item in mail_and_document_catalog},
+            {"query_effective_graph_view", "query_mail_evidence"},
+        )
+        self.assertEqual(document_greeting_tool["name"], "query_effective_graph_view")
+        self.assertIn(
+            document_greeting_tool["name"],
+            {item["name"] for item in mail_and_document_catalog},
+        )
 
     def test_uat_accepts_success_envelope_with_canonical_content_only(self) -> None:
         from formowl_gateway.issue56_uat_runtime import Issue56UatQueryService
