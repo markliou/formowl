@@ -59,7 +59,9 @@ class AdapterLocationTests(unittest.TestCase):
         self.assertEqual(changed["quote"], "葉坤杰（中光電）")
         repeated = self.adapter.span({"observation_id": "obs_body", "quote": "PONo."})
         self.assertEqual(repeated["quote"], "PONo.")
+        self.adapter.span({"observation_id": "obs_body", "quote": "PO No."})
         self.assertEqual(self.adapter.relocated, 0)
+        self.assertEqual(len(self.adapter.problems), 3)  # not found, not found, repeated twice
 
     def test_subject_outside_its_quote_is_located_in_the_cited_observation(self) -> None:
         data = self.adapter.convert({"records": [_record(
