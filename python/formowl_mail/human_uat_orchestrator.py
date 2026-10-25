@@ -1006,7 +1006,8 @@ def validated_reviewed_annotation_selection(arguments, *, catalog=None, user_tex
         raise ContractValidationError("UAT reviewed annotation ID is unavailable")
     from .issue56_sealed_source import bind_reviewed_annotation_identity
     return bind_reviewed_annotation_identity(catalog["entries"], selected_ids=ids,
-        required_terms=arguments.get("required_terms"), user_text=user_text)
+        required_terms=arguments.get("required_terms"), user_text=user_text,
+        allow_partial_identity=catalog.get("view_status") == "partial_identity")
 
 
 @dataclass(frozen=True)

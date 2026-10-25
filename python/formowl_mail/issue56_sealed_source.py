@@ -1064,6 +1064,7 @@ def bind_issue56_reviewed_headers(
 
 def issue56_reviewed_annotation_catalog(
     revision: Issue56IngestionRevision, *, user_text: str | None = None,
+    allow_partial_identity: bool = False,
 ) -> dict[str, Any] | None:
     """Labels only, guarded as public metadata; no assertion values or source quotes."""
     if not revision.reviewed_source_annotations:
@@ -1074,7 +1075,9 @@ def issue56_reviewed_annotation_catalog(
     if paged_view:
         navigation = [{"annotation_id": item["candidate_atom_id"], "target": item["target"],
                        "identity_bindings": item["identity_bindings"]} for item in items]
-        eligible, _, view_status = _reviewed_annotation_scope(navigation, user_text=user_text)
+        eligible, _, view_status = _reviewed_annotation_scope(
+            navigation, user_text=user_text, allow_partial_identity=allow_partial_identity,
+        )
         items = tuple(item for item in items if item["candidate_atom_id"] in eligible)
     relation_index = reviewed_relation_index(revision)
     entries, omitted, redacted_labels = [], 0, 0
@@ -1226,12 +1229,13 @@ def _partial_reviewed_identity_candidates(entries, user_text):
     return eligible
 
 
-def _reviewed_annotation_scope(entries, *, user_text=None, required_terms=()):
+def _reviewed_annotation_scope(entries, *, user_text=None, required_terms=(), allow_partial_identity=False):
     """Choose an exact reviewed anchor, preserving other scopes as row predicates.
 
     Roles belong to reviewed assertions, not globally interchangeable aliases.
     A unique primary can anchor a literal qualifier reviewed only elsewhere.
     Without it, compound scopes must actually co-occur in a reviewed assertion.
+    Partial-identity candidates are opt-in; the default preserves exact-unknown.
     """
     def normalize(value):
         return unicodedata.normalize("NFKC", value).casefold().strip()
@@ -1261,7 +1265,7 @@ def _reviewed_annotation_scope(entries, *, user_text=None, required_terms=()):
             return set(), None, "ambiguous"
         matched.update(identities)
     if not matched:
-        if user_text is not None:
+        if user_text is not None and allow_partial_identity:
             partial = _partial_reviewed_identity_candidates(entries, user_text)
             if partial:
                 return partial, None, "partial_identity"
@@ -1287,12 +1291,15 @@ def _reviewed_annotation_scope(entries, *, user_text=None, required_terms=()):
     return eligible, anchor, "matched"
 
 
-def bind_reviewed_annotation_identity(entries, *, selected_ids, required_terms, user_text=None):
+def bind_reviewed_annotation_identity(
+    entries, *, selected_ids, required_terms, user_text=None, allow_partial_identity=False,
+):
     """Bind exact scope to an anchor; partial catalog nominations remain unanchored."""
     def normalize(text):
         return unicodedata.normalize("NFKC", text).casefold().strip()
     eligible, identity, status = _reviewed_annotation_scope(
-        entries, user_text=user_text, required_terms=required_terms)
+        entries, user_text=user_text, required_terms=required_terms,
+        allow_partial_identity=allow_partial_identity)
     selected = set(selected_ids)
     if not selected <= eligible:
         raise ContractValidationError("UAT reviewed annotation original identity is unknown or ambiguous")
@@ -1304,7 +1311,7 @@ def bind_reviewed_annotation_identity(entries, *, selected_ids, required_terms, 
         if not set(protected_reference_identifiers(user_text)) <= set(
                 protected_reference_identifiers(normalized_required)):
             raise ContractValidationError("UAT reviewed annotation original constraint is not independently bound")
-    if status == "partial_identity":
+    if status == "partial_identity" and allow_partial_identity:
         return None
     if status != "matched":
         raise ContractValidationError("UAT reviewed annotation original identity is unknown or ambiguous")
