@@ -5,10 +5,11 @@ import io
 import json
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 import _paths
-from formowl_contract import Observation, sha256_json
+from formowl_contract import ContractValidationError, Observation, sha256_json
 from formowl_graph.candidates import read_and_store_source_unit
 from formowl_graph.local_semantic_reader import LocalOllamaReader
 from formowl_graph.storage import CandidateAtomStore, CandidateRelationStore, SemanticMetadataStore
@@ -75,6 +76,88 @@ class ReviewedAnnotationReviewTests(unittest.TestCase):
                     "identity_bindings": [{"scope_role": "primary", "value_surface": "4500123"}]}]
         eligible, anchor, status = _reviewed_annotation_scope(entries, user_text="4500123 的交期")
         self.assertEqual((eligible, anchor, status), ({"catom_a"}, ("", "4500123"), "matched"))
+
+    def test_partial_identity_catalog_is_candidates_only_and_ignores_numeric_fragments(self) -> None:
+        from formowl_mail import issue56_sealed_source as sealed_source
+
+        class FrozenProfileFixture:
+            @staticmethod
+            def analyze(value):
+                import re
+
+                normalized = value.casefold()
+                tokens = set(re.findall(r"[a-z]+", normalized))
+                for run in re.findall(r"[\u3400-\u9fff]+", normalized):
+                    tokens.add(run)
+                    tokens.update(run[index:index + 2] for index in range(len(run) - 1))
+                tokens.update(re.findall(r"\d+", normalized))
+                return type("Tokenized", (), {"tokens": frozenset(tokens)})()
+
+        entries = [
+            {"annotation_id": "atom_latin", "target": "Kestrel LBP", "identity_bindings": []},
+            {"annotation_id": "atom_cjk", "target": "楓林標籤機", "identity_bindings": []},
+            {"annotation_id": "atom_number", "target": "4500123", "identity_bindings": []},
+        ]
+        with mock.patch.object(sealed_source, "load_issue56_target_mail_tokenizer_profile",
+                               return_value=FrozenProfileFixture()):
+            eligible, anchor, status = sealed_source._reviewed_annotation_scope(
+                entries, user_text="Kestrel 標籤機專案 4500")
+        self.assertEqual(eligible, {"atom_latin", "atom_cjk"})
+        self.assertIsNone(anchor)
+        self.assertEqual(status, "partial_identity")
+        annotations = [
+            {"candidate_atom_id": entry["annotation_id"], "target": entry["target"],
+             "identity_bindings": [], "time_roles": [], "property": "status", "event_type": None}
+            for entry in entries
+        ]
+        annotations.extend({
+            "candidate_atom_id": f"atom_filler_{index}", "target": f"unrelated item {index}",
+            "identity_bindings": [], "time_roles": [], "property": "status", "event_type": None,
+        } for index in range(126))
+        revision = SimpleNamespace(
+            reviewed_source_annotations=tuple(annotations), reviewed_source_relations=(),
+            reviewed_annotation_pin="sha256:" + "a" * 64,
+            safe_binding={"source_revision_sha256": "sha256:" + "b" * 64,
+                          "reviewed_annotation_page_count": 2},
+        )
+        with mock.patch.object(sealed_source, "load_issue56_target_mail_tokenizer_profile",
+                               return_value=FrozenProfileFixture()):
+            catalog = sealed_source.issue56_reviewed_annotation_catalog(
+                revision, user_text="Kestrel 標籤機專案 4500")
+            self.assertIsNone(sealed_source.bind_reviewed_annotation_identity(
+                entries, selected_ids=eligible, required_terms=(),
+                user_text="Kestrel 標籤機專案 4500"))
+            with self.assertRaisesRegex(ContractValidationError, "unknown or ambiguous"):
+                sealed_source.bind_reviewed_annotation_identity(
+                    entries, selected_ids={"atom_number"}, required_terms=(),
+                    user_text="Kestrel 標籤機專案 4500")
+        self.assertEqual(catalog["view_status"], "partial_identity")
+        self.assertEqual(catalog["catalog_status"], "partial")
+        self.assertEqual(catalog["eligible_atom_count"], 2)
+        self.assertEqual({item["annotation_id"] for item in catalog["entries"]},
+                         {"atom_latin", "atom_cjk"})
+
+    def test_partial_identity_cap_falls_back_to_unknown_and_exact_match_is_unchanged(self) -> None:
+        from formowl_mail import issue56_sealed_source as sealed_source
+
+        class FrozenProfileFixture:
+            @staticmethod
+            def analyze(value):
+                import re
+
+                return type("Tokenized", (), {
+                    "tokens": frozenset(re.findall(r"[a-z]+", value.casefold()))
+                })()
+
+        too_many = [{"annotation_id": f"atom_{index}", "target": f"Kestrel item {index}",
+                     "identity_bindings": []} for index in range(129)]
+        exact = [{"annotation_id": "atom_exact", "target": "Kestrel", "identity_bindings": []}]
+        with mock.patch.object(sealed_source, "load_issue56_target_mail_tokenizer_profile",
+                               return_value=FrozenProfileFixture()):
+            self.assertEqual(sealed_source._reviewed_annotation_scope(
+                too_many, user_text="Kestrel project"), (set(), None, "unknown"))
+            self.assertEqual(sealed_source._reviewed_annotation_scope(
+                exact, user_text="Kestrel"), ({"atom_exact"}, ("", "kestrel"), "matched"))
 
 
 if __name__ == "__main__":

@@ -9,10 +9,20 @@ import unittest
 
 import _paths
 from formowl_contract import ContractValidationError, sha256_json
+from formowl_retrieval.gateway import _SourcePhaseTrace
 
 sys.path.insert(0, str(_paths.ROOT))
-from formowl_gateway.issue56_sealed_source_loader import _expand_reviewed_relations, reviewed_relations_for  # noqa: E402
-from formowl_mail.issue56_sealed_source import APPROVER_ACTOR, _bind_reviewed_relations  # noqa: E402
+from formowl_gateway.issue56_sealed_source_loader import (  # noqa: E402
+    _expand_reviewed_relations,
+    _reviewed_annotation_catalog_trace_fields,
+    reviewed_relations_for,
+)
+from formowl_mail.issue56_sealed_source import (  # noqa: E402
+    APPROVER_ACTOR,
+    ReviewedAnnotationQueryBinding,
+    _bind_reviewed_relations,
+    reviewed_annotation_query_scope,
+)
 from test_graph_reconciliation import ReconciliationTests  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("review", _paths.ROOT / "scripts" / "issue56_reviewed_annotation_review.py")
@@ -37,8 +47,53 @@ class RelationSelectionTests(unittest.TestCase):
         selected, hashes = _expand_reviewed_relations(revision, {"b"})
         self.assertEqual(selected, {"a", "b", "c"})
         self.assertEqual(set(hashes), {"sha256:quote_a", "sha256:c"})
+        stats = {}
+        self.assertEqual(_expand_reviewed_relations(
+            revision, {"b"}, trace_stats=stats), (selected, hashes))
+        self.assertEqual(stats["expanded_atom_count"], 2)
+        self.assertEqual(stats["relation_edge_count"], 2)
+        self.assertEqual(len(stats["relation_id_hashes"]), 2)
+        self.assertTrue(all(value.startswith("sha256:") for value in stats["relation_id_hashes"]))
         self.assertEqual(_expand_reviewed_relations(SimpleNamespace(reviewed_source_relations=()), {"b"}),
                          ({"b"}, ()))
+
+    def test_catalog_trace_distinguishes_unavailable_unpaged_and_paged_view(self) -> None:
+        self.assertEqual(_reviewed_annotation_catalog_trace_fields(None), {
+            "catalog_provided": False, "view_status": "unavailable",
+            "view_status_code": 255, "eligible_count": None,
+        })
+        self.assertEqual(_reviewed_annotation_catalog_trace_fields({"entries": [{}, {}]}), {
+            "catalog_provided": True, "view_status": "unpaged",
+            "view_status_code": 4, "eligible_count": 2,
+        })
+        self.assertEqual(_reviewed_annotation_catalog_trace_fields({
+            "entries": [], "view_mode": "original_exact_identity_v1",
+            "view_status": "partial_identity", "eligible_atom_count": 2,
+        }), {
+            "catalog_provided": True, "view_status": "partial_identity",
+            "view_status_code": 5, "eligible_count": 2,
+        })
+        binding = ReviewedAnnotationQueryBinding(
+            "query", json.dumps({"view_status": "unknown", "eligible_atom_count": 0}), "fingerprint",
+        )
+        with reviewed_annotation_query_scope(binding):
+            self.assertEqual(_reviewed_annotation_catalog_trace_fields({"entries": []}), {
+                "catalog_provided": True, "view_status": "unknown",
+                "view_status_code": 0, "eligible_count": 0,
+            })
+
+    def test_private_trace_sanitizes_status_and_keeps_only_identifier_hashes(self) -> None:
+        trace = _SourcePhaseTrace("sha256:" + "f" * 64)
+        cell = trace.phase("project", view_status="partial_identity", view_status_code=5,
+                           selected_count=1, selected_id_hashes=[sha256_json("atom_private_123")])
+        cell.finish()
+        serialized = trace.snapshot()
+        self.assertNotIn("atom_private_123", serialized)
+        details = json.loads(serialized)["details"][0]
+        self.assertEqual(details["view_status"], "unknown")
+        self.assertEqual(details["view_status_code"], 5)
+        self.assertEqual(details["selected_count"], 1)
+        self.assertEqual(details["selected_id_hashes"], [sha256_json("atom_private_123")])
 
     def test_evidence_context_lists_relations_by_atom_or_quoted_observation(self) -> None:
         revision = SimpleNamespace(reviewed_source_relations=(_relation("updates", "a", "b", ["sha256:q"]),))

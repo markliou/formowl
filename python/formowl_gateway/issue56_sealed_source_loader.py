@@ -1739,6 +1739,52 @@ def _admit_source_model_envelope(payload, *, staged_items, limit, deadline, defe
     return observed(selected)
 
 
+_ANNOTATION_VIEW_STATUS_CODES = {
+    "unknown": 0,
+    "original_identity_required": 1,
+    "matched": 2,
+    "ambiguous": 3,
+    "unpaged": 4,
+    "partial_identity": 5,
+    "unavailable": 255,
+}
+
+
+def _reviewed_annotation_catalog_trace_fields(catalog):
+    """Return bounded catalog metadata; never copy catalog labels into trace."""
+    if catalog is None:
+        status, eligible = "unavailable", None
+    else:
+        status = "unpaged"
+        eligible = len(catalog.get("entries", ()))
+        if catalog.get("view_mode") == "original_exact_identity_v1":
+            status = str(catalog.get("view_status", "unknown"))
+            eligible = catalog.get("eligible_atom_count")
+            if type(eligible) is not int or eligible < 0:
+                eligible = None
+        try:
+            from formowl_mail.issue56_sealed_source import current_reviewed_annotation_query_binding
+
+            binding = current_reviewed_annotation_query_binding()
+            if binding is not None:
+                query_catalog = json.loads(binding.catalog_json)
+                status = str(query_catalog.get("view_status", "unknown"))
+                eligible = query_catalog.get("eligible_atom_count")
+                if type(eligible) is not int or eligible < 0:
+                    eligible = None
+        except (ImportError, TypeError, ValueError, json.JSONDecodeError):
+            status, eligible = "unknown", None
+    return {
+        "catalog_provided": catalog is not None,
+        "view_status": status,
+        # The retrieval trace sanitizer preserves the known safe `unknown`
+        # value and sha256 strings. This code preserves the full enum when its
+        # display label is intentionally reduced by that existing sanitizer.
+        "view_status_code": _ANNOTATION_VIEW_STATUS_CODES.get(status, 254),
+        "eligible_count": eligible,
+    }
+
+
 def _select_reviewed_annotation_sources(revision, *, arguments, catalog, deadline):
     """Semantic nomination selects originals; identity and literals remain independent."""
     from formowl_mail.human_uat_orchestrator import validated_reviewed_annotation_selection
@@ -1783,7 +1829,11 @@ def _select_reviewed_annotation_sources(revision, *, arguments, catalog, deadlin
             annotation_id for annotation_id, identities in descriptors.items()
             if any(_reviewed_identity_matches(target, identity) for identity in identities)
         )
-    selected_ids, relation_hashes = _expand_reviewed_relations(revision, selected_ids)
+    nominated_ids = set(arguments.get("reviewed_annotation_ids") or ())
+    relation_trace = {}
+    selected_ids, relation_hashes = _expand_reviewed_relations(
+        revision, selected_ids, trace_stats=relation_trace,
+    )
     matched = []
     for item in revision.reviewed_source_annotations:
         check_source_evidence_deadline(deadline)
@@ -1792,6 +1842,16 @@ def _select_reviewed_annotation_sources(revision, *, arguments, catalog, deadlin
     hashes = tuple(dict.fromkeys([*(key for item in matched for key in item["source_hashes"]), *relation_hashes]))
     if len(hashes) > 128:
         raise ContractValidationError("UAT reviewed annotation source selection exceeds bound")
+    trace = _SOURCE_PHASE_TRACE.get()
+    _trace(trace, "phase", "project", reviewed_annotation_selection=True,
+           nominated_count=len(nominated_ids),
+           nominated_id_hashes=sorted(sha256_json(value) for value in nominated_ids)[:128],
+           selected_count=len(matched),
+           selected_id_hashes=sorted(sha256_json(item["candidate_atom_id"] for item in matched))[:128],
+           relation_expansion_count=relation_trace.get("expanded_atom_count", 0),
+           relation_edge_count=relation_trace.get("relation_edge_count", 0),
+           relation_id_hashes=relation_trace.get("relation_id_hashes", ()),
+           annotation_pin=revision.reviewed_annotation_pin)
     return tuple(item["candidate_atom_id"] for item in matched), hashes, target
 
 
@@ -1799,13 +1859,15 @@ _FOLLOWED_RELATIONS = frozenset({"updates", "supersedes", "contradicts"})
 _MAX_RELATION_EXPANSION = 32
 
 
-def _expand_reviewed_relations(revision, selected_ids):
+def _expand_reviewed_relations(revision, selected_ids, *, trace_stats=None):
     """Add atoms linked by reviewed updates/supersedes/contradicts, plus their update quotes.
 
     Additive like the exact-identity expansion: a selected value is never answered
     without the reviewed statement that changes or contests it.
     """
     selected, hashes = set(selected_ids), []
+    initial = set(selected)
+    followed_relation_ids = set()
     added, frontier = 0, set(selected_ids)
     while frontier and added < _MAX_RELATION_EXPANSION:
         following = set()
@@ -1816,10 +1878,20 @@ def _expand_reviewed_relations(revision, selected_ids):
             if ends & frontier:
                 hashes.extend(relation["evidence_hashes"])
                 following.update(ends - selected)
+                followed_relation_ids.add(relation.get("candidate_relation_id") or sha256_json({
+                    "type": relation["relation_type"], "ends": sorted(ends),
+                    "evidence_hashes": sorted(relation["evidence_hashes"]),
+                }))
         following = set(sorted(following)[:_MAX_RELATION_EXPANSION - added])
         selected |= following
         added += len(following)
         frontier = following
+    if trace_stats is not None:
+        trace_stats.update({
+            "expanded_atom_count": len(selected - initial),
+            "relation_edge_count": len(followed_relation_ids),
+            "relation_id_hashes": sorted(sha256_json(value) for value in followed_relation_ids)[:_MAX_RELATION_EXPANSION],
+        })
     return selected, tuple(dict.fromkeys(hashes))
 
 
@@ -2229,6 +2301,15 @@ def _build_source_start_semantic_handler(
             # the governed context walk.
             if required_terms and len(required_terms) == 1 and len(protected_terms) > 1:
                 protected_terms = set(required_terms)
+            catalog_trace = _reviewed_annotation_catalog_trace_fields(annotation_catalog)
+            nominated_ids = tuple(arguments.get("reviewed_annotation_ids") or ())
+            cell = _trace(trace, "phase", "project", reviewed_annotation_catalog=True,
+                          nominated_count=len(nominated_ids),
+                          nominated_id_hashes=sorted(sha256_json(value) for value in nominated_ids)[:128],
+                          selected_count=0, selected_id_hashes=[],
+                          relation_expansion_count=0, relation_edge_count=0, relation_id_hashes=[],
+                          **catalog_trace)
+            _trace(cell, "finish")
             if arguments.get("reviewed_annotation_ids") or arguments.get("reviewed_annotation_pin") is not None:
                 if query_class != "evidence_lookup" or auto_exact or placement is not None or native_locator is not None:
                     raise ContractValidationError("UAT reviewed annotation route is unsupported")
