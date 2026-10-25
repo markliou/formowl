@@ -1,6 +1,37 @@
 # Agent Handoff Log
 Lifecycle label: `active`.
 
+## Current checkpoint — 2026-10-25 UTC / scoped local semantic annotation + reconciliation + UAT relation intake / 待測
+Authority remains valid-but-blocked; nothing here is UAT acceptance, completeness or methodology evidence.
+User decisions (2026-10-25): annotation model Gemma 4 26B-A4B (local only); scope first, full later;
+quotes differing ONLY in whitespace map to the one unique source span (other repeats/missing quotes
+fail); cross-unit grouping option (b) across threads by exact target+property; relations reviewed by a
+fixed auto-approval policy; a second host (Titan RTX + 3090 Ti, Ollama 0.40.2 per GPU on 127.0.0.1,
+reached through an SSH tunnel on :11446/:11447) joins the local :11435 lane. Commits (local, not
+pushed): a5d8a35/18e6d89/e40f38c local reader for the unchanged `read_and_store_source_unit` contract
+(flat model records; adapter only assigns ids/identity refs/time-property copies, locates evidence
+exactly, clears invented labels/subjects, fills the read inventory for an untruncated complete read,
+gives retry feedback); d562a1b/503993c `scripts/issue56_semantic_annotation.py` scope/run/retry/report;
+82df241 policy review tool + catalog fix (bindings omit a null type_surface); e3ec2c4 attachment 0.7.2
+(date-time serials interpreted, rows carry `cell_date_values_iso`; applies on next re-extraction);
+aca8a21/215dc71 cross-unit reconciliation (closed relation set; updates/supersedes need an exact update
+quote from the later message and must follow message time; strict per group); ed75695 UAT reads
+reviewed relations (optional relation receipt pages, additive selection over updates/supersedes/
+contradicts, relations in evidence context/catalog; review tool approves only sources the serving
+lookup resolves). Scope: Date-header month 2026-01, both PSTs plus attachments by lineage — 1,485
+messages, 408 attachment assets, 9,543 units (`/Cache/formowl-annotation-2026-01/ops`, units
+3a1a5bab…; code snapshot 18e6d89). Run `semrun_2026_01_a` in progress (~440 units/h, ~62% annotated,
+gaps: repeated/inexact quotes, names outside quotes, truncation; retry pass pending). Sealed-loader
+diagnostics: 1,612 reviewed atoms + 205 relations bind to revision-r2; 12 atoms citing
+`container_member` were skipped because revision-r2's source lookup has no reference for them. Trial
+reconciliation (93 groups): 196 same_fact, 9 refines, no updates/contradicts in that sample, a few
+same_fact pairs over different values. Separately the official indexed finish for revision-r2 runs
+into a dedicated pgvector container (`formowl-r2-projection-postgres`, internal network only):
+references persisted; the attachment-parent phase repeats lookups for parentless assets. Not
+deployed; 8088 untouched. Open: retry + reconciliation on the full scope, webpage questions on 8088
+(SPEC §15.6), the two pre-existing `test_issue56_uat_web_e2e` failures, `container_member` lookup
+coverage, quoted-history dedup before any full-corpus run.
+
 ## Current checkpoint — 2026-10-24/25 UTC / single-run PST re-extraction + local annotation model bake-off / 待測
 Authority remains valid-but-blocked; nothing here is UAT, completeness or methodology evidence.
 Code: 43ea2fe (ZIP/gzip/tar, legacy .doc/.ppt, attached .msg/.eml), 9822d23 (Codex review:
