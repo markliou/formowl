@@ -3451,6 +3451,9 @@ def _provider_transport_cause_diagnostic(exception: Exception) -> dict[str, Any]
 
 
 _RESPONSES_WEBSOCKET_BETA = "responses_websockets=2026-02-06"
+# Not part of the Codex WebSocket request: streaming is implicit and the endpoint
+# rejects safety_identifier ("Unsupported parameter"), which Codex CLI never sends.
+_RESPONSES_WEBSOCKET_OMITTED_FIELDS = frozenset({"stream", "safety_identifier"})
 _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
@@ -6946,7 +6949,8 @@ class CodexResponsesConversationModel:
                 body = connection.read_rest(_MAX_RESPONSES_BODY_BYTES)
                 raise failure("http_error", "websocket_handshake", http_status=connection.status,
                               response=_decode_provider_response(body), body=body, headers=connection.headers)
-            message = {"type": "response.create", **{k: v for k, v in request_payload.items() if k != "stream"}}
+            message = {"type": "response.create", **{k: v for k, v in request_payload.items()
+                                                     if k not in _RESPONSES_WEBSOCKET_OMITTED_FIELDS}}
             try:
                 connection.send_text(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
             except OSError as exc:
