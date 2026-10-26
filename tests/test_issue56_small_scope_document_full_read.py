@@ -140,17 +140,101 @@ class SmallScopeDocumentFullReadTests(unittest.TestCase):
 
     def test_all_90_paragraphs_are_presented_before_answer_with_native_citations(self):
         text = "\n\n".join(f"Section {index}. " + "全文內容" * 60 for index in range(90))
-        result, _, _ = self.run_lookup(text)
+        result, fixture, _ = self.run_lookup(text)
         compact = orchestrator.compact_evidence_for_model(result)
         self.assertEqual(len(compact["evidence"]), 90)
         self.assertEqual(compact["citations"], result["citations"])
         self.assertGreater(len(compact["evidence_batch_ends"]), 1)
         self.assertEqual(compact["evidence_batch_ends"][-1], 90)
         self.assertTrue(self.recovery(compact)["model_read_complete"])
+        self.assertEqual(self.recovery(compact)["paragraph_count"], 90)
+        expected_characters = sum(len(unicodedata.normalize("NFC", item.text or item.caption or ""))
+                                  for item in fixture.observations)
+        self.assertEqual(self.recovery(compact)["character_count"], expected_characters)
         self.assertEqual(orchestrator.compact_evidence_for_model(compact), compact)
         self.assertIn("已讀完全部 1 份文件", compact["full_read_scope_summary"])
+        self.assertIn("此文件範圍已全部提供，沒有未查證的其餘範圍", compact["full_read_scope_summary"])
         self.assertEqual("".join(item["snippet"] for item in compact["evidence"]),
                          "".join(item["snippet"] for item in result["evidence"]))
+
+    def test_full_read_typed_notes_scope_and_suppress_only_remainder(self):
+        fields = ["目前的工作狀態", "已完成事項", "下一步行動"]
+        request = orchestrator.UatEvidenceToolRequest(
+            query_text="summarize the requested documents",
+            request_contract={
+                "original_query_hash": sha256_json("summarize documents"),
+                "query_class": "evidence_lookup",
+                "source_family_scope": ["document_text"],
+                "requested_fields": fields,
+                "maximum_claim_strength": "cited_evidence",
+            },
+        )
+        citations = ["sha256:" + f"{index:064x}" for index in range(90)]
+        presented = {
+            "status": "ok", "coverage_status": "incomplete", "citations": citations,
+            "evidence": [{
+                "citation_hash": citation, "snippet": "bounded document paragraph",
+                "document_locator": {"line_start": index + 1, "line_end": index + 1},
+                "revision_binding": "sha256:" + "a" * 64,
+            } for index, citation in enumerate(citations)],
+            "evidence_batch_ends": [90],
+            "full_read_scope_summary": "complete bounded document scope",
+            "query_agent": {"context_bundle": {"source_recovery": {
+                "mode": "small_scope_full_read", "scan_complete": True,
+                "model_read_complete": True, "source_family_scope": ["document_text"],
+                "document_count": 2, "paragraph_count": 90,
+                "character_count": 18_907,
+            }}},
+        }
+        payload = {
+            "response_kind": "answer", "answer_text": "Cited summary.",
+            "display_format": "narrative", "citation_ids": [citations[0]],
+            "coverage_status": "incomplete", "coverage_note": "",
+            "field_limitations": [
+                {"field_index": 0, "reason": "not_established",
+                 "scope": "unverified_requested_remainder"},
+                {"field_index": 1, "reason": "not_established",
+                 "scope": "unverified_requested_remainder"},
+                {"field_index": 2, "reason": "ambiguous", "scope": "presented_evidence"},
+            ],
+        }
+        rendered = orchestrator._render_typed_evidence_notes(payload, request, [presented])
+        note = rendered["coverage_note"]
+        self.assertIn("檢索涵蓋範圍：已完整讀取指定文件範圍（2 份文件、90 段）；不代表整個工作區。", note)
+        self.assertNotIn("不完整", note)
+        self.assertNotIn("尚未查證的其餘請求範圍", note)
+        self.assertEqual(note.count("已讀完全部"), 0)
+        self.assertIn("尚無伺服器結構化支持佐證的欄位", note)
+        self.assertIn("已提供證據內的判讀", note)
+        self.assertEqual(rendered["coverage_status"], "incomplete")
+
+    def test_non_full_read_typed_note_remains_verbatim(self):
+        fields = ["status", "next step"]
+        request = orchestrator.UatEvidenceToolRequest(
+            query_text="summarize source", request_contract={
+                "original_query_hash": sha256_json("summarize source"),
+                "query_class": "evidence_lookup", "source_family_scope": ["document_text"],
+                "requested_fields": fields, "maximum_claim_strength": "cited_evidence",
+            },
+        )
+        presented = {"status": "partial", "coverage_status": "incomplete", "citations": ["sha256:" + "b" * 64]}
+        payload = {
+            "response_kind": "answer", "answer_text": "A supported subset.",
+            "display_format": "narrative", "citation_ids": ["sha256:" + "b" * 64],
+            "coverage_status": "incomplete", "coverage_note": "",
+            "field_limitations": [{
+                "field_index": 0, "reason": "not_established",
+                "scope": "unverified_requested_remainder",
+            }],
+        }
+        rendered = orchestrator._render_typed_evidence_notes(payload, request, [presented])
+        self.assertEqual(rendered["coverage_note"], (
+            "檢索涵蓋範圍：不完整（僅依已提供的受治理中繼資料判定）。 "
+            "尚無伺服器結構化支持佐證的欄位：status；next step。這不表示來源未載明相關事實或與答案矛盾。 "
+            "模型判讀的不確定性（非伺服器驗證）—status：僅就尚未查證的其餘請求範圍，無法確立；"
+            "此項限制不否定已引用範圍的陳述，也不宣稱其他資料存在。 "
+            "未列為模型不確定項目，不代表已通過欄位支持驗證。"
+        ))
 
     def test_finalization_renders_whole_document_scope_disclosure(self):
         from formowl_gateway.remote import build_remote_tool_descriptors
@@ -184,7 +268,11 @@ class SmallScopeDocumentFullReadTests(unittest.TestCase):
             )
         self.assertEqual(provider.call_count, 2)
         self.assertEqual(outcome.response_kind, "answer")
-        self.assertIn("已讀完全部 1 份文件。", outcome.coverage_note)
+        self.assertIn(
+            "檢索涵蓋範圍：已完整讀取指定文件範圍（1 份文件、2 段）；不代表整個工作區。",
+            outcome.coverage_note,
+        )
+        self.assertNotIn("已讀完全部", outcome.coverage_note)
         self.assertEqual(outcome.citation_ids, (citation,))
 
     def test_paragraph_cap_preserves_the_existing_split_route(self):

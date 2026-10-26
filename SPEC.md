@@ -1474,6 +1474,10 @@ document counts. The visible answer discloses that all N authorized documents
 were read; any absence statement is restricted to this completely read document
 scope. This direct-source fallback is not ontology-aware evidence and does not
 change the mail-only generic-source-family term rule.
+For a verified `small_scope_full_read`, the typed coverage note uses the fixed
+sentence `檢索涵蓋範圍：已完整讀取指定文件範圍（N 份文件、M 段）；不代表整個工作區。`
+and omits any `unverified_requested_remainder` note within that fully presented
+scope. Missing structured field support may still keep the answer status incomplete.
 
 **Private server-bound term placement — R47 diagnostic deployed / 待測, not general source-fix acceptance.**
 [Frozen impl-r3 peer](.formowl/uat-weekend-20261016/ops/reviewer-anscombe-term-placement-r41-r3-safe.json) and R47 integration bind this narrow exception to flat same-item AND.
