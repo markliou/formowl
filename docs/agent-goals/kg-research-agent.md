@@ -1,5 +1,14 @@
 # Knowledge Graph Research Agent Goal
 
+## 2026-10-27 AM phase1 / partial latest evidence、待審查
+Prior full-token SQL has proved recall regression; its latest acceptance is withdrawn.
+Per-term antichains retain guarded original matching and500ms/caps. Two no-model
+original-record requests:25candidates/10matched/66reads, only1mail/2citations presented;
+selected Date2026-01-08. Always partial; tokenizer omissions remain disclosed.
+Pre-ties7focused＋handoff1PASS; final same-Date diagnostic separately verified.
+Authority blocked, worker actual tier unverified; no live/model/web acceptance or deploy/commit.
+Report: `/tmp/herdr-bus/codex-to-claude-workorder-20261026am-phase1.md`.
+
 ## 2026-10-26 AL annotation preparation / 待審查、AL5 gated
 AL1–4 prepared in existing reader/annotation owners: explicit subject quotes,
 whole-Observation grouping, pinned resume/dynamic lanes, new-host setup plan,

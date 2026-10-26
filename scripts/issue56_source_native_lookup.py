@@ -17,6 +17,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 for import_root in (ROOT, ROOT / "python"):
@@ -32,7 +33,9 @@ from formowl_mail.issue56_sealed_source import (  # noqa: E402
     SourceNativeLexicalLookup,
     _authorized_ingestion_root_source_kinds,
     load_issue56_ingestion_revision,
+    _mail_message_date_value,
 )
+from formowl_mail.query import source_occurrence_lineage_from_observation  # noqa: E402
 from formowl_mail.semantic_plan import (  # noqa: E402
     AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND, AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND,
 )
@@ -79,6 +82,121 @@ CREATE INDEX IF NOT EXISTS occurrence_helpers_binding ON occurrence_helpers(
 """
 TOKEN_SURFACE_POLICY_ID = "source_matcher_mail_fields_text_caption_attachment_text_v2"
 ATTACHMENT_PARENT_POLICY_ID = "sealed_attachment_parent_helpers_v1"
+MAIL_DATE_SCHEMA = """
+CREATE TABLE mail_message_dates (
+ job_index INTEGER NOT NULL, job_fingerprint TEXT NOT NULL, source_scope_id TEXT NOT NULL,
+ asset_id TEXT NOT NULL, extractor_run_id TEXT NOT NULL, occurrence_id TEXT NOT NULL,
+ message_observation_hash TEXT NOT NULL UNIQUE, sent_at_utc TEXT, parse_status TEXT NOT NULL,
+ PRIMARY KEY (job_index, asset_id, extractor_run_id, occurrence_id)
+);
+CREATE INDEX mail_message_dates_order ON mail_message_dates(parse_status, sent_at_utc DESC);
+"""
+
+
+def _extend_mail_message_dates(*, revision, expected, base_directory, output_directory):
+    """Extend an independent sealed copy; hydrate ONLY native email_message refs.
+
+    Staging is deliberately retained on failure. No Cache cleanup is implicit.
+    """
+    if output_directory.exists() or output_directory.is_symlink():
+        lookup = SourceNativeLexicalLookup(directory=output_directory, **expected)
+        try:
+            if not lookup.has_mail_message_dates:
+                raise ContractValidationError("mail date extension requires a date-policy artifact")
+            return {"status": "reused", "mail_date_count": lookup.manifest["mail_date_count"],
+                    "mail_date_status_counts": dict(lookup.manifest["mail_date_status_counts"])}
+        finally:
+            lookup.close()
+    if output_directory.resolve().is_relative_to(base_directory.resolve()):
+        raise ContractValidationError("mail date output must be separate from its sealed input")
+    state = _sealed_lookup_state(base_directory)
+    base = SourceNativeLexicalLookup(directory=base_directory, **expected)
+    stage_parent = None
+    started = time.monotonic()
+    try:
+        if (not base.has_keyed_source_metadata or base.has_mail_message_dates
+                or base.manifest.get("token_surface_policy_id") != TOKEN_SURFACE_POLICY_ID):
+            raise ContractValidationError("mail date extension requires a sealed legacy locator artifact")
+        stage_parent = Path(tempfile.mkdtemp(prefix=".mail-message-dates-", dir=output_directory.parent))
+        staged = stage_parent / "artifact"
+        staged.mkdir(mode=0o700)
+        sqlite_path = staged / "source-lookup.sqlite"
+        original_hash = _file_sha256(base_directory / "source-lookup.sqlite")
+        if original_hash != base.manifest["sqlite_sha256"]:
+            raise ContractValidationError("mail date input changed before copy")
+        shutil.copyfile(base_directory / "source-lookup.sqlite", sqlite_path)
+        sqlite_path.chmod(0o600)
+        if (sqlite_path.stat().st_ino == (base_directory / "source-lookup.sqlite").stat().st_ino
+                and sqlite_path.stat().st_dev == (base_directory / "source-lookup.sqlite").stat().st_dev
+                or _file_sha256(sqlite_path) != original_hash
+                or state != _sealed_lookup_state(base_directory)):
+            raise ContractValidationError("mail date copy is not an unchanged independent artifact")
+        statuses = dict.fromkeys(("ok", "missing", "naive", "unparseable"), 0)
+        reads = 0
+        connection = sqlite3.connect(sqlite_path)
+        try:
+            connection.executescript(MAIL_DATE_SCHEMA)
+            rows = base._connection.execute(
+                "SELECT o.observation_hash, o.job_index, o.asset_id, o.extractor_run_id, o.occurrence_id "
+                "FROM occurrence_helpers o WHERE o.observation_type = 'email_message' "
+                "ORDER BY o.job_index, o.observation_hash")
+            read_started = time.monotonic()
+            for key, job_index, asset_id, run_id, occurrence_id in rows:
+                helper = base.helper_for_hash(key)
+                if helper is None:
+                    raise ContractValidationError("mail date parent helper is missing")
+                authority = revision.source_records._authority_for_helper(helper)
+                observation = authority.load_indexed_observation(
+                    helper["observation_id"], expected_observation_hash=key,
+                    expected_job_fingerprint=authority.job_fingerprint)
+                reads += 1
+                if (observation.modality != "mail" or observation.observation_type != "email_message"
+                        or observation.asset_id != authority.asset.asset_id
+                        or (asset_id, run_id, occurrence_id) != (observation.asset_id, observation.extractor_run_id,
+                            (observation.location or {}).get("message_occurrence_id"))
+                        or helper["reference"]["job_index"] != job_index
+                        or AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND not in _authorized_ingestion_root_source_kinds(authority)):
+                    raise ContractValidationError("mail date source occurrence binding mismatch")
+                source_occurrence_lineage_from_observation(observation, authorized_source=revision.authorized_source)
+                date, status = _mail_message_date_value((observation.payload or {}).get("sent_at"))
+                connection.execute("INSERT INTO mail_message_dates VALUES (?,?,?,?,?,?,?,?,?)", (
+                    job_index, authority.job_fingerprint, helper["source_scope_id"], asset_id, run_id,
+                    occurrence_id, key, date, status))
+                statuses[status] += 1
+                if reads % 1024 == 0:
+                    connection.commit()
+                    print(json.dumps({"mail_date_reads": reads, "read_seconds": round(time.monotonic() - read_started, 3)}), flush=True)
+            connection.commit()
+            read_seconds = time.monotonic() - read_started
+        finally:
+            connection.close()
+        if (state != _sealed_lookup_state(base_directory)
+                or _file_sha256(base_directory / "source-lookup.sqlite") != original_hash):
+            raise ContractValidationError("mail date source artifact changed during extension")
+        core = {key: value for key, value in base.manifest.items() if key != "manifest_fingerprint"}
+        core.update(schema_version=2, mail_date_policy_id=SourceNativeLexicalLookup.MAIL_DATE_POLICY_ID,
+                    mail_date_count=reads, mail_date_status_counts=statuses,
+                    lexical_build_mode="offline_mail_message_dates", base_lexical_manifest_fingerprint=base.manifest["manifest_fingerprint"],
+                    sqlite_sha256=_file_sha256(sqlite_path))
+        with sqlite_path.open("rb") as stream:
+            os.fsync(stream.fileno())
+        _write_file_exclusive(staged / "source-lookup-manifest.json", json.dumps({
+            **core, "manifest_fingerprint": sha256_json(core)}, sort_keys=True, separators=(",", ":")).encode())
+        validated = SourceNativeLexicalLookup(directory=staged, **expected)
+        validated.close()
+        _fsync_directory(staged)
+        _rename_directory_no_replace(staged, output_directory)
+        _fsync_directory(output_directory.parent)
+        return {"status": "created", "mail_date_count": reads, "mail_date_status_counts": statuses,
+                "date_read_seconds": round(read_seconds, 6), "total_seconds": round(time.monotonic() - started, 6),
+                "source_sqlite_sha256_unchanged": original_hash, "counts": dict(core["counts"])}
+    except BaseException as exc:
+        if stage_parent is not None:
+            _write_file_exclusive(stage_parent / "failure.json", json.dumps({
+                "error_type": type(exc).__name__, "filename": getattr(exc, "filename", None)}, sort_keys=True).encode())
+        raise
+    finally:
+        base.close()
 
 
 def _file_sha256(path: Path) -> str:
@@ -192,7 +310,8 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
                  output_directory: Path, base_lookup_directory: Path | None = None,
                  seed_preparation_directory: Path | None = None,
                  seed_expected_revision_sha256: str | None = None,
-                 seed_job_prefix_count: int | None = None) -> dict:
+                 seed_job_prefix_count: int | None = None,
+                 mail_message_dates_only: bool = False) -> dict:
     """Seed only an explicit unchanged job prefix; replace old suffix offline.
 
     Without seed arguments, base_lookup_directory retains its same-revision
@@ -205,6 +324,8 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
     if seeding and (base_lookup_directory is None or seed_preparation_directory is None
                     or seed_expected_revision_sha256 is None or seed_job_prefix_count is None):
         raise ContractValidationError("source seed requires preparation, pin, lookup and job prefix count")
+    if mail_message_dates_only and (seeding or base_lookup_directory is None):
+        raise ContractValidationError("mail date extension requires a same-revision sealed base")
     if seeding:
         if output_directory.exists() or output_directory.is_symlink():
             raise ContractValidationError("source seed requires a new output directory")
@@ -221,6 +342,9 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
     try:
         profile = load_issue56_target_mail_tokenizer_profile()
         expected = _lookup_expected(revision, profile)
+        if mail_message_dates_only:
+            return _extend_mail_message_dates(revision=revision, expected=expected,
+                base_directory=base_lookup_directory, output_directory=output_directory)
         if output_directory.exists() or output_directory.is_symlink():
             lookup = SourceNativeLexicalLookup(directory=output_directory, **expected)
             try:
@@ -492,13 +616,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed-preparation-directory", type=Path, help="Separately validated OLD source preparation for offline prefix seeding")
     parser.add_argument("--seed-expected-revision-sha256", help="Operator-pinned OLD preparation byte hash")
     parser.add_argument("--seed-job-prefix-count", type=int, help="Exact unchanged leading job count to retain; discard old suffix and tokenize new suffix offline")
+    parser.add_argument("--mail-message-dates-only", action="store_true", help="Copy a sealed same-revision base and read only email_message Observations for date schema v2")
     args = parser.parse_args(argv)
     try:
         result = build_lookup(directory=args.directory, expected_revision_sha256=args.expected_revision_sha256,
                               output_directory=args.output_directory, base_lookup_directory=args.base_lookup_directory,
                               seed_preparation_directory=args.seed_preparation_directory,
                               seed_expected_revision_sha256=args.seed_expected_revision_sha256,
-                              seed_job_prefix_count=args.seed_job_prefix_count)
+                              seed_job_prefix_count=args.seed_job_prefix_count,
+                              mail_message_dates_only=args.mail_message_dates_only)
     except (ContractValidationError, Issue56SealedSourceLoadError,
             SourceIdentifierCandidateError, OSError, sqlite3.Error):
         print(json.dumps({"status": "rejected"}))

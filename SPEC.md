@@ -1479,6 +1479,53 @@ sentence `檢索涵蓋範圍：已完整讀取指定文件範圍（N 份文件�
 and omits any `unverified_requested_remainder` note within that fully presented
 scope. Missing structured field support may still keep the answer status incomplete.
 
+**2026-10-26 validated mail Date-priority enumeration — 待測.**
+An explicit positive latest/recent-mail evidence request with nonempty frozen,
+original-grounded `required_terms` may bypass only the ordinary hash-prefix
+shortlist. No reviewed/protected identity is additionally required. The existing
+source-lookup artifact may have an offline schema-v2 version with guarded native
+`email_message` Dates keyed by full job/scope/asset/run/occurrence identity, UTC
+normalization and `ok/missing/naive/unparseable` status. Build only an independent
+new copy, revalidate/reseal its manifest/hash, and retain the old artifact read-only;
+no live rebuild or replacement index. Schema-v1 ordinary lookup stays compatible
+but cannot establish this date-policy claim.
+Within one authorized request, remove a token only when it contains another
+distinct token from the same frozen required-term group; every group retains a
+nonempty substring antichain. Never weaken one term using another term's tokens.
+SQL intersects the retained tokens within that same full occurrence, joins the sealed
+message Dates, computes complete candidate/unknown-Date counts and orders known
+UTC Dates descending across all applicable selectors. No Python8192 candidate
+prefix is applied. Missing date metadata is unknown, never newest. Read candidates
+in order through the unchanged guarded full-AND matcher until k matching messages
+or the original budget is exhausted; body/header citation items are not extra
+messages. Selected parents' source hashes and Dates must still match the sealed
+date metadata. Every newer candidate must be validated and rejected before a later
+match may be selected. Count completed rejected candidates and those strictly
+newer than the first validated match separately; same-Date rejections count only
+in the total. Stop at k verified messages; remaining
+known-Date candidates are then older, not unvalidated newer mail. A budget stop
+before the first verified match must disclose any unfinished/unread newer
+candidate; unknown Dates remain a separate limitation. An unpresentable newer
+match cannot be skipped in favor of an older selected match. Final compaction must retain its whole citation
+group. Attachments and embedded/cross-run children remain outside this native claim.
+SQL counts/order and candidate/parent validation share one absolute `500 ms` /
+`8192` source-read phase, at most `128` evidence items and the full `16 KiB`
+envelope. Preserve permissions, lineage, revisions, frozen terms, ALL-fields
+eligibility, native/exact exclusions and existing recheck/call caps. A timeout
+before complete SQL counts leaves counts unknown, not zero or a complete total.
+This route always remains partial. With a retained verified selected group and
+known Date, the strongest allowed wording is
+`在已查到並驗證的相符郵件中，日期最新的一封`.
+Explicitly disclose that index segmentation can omit mail and does not guarantee
+the latest message in the whole mailbox. SQL completeness must never establish
+`latest_claim_verified` or substring-predicate recall. Include candidate unknown-Date
+counts (unknown if SQL did not finish), rejected/unfinished/unread candidate counts
+and the stop reason. Tokens do not establish substring recall, extraction/source
+or semantic completeness. Unknown Dates, token/locator gaps, timeout/cap before
+needed validation or loss of the selected group retain partial evidence only.
+Outer Date never proves a newly authored assertion or business event time, complete
+timeline, source total or negative. The §7.5 exact occurrence provider stays unresolved.
+
 **Private server-bound term placement — R47 diagnostic deployed / 待測, not general source-fix acceptance.**
 [Frozen impl-r3 peer](.formowl/uat-weekend-20261016/ops/reviewer-anscombe-term-placement-r41-r3-safe.json) and R47 integration bind this narrow exception to flat same-item AND.
 [Occurrence4 limited browser/source proof](.formowl/uat-weekend-20261016/ops/browser-occurrence-r47-manual-review-safe.json) does not prove general recall or completeness;

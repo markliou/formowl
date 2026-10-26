@@ -20,6 +20,214 @@ from formowl_retrieval.gateway import _SourcePhaseTrace, _SOURCE_PHASE_TRACE, _s
 from scripts.issue56_source_native_lookup import build_lookup
 
 
+class MailDatePriorityTests(unittest.TestCase):
+    def prepare_recent(self, dates, *, second_dates=None, identifier="Clienta", topic="甲社", bodies=None):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        original = json.dumps
+        archive_count = [0]
+
+        def archive(value, *args, **kwargs):
+            if isinstance(value, dict) and value.get("archive_id") == "archive_source_start":
+                template = value["messages"][0]
+                current_dates = second_dates if archive_count[0] and second_dates is not None else dates
+                archive_count[0] += 1
+                value = {**value, "messages": [
+                    {**template, "message_id": f"<clienta-{i}@example.test>",
+                     "sent_at": date, "body": bodies[i] if bodies is not None else f"{identifier} {topic} status {i}",
+                     "body_hash": sha256_json(bodies[i] if bodies is not None else f"{identifier} {topic} status {i}")}
+                    for i, date in enumerate(current_dates)
+                ]}
+            return original(value, *args, **kwargs)
+
+        with patch.object(fixtures.json, "dumps", side_effect=archive):
+            fixture = fixtures._source_start_preparation_fixture(
+                root, families=("mail", "mail_other") if second_dates is not None else ("mail",))
+        output = root / "lookup"
+        build_lookup(directory=fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
+                     output_directory=output)
+        dated = root / "dated"
+        build_lookup(directory=fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
+                     output_directory=dated, base_lookup_directory=output, mail_message_dates_only=True)
+        for name in ("source-lookup.sqlite", "source-lookup-manifest.json"):
+            shutil.copyfile(dated / name, fixture.directory / name)
+        revision = load_issue56_ingestion_revision(fixture.directory,
+                                                  expected_revision_sha256=fixture.preparation_sha256)
+        self.addCleanup(revision.source_records.runtime_store.close)
+        prompt = f"查詢郵件 {identifier} {topic}的最新進度"
+        arguments = {
+            "query_text": f"{identifier} {topic} status", "required_terms": [identifier, topic],
+            "requester_user_id": loader.APPROVER_ACTOR, "workspace_id": loader.WORKSPACE_ID,
+            "session_id": "synthetic-recency", "page_size": 4,
+            "request_contract": {"original_query_hash": "sha256:" + __import__("hashlib").sha256(prompt.encode()).hexdigest(),
+                                 "query_class": "evidence_lookup", "source_family_scope": ["mail"],
+                                 "requested_fields": ["status"], "maximum_claim_strength": "cited_evidence"},
+        }
+        return revision, prompt, arguments
+
+    def run_recent(self, revision, prompt, arguments):
+        from formowl_mail.issue56_sealed_source import bind_mail_date_priority, mail_date_priority_scope
+        public = {key: value for key, value in arguments.items()
+                  if key not in {"requester_user_id", "workspace_id", "session_id"}}
+        binding = bind_mail_date_priority(user_text=prompt, arguments=public,
+                                         tool_name="query_effective_graph_view")
+        self.assertIsNotNone(binding)
+        with mail_date_priority_scope(binding):
+            return loader._build_source_start_semantic_handler(revision, mail_tool=False)(arguments)
+
+    def test_final_provider_evidence_is_newest_and_unknown_date_blocks_latest_claim(self):
+        revision, prompt, arguments = self.prepare_recent([
+            "2026-01-01T00:00:00+00:00", "2026-01-02T01:00:00+09:00", "2026-01-01T23:00:00+00:00",
+        ], identifier="ACME-421")
+        result = self.run_recent(revision, prompt, arguments)
+        recovery = result["query_agent"]["context_bundle"]["source_recovery"]
+        date = recovery["mail_date_priority"]
+        self.assertTrue(date["sql_complete"])
+        self.assertEqual(date["matching_occurrence_count"], 3)
+        self.assertEqual(date["selected_date"], "2026-01-01T23:00:00.000000+00:00")
+        self.assertEqual(result["evidence"][0]["mail_date_priority"]["outer_message_date"], date["selected_date"])
+        self.assertIn("status 2", result["evidence"][0]["snippet"])
+        self.assertFalse(date["predicate_coverage_verified"])
+        self.assertFalse(date["latest_claim_verified"])
+        self.assertEqual(date["claim_scope"], "在已查到並驗證的相符郵件中，日期最新的一封")
+        self.assertIn("索引分詞可能漏掉郵件", date["coverage_note"])
+        self.assertEqual(result["status"], "partial")
+        self.assertFalse(date["authored_event_time_verified"])
+        from formowl_mail.human_uat_orchestrator import compact_evidence_for_model
+        compact = compact_evidence_for_model(result)
+        self.assertLessEqual(len(json.dumps(compact, ensure_ascii=False, separators=(",", ":")).encode()), 16 * 1024)
+        self.assertEqual(compact["evidence"][0]["citation_hash"], result["evidence"][0]["citation_hash"])
+        self.assertIn(date["selected_parent_citation_hash"], compact["citations"])
+        self.assertIn("索引分詞可能漏掉郵件", compact["evidence"][0]["snippet"])
+        arguments["page_size"] = 1  # An intact body+header group cannot fit.
+        result = self.run_recent(revision, prompt, arguments)
+        final = result["query_agent"]["context_bundle"]["source_recovery"]["mail_date_priority"]
+        self.assertFalse(final["latest_claim_verified"])
+        self.assertFalse(final["selected_message_presented"])
+        self.assertIsNone(final["selected_date"])
+
+    def test_context_token_antichain_recovers_literal_match_and_rejects_newer_nonmatch(self):
+        from formowl_core import load_issue56_target_mail_tokenizer_profile
+        from formowl_contract import stable_resource_contract_id
+        from formowl_mail.query import _source_mail_observation_match
+        # The fixture occurrence ID excludes body/Date. Put a same-Date
+        # rejection before the matching body in its deterministic tie order.
+        order = [stable_resource_contract_id("mailocc", "MailMessageOccurrence", {
+            "archive_id": "archive_source_start", "mailbox_id": "mailbox_source_start",
+            "folder_path_hash": sha256_json("inbox"), "message_id": f"<clienta-{i}@example.test>",
+            "message_index": i + 1,
+        }) for i in range(2)]
+        matching_index = max(range(2), key=lambda i: order[i])
+        bodies = ["Clienta 甲社標籤 別項籤機 status" for _ in range(3)]
+        bodies[matching_index] = "Clienta 甲社標籤機 status"
+        revision, prompt, arguments = self.prepare_recent(
+            ["2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00", "2026-01-02T00:00:00+00:00"],
+            topic="甲社標籤機", bodies=bodies)
+        arguments["required_terms"] = ["Clienta", "標籤機"]
+        profile = load_issue56_target_mail_tokenizer_profile()
+        self.assertIn("標籤機", profile.analyze("標籤機").tokens)
+        lookup = revision.source_records.runtime_store
+        bodies = lookup._connection.execute(
+            "SELECT observation_hash FROM occurrence_helpers WHERE observation_type='email_body_segment'").fetchall()
+        matched = []
+        for (key,) in bodies:
+            helper = lookup.helper_for_hash(key)
+            authority = revision.source_records._authority_for_helper(helper)
+            item = authority.load_indexed_observation(helper["observation_id"], expected_observation_hash=key,
+                                                       expected_job_fingerprint=authority.job_fingerprint)
+            present = {row[0] for row in lookup._connection.execute(
+                "SELECT token FROM postings WHERE observation_hash=?", (key,))}
+            self.assertNotIn("標籤機", present)
+            self.assertTrue({"標籤", "籤機"}.issubset(present))
+            matched.append(_source_mail_observation_match(
+                item, query_terms=set(), required_terms=("clienta", "標籤機"),
+                protected_query_tokens=set(), tokenizer_profile=profile) is not None)
+        self.assertEqual(sorted(matched), [False, False, True])
+        result = self.run_recent(revision, prompt, arguments)
+        date = result["query_agent"]["context_bundle"]["source_recovery"]["mail_date_priority"]
+        self.assertEqual(date["candidate_occurrence_count"], 3)
+        self.assertEqual(date["matching_occurrence_count"], 1)
+        self.assertEqual(date["rejected_candidate_count"], 2)
+        self.assertEqual(date["rejected_newer_count"], 1)
+        self.assertEqual(date["selected_date"], "2026-01-01T00:00:00.000000+00:00")
+        self.assertFalse(date["newer_candidates_unvalidated"])
+        self.assertIn("甲社標籤機", result["evidence"][0]["snippet"])
+        self.assertFalse(date["latest_claim_verified"])
+        self.assertEqual(result["status"], "partial")
+
+    def test_all_authorized_selectors_share_one_inventory_and_date_sort(self):
+        revision, prompt, arguments = self.prepare_recent(
+            ["2026-01-01T00:00:00+00:00", "2026-01-02T00:00:00+00:00"], second_dates=["2026-06-01T00:00:00+00:00"])
+        arguments["page_size"] = 2
+        lookup = revision.source_records.runtime_store
+        with patch.object(lookup, "date_ordered_mail_candidates", wraps=lookup.date_ordered_mail_candidates) as enumerate_postings:
+            result = self.run_recent(revision, prompt, arguments)
+        self.assertEqual(enumerate_postings.call_count, 1)
+        final = result["query_agent"]["context_bundle"]["source_recovery"]["mail_date_priority"]
+        self.assertEqual(final["matching_occurrence_count"], 2)
+        self.assertEqual(final["selected_date"], "2026-06-01T00:00:00.000000+00:00")
+        self.assertTrue(final["selected_message_presented"])
+        self.assertEqual(final["unread_known_date_candidate_count"], 1)
+        self.assertFalse(final["newer_candidates_unvalidated"])
+
+    def test_latest_binding_preserves_automatic_exact_budget(self):
+        import hashlib
+        from formowl_mail.issue56_sealed_source import bind_mail_date_priority, mail_date_priority_scope
+        from test_issue56_source_start_exact import SourceStartExactTests
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        _, revision, _, arguments = SourceStartExactTests.prepare(self, inline=True)
+        lookup = loader._IngestionExactCellLookup(revision)
+        revision = replace(revision, reviewed_header_column_hashes=frozenset(
+            item["column_hash"] for item in lookup._columns))
+        handler = loader._build_source_start_semantic_handler(revision, mail_tool=True)
+        arguments.pop("table_query")
+        prompt = "Find latest ITEM-Q73 State and Capacity mail"
+        arguments["query_text"] = prompt
+        arguments["required_terms"] = ["ITEM-Q73"]
+        arguments["request_contract"]["original_query_hash"] = "sha256:" + hashlib.sha256(prompt.encode()).hexdigest()
+        public = {key: value for key, value in arguments.items()
+                  if key not in {"requester_user_id", "workspace_id", "session_id"}}
+        binding = bind_mail_date_priority(user_text=prompt, arguments=public, tool_name="query_mail_evidence")
+        self.assertIsNotNone(binding)
+        budgets = []
+        def exact(*args, **kwargs):
+            budgets.append(kwargs["source_budget"]["deadline"] - loader.time.monotonic())
+            return {"status": "partial", "requested_field_coverage": {"supported_fields": ["State"]}}
+        with mail_date_priority_scope(binding), patch.object(loader, "_execute_source_start_table", side_effect=exact):
+            handler(arguments)
+        self.assertEqual(len(budgets), 1)
+        self.assertGreater(budgets[0], 1.5)
+        self.assertLessEqual(budgets[0], loader.SOURCE_START_EVIDENCE_TIME_BUDGET_MS / 1000)
+
+    def test_unknown_date_and_small_read_cap_are_incomplete_without_new_budget(self):
+        revision, prompt, arguments = self.prepare_recent(["", "2026-01-01T23:00:00+00:00"])
+        result = self.run_recent(revision, prompt, arguments)
+        date = result["query_agent"]["context_bundle"]["source_recovery"]["mail_date_priority"]
+        self.assertEqual(date["unknown_date_count"], 1)
+        self.assertFalse(date["date_inventory_complete"])
+        self.assertFalse(date["latest_claim_verified"])
+        with patch.object(loader, "SOURCE_EVIDENCE_OBSERVATION_LIMIT", 1):
+            result = self.run_recent(revision, prompt, arguments)
+        recovery = result["query_agent"]["context_bundle"]["source_recovery"]
+        self.assertLessEqual(recovery["scan"]["scanned_observation_count"], 1)
+        self.assertFalse(recovery["mail_date_priority"]["latest_claim_verified"])
+        with patch.object(loader, "SOURCE_EVIDENCE_OBSERVATION_LIMIT", 0), patch.object(
+            CompletedIngestionJobAuthority, "load_indexed_observation", side_effect=AssertionError("no reads remain"),
+        ):
+            result = self.run_recent(revision, prompt, arguments)
+        recovery = result["query_agent"]["context_bundle"]["source_recovery"]
+        self.assertEqual(recovery["scan"]["scanned_observation_count"], 0)
+        self.assertFalse(recovery["mail_date_priority"]["date_inventory_complete"])
+        for error in (TimeoutError("source read failed"), OverflowError("source decode failed")):
+            with self.subTest(error=type(error).__name__), patch.object(
+                CompletedIngestionJobAuthority, "load_indexed_observation", side_effect=error,
+            ), self.assertRaises(type(error)):
+                self.run_recent(revision, prompt, arguments)
+
+
 class SourceQueryStabilityTests(unittest.TestCase):
     def prepare(self, families, *, document_text="cerulean"):
         temporary = tempfile.TemporaryDirectory()

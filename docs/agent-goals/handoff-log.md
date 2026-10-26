@@ -1,5 +1,16 @@
 # Agent Handoff Log
 
+## 2026-10-27 AM phase1 / partial latest evidence、待審查
+Full-token latest acceptance withdrawn after guarded2026-01-08 recall counterexample.
+Generic per-term antichain fixes that case without source/index mutation. Independent
+original-record requests each:25candidates/0unknown Dates/10matcher passes/66reads,
+but only1mail(parent+body)/2citations presented; SQL0.068549/0.005482s,
+wall0.202303/0.121759s. Selected2026-01-08; alwayspartial/latest flagfalse.
+Remaining15known-Date candidates are older; OS cache uncontrolled. Pre-ties7focused
+and handoff1PASS; final same-Date rejection-count fix has separate focused proof,
+not a final-byte-exact source replay. Authority blocked/actual tierunverified;
+no live/model/web acceptance, deploy/commit. Report:
+`/tmp/herdr-bus/codex-to-claude-workorder-20261026am-phase1.md`.
 
 ## 2026-10-26 AL / prepared, pending review
 Reader/annotation/setup owner edits and 23 scope plans are prepared; AL5 remains

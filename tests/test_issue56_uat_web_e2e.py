@@ -164,6 +164,45 @@ def _external_provider_acceptance_config(test_case: unittest.TestCase) -> tuple[
     return base_url, api_key
 
 
+class MailDatePriorityHandoffTests(unittest.TestCase):
+    def test_private_binding_crosses_real_testclient_thread_and_is_cleared(self):
+        from starlette.applications import Starlette
+        from starlette.routing import Route
+        from starlette.responses import JSONResponse
+        from formowl_mail.issue56_sealed_source import (
+            _MAIL_DATE_PRIORITY, bind_mail_date_priority, mail_date_priority_scope,
+        )
+        prompt = "查詢郵件 Clienta 最新進度"
+        contract = {"original_query_hash": _sha256_text(prompt), "query_class": "evidence_lookup",
+                    "source_family_scope": ["mail"], "requested_fields": ["status"],
+                    "maximum_claim_strength": "cited_evidence"}
+        request = UatEvidenceToolRequest(tool_name="query_effective_graph_view", query_text="Clienta status",
+                                         required_terms=("clienta",), request_contract=contract)
+        public = uat_runtime_module._mcp_query_request(request)["params"]["arguments"]
+        binding = bind_mail_date_priority(user_text=prompt, arguments=public, tool_name=request.tool_name)
+        self.assertIsNotNone(binding)
+        seen = []
+        async def mcp(request):
+            seen.append(_MAIL_DATE_PRIORITY.get())
+            return JSONResponse({"result": {"structuredContent": {"data": {"status": "pending_review", "citations": []}}}})
+        app = Starlette(routes=[Route("/mcp", mcp, methods=["POST"])])
+
+        service = object.__new__(uat_runtime_module.Issue56UatQueryService)
+        service.request_count = 0
+        service._application = SimpleNamespace(app=app)
+        service._client = None
+        with mail_date_priority_scope(binding):
+            service._call(request, bearer="synthetic", deadline_monotonic=uat_runtime_module.time.monotonic() + 5)
+        self.assertEqual(seen, [binding])
+        self.assertIsNone(_MAIL_DATE_PRIORITY.get())
+        service._call(request, bearer="synthetic", deadline_monotonic=uat_runtime_module.time.monotonic() + 5)
+        self.assertEqual(seen, [binding, None])
+        for original in ("查詢郵件 Clienta 進度", "不要查最新郵件 Clienta", '查詢郵件 Clienta 含有「最新」'):
+            self.assertIsNone(bind_mail_date_priority(user_text=original, arguments=public,
+                                                     tool_name=request.tool_name))
+        self.assertNotIn("mail_date_priority", public)
+
+
 class Issue56UatTerminalTraceTests(unittest.TestCase):
     def _diagnostic(self):
         def snapshot(count):

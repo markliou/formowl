@@ -15,6 +15,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 import hashlib
 import heapq
 import json
@@ -277,6 +278,18 @@ def _authorized_mail_selector_for_asset(asset: Any) -> str | None:
     )
 
 
+def _mail_message_date_value(value):
+    if value is None or value == "":
+        return None, "missing"
+    try:
+        date = datetime.fromisoformat(value)
+        if date.tzinfo is None or date.utcoffset() is None:
+            return None, "naive"
+        return date.astimezone(timezone.utc).isoformat(timespec="microseconds"), "ok"
+    except (TypeError, ValueError, OverflowError):
+        return None, "unparseable"
+
+
 class SourceNativeLexicalLookup:
     """Read-only lexical accelerator bound to one sealed source preparation.
 
@@ -291,6 +304,7 @@ class SourceNativeLexicalLookup:
     ARTIFACT_ID = "formowl_issue56_source_native_lexical_lookup_v1"
     SCHEMA_VERSION = 1
     LOCATOR_POLICY_ID = "sealed_reference_occurrence_locators_v1"
+    MAIL_DATE_POLICY_ID = "guarded_native_message_utc_dates_v1"
 
     def __init__(
         self,
@@ -319,7 +333,7 @@ class SourceNativeLexicalLookup:
             raise ContractValidationError("source lexical lookup manifest fingerprint mismatch")
         if (
             manifest.get("artifact_id") != self.ARTIFACT_ID
-            or manifest.get("schema_version") != self.SCHEMA_VERSION
+            or manifest.get("schema_version") not in (self.SCHEMA_VERSION, 2)
             or manifest.get("source_revision_sha256") != expected_source_revision_sha256
             or manifest.get("snapshot_sha256") != expected_snapshot_sha256
             or manifest.get("source_authority_fingerprint") != expected_source_authority_fingerprint
@@ -390,6 +404,37 @@ class SourceNativeLexicalLookup:
                     }
                     if not required <= indexes:
                         raise ContractValidationError("source keyed locator indexes are invalid")
+            if manifest["schema_version"] == 2:
+                statuses = manifest.get("mail_date_status_counts")
+                if (manifest.get("mail_date_policy_id") != self.MAIL_DATE_POLICY_ID
+                        or locator_policy != self.LOCATOR_POLICY_ID or "mail_message_dates" not in tables
+                        or type(manifest.get("mail_date_count")) is not int or manifest["mail_date_count"] < 0
+                        or not isinstance(statuses, dict) or set(statuses) != {"ok", "missing", "naive", "unparseable"}
+                        or any(type(n) is not int or n < 0 for n in statuses.values())
+                        or sum(statuses.values()) != manifest["mail_date_count"]):
+                    raise ContractValidationError("source mail date policy is invalid")
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(mail_message_dates)")}
+                if columns != {"job_index", "job_fingerprint", "source_scope_id", "asset_id", "extractor_run_id",
+                               "occurrence_id", "message_observation_hash", "sent_at_utc", "parse_status"}:
+                    raise ContractValidationError("source mail date columns are invalid")
+                primary = tuple(row[1] for row in sorted(connection.execute("PRAGMA table_info(mail_message_dates)"), key=lambda row: row[5]) if row[5])
+                if (primary != ("job_index", "asset_id", "extractor_run_id", "occurrence_id")
+                        or connection.execute("SELECT COUNT(*) FROM occurrence_helpers WHERE observation_type='email_message'").fetchone()[0] != manifest["mail_date_count"]
+                        or connection.execute(
+                            "SELECT 1 FROM mail_message_dates d LEFT JOIN occurrence_helpers o ON o.observation_hash=d.message_observation_hash "
+                            "LEFT JOIN helpers h ON h.observation_hash=d.message_observation_hash WHERE o.observation_hash IS NULL "
+                            "OR h.observation_hash IS NULL OR o.observation_type!='email_message' OR o.job_index!=d.job_index "
+                            "OR o.asset_id!=d.asset_id OR o.extractor_run_id!=d.extractor_run_id OR o.occurrence_id!=d.occurrence_id "
+                            "OR h.job_fingerprint!=d.job_fingerprint OR h.source_scope_id!=d.source_scope_id LIMIT 1").fetchone()):
+                    raise ContractValidationError("source mail date occurrence coverage is invalid")
+                actual = dict(connection.execute("SELECT parse_status, COUNT(*) FROM mail_message_dates GROUP BY parse_status"))
+                if (any(actual.get(key, 0) != n for key, n in statuses.items()) or set(actual) - set(statuses)
+                        or connection.execute("SELECT 1 FROM mail_message_dates WHERE "
+                            "(parse_status = 'ok' AND sent_at_utc IS NULL) OR "
+                            "(parse_status != 'ok' AND sent_at_utc IS NOT NULL) LIMIT 1").fetchone()):
+                    raise ContractValidationError("source mail date counts are invalid")
+            elif any(key in manifest for key in ("mail_date_policy_id", "mail_date_count", "mail_date_status_counts")):
+                raise ContractValidationError("source legacy schema cannot claim mail date policy")
         except sqlite3.Error as exc:
             raise ContractValidationError("source lexical lookup artifact is unreadable") from exc
         self.manifest = MappingProxyType({**manifest, "manifest_fingerprint": fingerprint})
@@ -403,6 +448,10 @@ class SourceNativeLexicalLookup:
     @property
     def has_keyed_source_metadata(self) -> bool:
         return self.manifest.get("locator_policy_id") == self.LOCATOR_POLICY_ID
+
+    @property
+    def has_mail_message_dates(self) -> bool:
+        return self.manifest.get("schema_version") == 2 and self.manifest.get("mail_date_policy_id") == self.MAIL_DATE_POLICY_ID
 
     def reference_for_key(
         self, *, observation_id: str | None = None, observation_hash: str | None = None
@@ -743,6 +792,105 @@ class SourceNativeLexicalLookup:
     def close(self) -> None:
         with self._connection_lock:
             self._connection.close()
+
+    @contextmanager
+    def date_ordered_mail_candidates(self, token_groups, *, allowed_jobs, deadline_monotonic, metadata):
+        """Intersect frozen tokens within full native occurrences, then order in SQL.
+
+        Counts cover the indexed token predicate, never substring/source recall.
+        SQL/count/order and guarded reads share the caller's absolute deadline.
+        """
+        metadata.update(sql_complete=False, candidate_occurrence_count=None, unknown_date_count=None,
+                        sql_seconds=0.0, stop_reason=None)
+        if not self.has_mail_message_dates or not token_groups or any(not group for group in token_groups):
+            metadata["stop_reason"] = "mail_date_policy_or_tokens_unavailable"
+            yield iter(())
+            return
+        # Segmentation in a whole body may keep a shorter token but not its
+        # longer query-context variant. Reduce each frozen term independently;
+        # a token from another required term must never weaken that term.
+        tokens = sorted({token for group in token_groups for token in group
+                         if not any(other != token and other in token for other in group)})
+        metadata.update(candidate_token_policy="per_term_substring_antichain_v1",
+                        candidate_token_count=len(tokens))
+        if not allowed_jobs:
+            metadata["stop_reason"] = "mail_date_authorized_scope_unavailable"
+            yield iter(())
+            return
+        started = time.monotonic()
+        query = """
+WITH allowed(job_index,job_fingerprint,source_scope_id,asset_id) AS (VALUES ALLOWED),
+required(token) AS (VALUES REQUIRED),
+seed_token AS MATERIALIZED (
+ SELECT token FROM required r ORDER BY
+  (SELECT COUNT(*) FROM postings p INDEXED BY sqlite_autoindex_postings_1
+   WHERE p.token=r.token AND p.source_family='mail'),token LIMIT 1
+),
+seed_occurrences AS MATERIALIZED (
+ SELECT DISTINCT o.job_index,h.job_fingerprint,h.source_scope_id,o.asset_id,o.extractor_run_id,o.occurrence_id
+ FROM seed_token z CROSS JOIN postings p INDEXED BY sqlite_autoindex_postings_1
+ CROSS JOIN occurrence_helpers o CROSS JOIN helpers h CROSS JOIN allowed a
+ WHERE p.token=z.token AND p.source_family='mail' AND o.observation_hash=p.observation_hash
+ AND h.observation_hash=p.observation_hash AND a.job_index=o.job_index AND a.job_index=h.job_index
+ AND a.job_fingerprint=h.job_fingerprint AND a.source_scope_id=h.source_scope_id AND a.asset_id=o.asset_id
+ AND o.observation_type IN ('email_message','email_header','email_body_segment')
+),
+hits AS (
+ SELECT s.* FROM seed_occurrences s WHERE NOT EXISTS (
+  SELECT 1 FROM required r WHERE NOT EXISTS (
+   SELECT 1 FROM occurrence_helpers o INDEXED BY occurrence_helpers_binding
+   CROSS JOIN postings p INDEXED BY sqlite_autoindex_postings_1 CROSS JOIN helpers h
+   WHERE o.occurrence_id=s.occurrence_id AND o.job_index=s.job_index AND o.asset_id=s.asset_id
+   AND o.extractor_run_id=s.extractor_run_id
+   AND o.observation_type IN ('email_message','email_header','email_body_segment')
+   AND p.token=r.token AND p.source_family='mail' AND p.observation_hash=o.observation_hash
+   AND h.observation_hash=o.observation_hash AND h.job_index=s.job_index
+   AND h.job_fingerprint=s.job_fingerprint AND h.source_scope_id=s.source_scope_id
+  )
+ )
+)
+SELECT h.*,d.message_observation_hash,d.sent_at_utc,d.parse_status,COUNT(*) OVER(),
+ SUM(CASE WHEN d.parse_status='ok' THEN 0 ELSE 1 END) OVER()
+FROM hits h LEFT JOIN mail_message_dates d ON d.job_index=h.job_index
+ AND d.job_fingerprint=h.job_fingerprint AND d.source_scope_id=h.source_scope_id
+ AND d.asset_id=h.asset_id AND d.extractor_run_id=h.extractor_run_id AND d.occurrence_id=h.occurrence_id
+ORDER BY CASE WHEN d.parse_status='ok' THEN 0 ELSE 1 END,d.sent_at_utc DESC,
+ h.job_index,h.asset_id,h.extractor_run_id,h.occurrence_id
+        """.replace("ALLOWED", ",".join("(?,?,?,?)" for _ in allowed_jobs)).replace("REQUIRED", ",".join("(?)" for _ in tokens))
+        params = [value for row in allowed_jobs for value in row] + tokens
+        with self._connection_lock:
+            cursor = None
+            self._connection.set_progress_handler(lambda: int(time.monotonic() >= deadline_monotonic), 1000)
+            try:
+                first = None
+                try:
+                    if time.monotonic() < deadline_monotonic:
+                        cursor = self._connection.execute(query, params)
+                        first = cursor.fetchone()
+                        if time.monotonic() < deadline_monotonic:
+                            metadata.update(sql_complete=True, candidate_occurrence_count=first[-2] if first else 0,
+                                            unknown_date_count=first[-1] if first else 0)
+                    if not metadata["sql_complete"]:
+                        metadata["stop_reason"] = "deadline"
+                except sqlite3.OperationalError as exc:
+                    if "interrupted" not in str(exc).casefold():
+                        raise
+                    metadata["stop_reason"] = "deadline"
+                metadata["sql_seconds"] = round(time.monotonic() - started, 6)
+                self._connection.set_progress_handler(None, 0)
+                def rows():
+                    row = first
+                    while metadata["sql_complete"] and row is not None:
+                        if time.monotonic() >= deadline_monotonic:
+                            metadata["stop_reason"] = "deadline"
+                            return
+                        yield row
+                        row = cursor.fetchone()
+                yield rows()
+            finally:
+                if cursor is not None:
+                    cursor.close()
+                self._connection.set_progress_handler(None, 0)
 
 
 def _attachment_mail_parent_link(observation: Observation) -> Mapping[str, str] | None:
@@ -1385,6 +1533,43 @@ def reviewed_annotation_query_scope(binding):
         _REVIEWED_ANNOTATION_QUERY.reset(token)
 
 
+_MAIL_DATE_PRIORITY: ContextVar[Any] = ContextVar("issue56_private_mail_date_priority", default=None)
+
+
+def bind_mail_date_priority(*, user_text, arguments, tool_name):
+    """Called only after the server has frozen original-grounded required terms."""
+    contract = arguments.get("request_contract") or {}
+    terms = tuple(sorted(unicodedata.normalize("NFKC", t).casefold().strip()
+                         for t in arguments.get("required_terms") or ()))
+    text = unicodedata.normalize("NFKC", user_text).casefold()
+    # Closed positive recency intent; quoted, negated or comparative commands
+    # remain ordinary bounded lookup. No source/customer vocabulary is added.
+    if (not terms or any(not t or t not in text for t in terms)
+            or not re.search(r"最新|最近|\b(?:latest|most recent)\b", text)
+            or re.search(r"[\"'「」『』“”]|不|勿|非|排除|比較|比较|\b(?:not|no|without|except|compare|versus)\b", text)
+            or contract.get("query_class") != "evidence_lookup"
+            or contract.get("source_family_scope") != ["mail"]
+            or contract.get("original_query_hash") != "sha256:" + hashlib.sha256(user_text.encode()).hexdigest()
+            or contract.get("native_locator") is not None
+            or any(arguments.get(key) is not None for key in (
+                "table_query", "exact_inventory_kind", "exact_field", "cursor"))):
+        return None
+    return (contract["original_query_hash"], terms,
+            sha256_json({"name": tool_name, "arguments": arguments}))
+
+
+@contextmanager
+def mail_date_priority_scope(binding):
+    inherited = _MAIL_DATE_PRIORITY.get()
+    if inherited is not None and inherited != binding:
+        raise ContractValidationError("mail date priority binding cannot change")
+    token = _MAIL_DATE_PRIORITY.set(binding)
+    try:
+        yield
+    finally:
+        _MAIL_DATE_PRIORITY.reset(token)
+
+
 class IngestionRevisionSourceRecords:
     """Bounded source access through sealed references and existing job authority.
 
@@ -1488,6 +1673,149 @@ class IngestionRevisionSourceRecords:
         ):
             raise ContractValidationError("indexed ingestion source helper identity is invalid")
         return authority
+
+    def scan_date_ordered_mail(self, *, query_token_groups, max_observations, message_limit, deadline_monotonic,
+                               mail_import_session_id, matcher, observation_callback, metadata):
+        """Read SQL-ordered occurrences until k matched mails or the shared cap.
+
+        Older matches cannot overtake a newer unvalidated/unpresentable match.
+        Index Dates are selectors only; every selected parent is guarded again.
+        """
+        from formowl_retrieval.gateway import _source_occurrence_pair_scope
+        scanned = 0
+        class BudgetStop(Exception):
+            pass
+        cache = {}
+        visited = completed = known_started = 0
+        pending = False
+        pending_known = False
+        last_rejected_date, rejected_at_last_date = None, 0
+        metadata.update(selected_date=None, latest_claim_verified=False, read_message_count=0,
+                        matching_occurrence_count=0, authored_event_time_verified=False,
+                        predicate_coverage_verified=False, literal_recall_verified=False, date_inventory_complete=False,
+                        rejected_candidate_count=0, rejected_newer_count=0)
+        lookup = self.runtime_store
+        if not isinstance(lookup, SourceNativeLexicalLookup):
+            metadata["stop_reason"] = "mail_date_policy_or_tokens_unavailable"
+            return RevisionOwnedMailSourceScan((), 0, False, metadata["stop_reason"])
+        allowed, scopes = [], {}
+        for job_index, authority in enumerate(self.job_authorities):
+            selector = _authorized_mail_selector_for_asset(authority.asset)
+            if (AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND not in _authorized_ingestion_root_source_kinds(authority)
+                    or mail_import_session_id is not None and selector != mail_import_session_id):
+                continue
+            scope = selector or dict(authority.permission_scope)["scope_id"]
+            scopes[job_index] = scope
+            allowed.append((job_index, authority.job_fingerprint, authority.permission_scope["scope_id"], authority.asset.asset_id))
+        def check():
+            if time.monotonic() >= deadline_monotonic:
+                raise BudgetStop("deadline")
+        def load(key, expected_job):
+            nonlocal scanned
+            check()
+            helper = lookup.helper_for_hash(key)
+            if helper is None:
+                raise ContractValidationError("mail date candidate helper is missing")
+            authority = self._authority_for_helper(helper)
+            if helper["reference"]["job_index"] != expected_job:
+                raise ContractValidationError("mail date candidate job mismatch")
+            if key not in cache:
+                if scanned >= max_observations:
+                    raise BudgetStop("observation_limit")
+                scanned += 1
+                cache[key] = authority.load_indexed_observation(
+                    helper["observation_id"], expected_observation_hash=key,
+                    expected_job_fingerprint=authority.job_fingerprint)
+                check()
+            observation = cache[key]
+            source_occurrence_lineage_from_observation(observation, authorized_source=self.authorized_source)
+            return observation, authority
+        try:
+            with lookup.date_ordered_mail_candidates(query_token_groups, allowed_jobs=allowed,
+                    deadline_monotonic=deadline_monotonic, metadata=metadata) as rows:
+                metadata["date_inventory_complete"] = bool(metadata.get("sql_complete") and metadata.get("unknown_date_count") == 0)
+                for row in rows:
+                    job_index, job_fingerprint, permission_scope, asset_id, run_id, occurrence, parent_key, date, status = row[:9]
+                    visited += 1
+                    pending = True
+                    pending_known = status == "ok"
+                    known_started += pending_known
+                    check()
+                    if parent_key is None:
+                        metadata["stop_reason"] = "source_parent_binding_unresolved"
+                        break
+                    parent, authority = load(parent_key, job_index)
+                    metadata["read_message_count"] += 1
+                    if (parent.modality != "mail" or parent.observation_type != "email_message"
+                            or (authority.job_fingerprint, authority.permission_scope["scope_id"], parent.asset_id,
+                                parent.extractor_run_id, (parent.location or {}).get("message_occurrence_id"))
+                            != (job_fingerprint, permission_scope, asset_id, run_id, occurrence)
+                            or _mail_message_date_value((parent.payload or {}).get("sent_at")) != (date, status)):
+                        raise ContractValidationError("mail date metadata differs from guarded parent")
+                    scope = scopes[job_index]
+                    matches = []
+                    keys = lookup._connection.execute(
+                        "SELECT observation_hash FROM occurrence_helpers WHERE job_index=? AND asset_id=? "
+                        "AND extractor_run_id=? AND occurrence_id=? AND observation_type IN "
+                        "('email_message','email_header','email_body_segment') ORDER BY observation_type,observation_hash",
+                        (job_index, asset_id, run_id, occurrence))
+                    for (key,) in keys:
+                        item, item_authority = load(key, job_index)
+                        if (item_authority is not authority or item.asset_id != asset_id or item.extractor_run_id != run_id
+                                or (item.location or {}).get("message_occurrence_id") != occurrence):
+                            raise ContractValidationError("mail date child occurrence binding mismatch")
+                        if matcher(item, parent, scope):
+                            matches.append(item)
+                            break
+                    check()
+                    completed += 1
+                    pending = False
+                    if not matches:
+                        metadata["rejected_candidate_count"] += 1
+                        if metadata["matching_occurrence_count"] == 0 and date is not None:
+                            metadata["rejected_newer_count"] += 1
+                            rejected_at_last_date = rejected_at_last_date + 1 if date == last_rejected_date else 1
+                            last_rejected_date = date
+                        continue  # Every newer indexed candidate was checked by the unchanged matcher.
+                    metadata["matching_occurrence_count"] += 1
+                    metadata["current_date"] = date
+                    if metadata["matching_occurrence_count"] == 1:
+                        if date == last_rejected_date:
+                            metadata["rejected_newer_count"] -= rejected_at_last_date
+                        metadata["selected_date"] = date
+                        metadata["selected_parent_citation_hash"] = parent_key
+                    if not observation_callback(parent, scope):
+                        metadata["stop_reason"] = "callback"
+                        break
+                    failed = False
+                    full_key = (job_fingerprint, run_id, asset_id, scope, occurrence)
+                    for item in matches:
+                        if item is parent:
+                            continue
+                        check()
+                        with _source_occurrence_pair_scope((item, parent, full_key)):
+                            if not observation_callback(item, scope):
+                                metadata["stop_reason"] = "callback"
+                                failed = True
+                                break
+                    if failed:
+                        break
+                    if metadata["matching_occurrence_count"] >= message_limit:
+                        metadata["stop_reason"] = "message_limit"
+                        break
+        except BudgetStop as exc:
+            metadata["stop_reason"] = str(exc)
+        total, unknown = metadata.get("candidate_occurrence_count"), metadata.get("unknown_date_count")
+        metadata.update(completed_candidate_count=completed, unfinished_candidate_count=int(pending),
+                        unread_candidate_count=max(0, total - visited) if total is not None else None,
+                        unread_known_date_candidate_count=max(0, total - unknown - known_started)
+                        if total is not None and unknown is not None else None)
+        metadata["newer_candidates_unvalidated"] = (
+            None if not metadata.get("sql_complete") else
+            False if metadata["matching_occurrence_count"] and metadata["selected_date"] is not None else
+            bool(metadata["unread_known_date_candidate_count"] or pending and pending_known))
+        # This is indexed-token scope only, never source/extraction completeness.
+        return RevisionOwnedMailSourceScan((), scanned, False, metadata.get("stop_reason") or "indexed_token_scope")
 
     def _scan_sealed_authorized_observations(
         self,

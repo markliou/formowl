@@ -1062,6 +1062,129 @@ class SourceNativePrefixSeedTests(unittest.TestCase):
                         manifest_path.write_bytes(valid_manifest)
 
 
+class MailDateSQLTests(unittest.TestCase):
+    def test_occurrence_token_intersection_orders_beyond_8192_without_cross_mail_union(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = sqlite3.connect(root / "source-lookup.sqlite")
+            db.executescript(builder.SCHEMA + builder.LOCATOR_SCHEMA + builder.MAIL_DATE_SCHEMA)
+            fingerprint = "sha256:" + "b" * 64
+            size = 8205
+            for i in range(size + 2):
+                key = sha256_json(i)
+                asset = "asset-b" if i == size + 1 else "asset-a"
+                occurrence = f"clienta-{i}" if i < size else "shared-id"
+                db.execute("INSERT INTO helpers VALUES (?,?,?,?,?,?,?)",
+                           (key, f"obs-{i}", 0, fingerprint, "mail_scope", "{}", "mail"))
+                db.execute("INSERT INTO reference_locators VALUES (?,?,?,?,?)", (key, f"obs-{i}", 0, fingerprint, i))
+                db.execute("INSERT INTO occurrence_helpers VALUES (?,?,?,?,?,?)",
+                           (key, occurrence, 0, asset, "run", "email_message"))
+                terms = ("clienta", "甲社") if i < size else (("clienta",) if i == size else ("甲社",))
+                db.executemany("INSERT INTO postings VALUES (?,?,?)", [(t, "mail", key) for t in terms])
+                date = "2026-02-01T00:00:00.000000+00:00" if i == size - 1 else "2026-01-01T00:00:00.000000+00:00"
+                status = "missing" if i == size - 2 else "ok"
+                db.execute("INSERT INTO mail_message_dates VALUES (?,?,?,?,?,?,?,?,?)",
+                           (0, fingerprint, "mail_scope", asset, "run", occurrence, key,
+                            date if status == "ok" else None, status))
+            # One occurrence needs tokens from two native Observations.
+            # SQL eligibility stays occurrence-based; the source matcher still decides admission.
+            body_key, header_key = sha256_json(0), sha256_json("Clienta split header")
+            db.execute("DELETE FROM postings WHERE token=? AND observation_hash=?", ("甲社", body_key))
+            db.execute("INSERT INTO helpers VALUES (?,?,?,?,?,?,?)",
+                       (header_key, "split-header", 0, fingerprint, "mail_scope", "{}", "mail"))
+            db.execute("INSERT INTO reference_locators VALUES (?,?,?,?,?)", (header_key, "split-header", 0, fingerprint, size + 2))
+            db.execute("INSERT INTO occurrence_helpers VALUES (?,?,?,?,?,?)",
+                       (header_key, "clienta-0", 0, "asset-a", "run", "email_header"))
+            db.execute("INSERT INTO postings VALUES (?,?,?)", ("甲社", "mail", header_key))
+            db.commit()
+            db.close()
+            core = {
+                "artifact_id": SourceNativeLexicalLookup.ARTIFACT_ID, "schema_version": 2,
+                "source_revision_sha256": "sha256:" + "c" * 64, "snapshot_sha256": "sha256:" + "d" * 64,
+                "source_authority_fingerprint": "sha256:" + "e" * 64,
+                "tokenizer_id": "tokenizer-v1", "tokenizer_profile_fingerprint": "sha256:" + "f" * 64,
+                "source_families": ["document_text", "mail"],
+                "counts": {"references": size + 3}, "locator_policy_id": SourceNativeLexicalLookup.LOCATOR_POLICY_ID,
+                "locator_count": size + 3, "mail_date_policy_id": SourceNativeLexicalLookup.MAIL_DATE_POLICY_ID,
+                "mail_date_count": size + 2, "mail_date_status_counts": {"ok": size + 1, "missing": 1, "naive": 0, "unparseable": 0},
+                "sqlite_sha256": _sha256(root / "source-lookup.sqlite"),
+            }
+            (root / "source-lookup-manifest.json").write_text(json.dumps({**core, "manifest_fingerprint": sha256_json(core)}))
+            lookup = SourceNativeLexicalLookup(directory=root,
+                expected_source_revision_sha256=core["source_revision_sha256"], expected_snapshot_sha256=core["snapshot_sha256"],
+                expected_source_authority_fingerprint=core["source_authority_fingerprint"],
+                expected_tokenizer_id="tokenizer-v1", expected_tokenizer_profile_fingerprint=core["tokenizer_profile_fingerprint"])
+            self.addCleanup(lookup.close)
+            allowed = [(0, fingerprint, "mail_scope", "asset-a"), (0, fingerprint, "mail_scope", "asset-b")]
+            metadata = {}
+            with lookup.date_ordered_mail_candidates((("clienta",), ("甲社",)), allowed_jobs=allowed,
+                    deadline_monotonic=time.monotonic() + .5, metadata=metadata) as rows:
+                rows = list(rows)
+            self.assertEqual(len(rows), size)
+            self.assertEqual(metadata["candidate_occurrence_count"], size)
+            self.assertEqual(metadata["unknown_date_count"], 1)
+            self.assertEqual(rows[0][6], sha256_json(size - 1))
+            self.assertTrue(metadata["sql_complete"])
+            self.assertIn(body_key, {row[6] for row in rows})
+            # Drop a redundant longer token only inside its own term group.
+            with lookup.date_ordered_mail_candidates((("clienta", "clienta-long"), ("甲社",)), allowed_jobs=allowed,
+                    deadline_monotonic=time.monotonic() + .5, metadata=metadata) as relaxed:
+                self.assertEqual(len(list(relaxed)), size)
+            with lookup.date_ordered_mail_candidates((("clienta",), ("clienta-long",)), allowed_jobs=allowed,
+                    deadline_monotonic=time.monotonic() + .5, metadata=metadata) as distinct_terms:
+                self.assertEqual(list(distinct_terms), [])
+            self.assertTrue(metadata["sql_complete"])
+            self.assertEqual(metadata["candidate_occurrence_count"], 0)
+            with lookup.date_ordered_mail_candidates((("Clienta-absent",),), allowed_jobs=allowed,
+                    deadline_monotonic=time.monotonic() + .5, metadata=metadata) as absent:
+                self.assertEqual(list(absent), [])
+            self.assertTrue(metadata["sql_complete"])
+            self.assertEqual(metadata["candidate_occurrence_count"], 0)
+            for groups in ((("clienta",), ()), (("clienta",), ("甲社",))):
+                with lookup.date_ordered_mail_candidates(groups, allowed_jobs=allowed,
+                        deadline_monotonic=time.monotonic() + .5 if not all(groups) else 0, metadata=metadata) as rows:
+                    self.assertEqual(list(rows), [])
+                self.assertFalse(metadata["sql_complete"])
+                self.assertIsNone(metadata["candidate_occurrence_count"])
+                self.assertEqual(metadata["stop_reason"], "mail_date_policy_or_tokens_unavailable" if not all(groups) else "deadline")
+            invalid = {key: value for key, value in core.items() if key != "mail_date_policy_id"}
+            (root / "source-lookup-manifest.json").write_text(json.dumps({**invalid, "manifest_fingerprint": sha256_json(invalid)}))
+            with self.assertRaisesRegex(ContractValidationError, "mail date policy"):
+                SourceNativeLexicalLookup(directory=root,
+                    expected_source_revision_sha256=core["source_revision_sha256"], expected_snapshot_sha256=core["snapshot_sha256"],
+                    expected_source_authority_fingerprint=core["source_authority_fingerprint"],
+                    expected_tokenizer_id="tokenizer-v1", expected_tokenizer_profile_fingerprint=core["tokenizer_profile_fingerprint"])
+
+    def test_date_only_extension_reads_only_messages_and_preserves_original_pair(self):
+        from formowl_mail.issue56_sealed_source import _mail_message_date_value
+        for value, expected in (
+            ("2026-01-02T01:00:00+09:00", ("2026-01-01T16:00:00.000000+00:00", "ok")),
+            (None, (None, "missing")), ("2026-01-01T00:00:00", (None, "naive")),
+            ("Clienta unknown date", (None, "unparseable")),
+        ):
+            self.assertEqual(_mail_message_date_value(value), expected)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = _source_start_preparation_fixture(root, families=("mail",))
+            base, dated = root / "base", root / "dated"
+            builder.build_lookup(directory=fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
+                                 output_directory=base)
+            hashes = [_sha256(base / name) for name in ("source-lookup.sqlite", "source-lookup-manifest.json")]
+            reads = []
+            original = CompletedIngestionJobAuthority.load_indexed_observation
+            def guarded(authority, *args, **kwargs):
+                observation = original(authority, *args, **kwargs)
+                reads.append(observation.observation_type)
+                return observation
+            with patch.object(CompletedIngestionJobAuthority, "load_indexed_observation", guarded):
+                result = builder.build_lookup(directory=fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
+                    output_directory=dated, base_lookup_directory=base, mail_message_dates_only=True)
+            self.assertEqual(reads, ["email_message"])
+            self.assertEqual(result["mail_date_status_counts"], {"ok": 1, "missing": 0, "naive": 0, "unparseable": 0})
+            self.assertEqual(hashes, [_sha256(base / name) for name in ("source-lookup.sqlite", "source-lookup-manifest.json")])
+            self.assertNotEqual((base / "source-lookup.sqlite").stat().st_ino, (dated / "source-lookup.sqlite").stat().st_ino)
+
+
 class PersistedSourceLocatorTests(unittest.TestCase):
     class NoEnumeration(list):
         def __iter__(self):

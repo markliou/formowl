@@ -58,6 +58,7 @@ from formowl_mail.semantic_plan import (
 from formowl_mail.issue56_sealed_source import (
     bind_reviewed_annotation_query, current_reviewed_annotation_query_binding,
     reviewed_annotation_query_scope,
+    bind_mail_date_priority, mail_date_priority_scope, _MAIL_DATE_PRIORITY,
 )
 from formowl_retrieval.gateway import (
     source_evidence_deadline_scope, _SourcePhaseTrace, _source_phase_trace_scope, _trace,
@@ -646,6 +647,7 @@ class Issue56UatQueryService:
             if request.required_term_placement is not None else None
         )
         document_read_binding = _SOURCE_DOCUMENT_FULL_READ_REQUEST.get()
+        date_priority_binding = _MAIL_DATE_PRIORITY.get()
         annotation_binding = current_reviewed_annotation_query_binding()
 
         def run_mcp_request() -> None:
@@ -662,7 +664,8 @@ class Issue56UatQueryService:
                     close_client = True
                 with (_source_term_placement_scope(placement_binding),
                       reviewed_annotation_query_scope(annotation_binding),
-                      _source_document_full_read_scope(document_read_binding)):
+                      _source_document_full_read_scope(document_read_binding),
+                      mail_date_priority_scope(date_priority_binding)):
                     response = client.post(
                         "/mcp", headers=mcp_headers(bearer=bearer), json=wire_request,
                     )
@@ -1098,6 +1101,7 @@ class Issue56TemporaryLanQueryService:
                 if request.required_term_placement is not None else None
             )
             document_read_binding = _SOURCE_DOCUMENT_FULL_READ_REQUEST.get()
+            date_priority_binding = _MAIL_DATE_PRIORITY.get()
             annotation_binding = current_reviewed_annotation_query_binding()
 
             def run_mcp_request() -> None:
@@ -1123,7 +1127,8 @@ class Issue56TemporaryLanQueryService:
                     with (source_evidence_deadline_scope(turn_deadline), _source_phase_trace_scope(phase_trace),
                           _source_term_placement_scope(placement_binding),
                           reviewed_annotation_query_scope(annotation_binding),
-                      _source_document_full_read_scope(document_read_binding)):
+                      _source_document_full_read_scope(document_read_binding),
+                      mail_date_priority_scope(date_priority_binding)):
                         response = client.post(
                                 "/mcp",
                                 headers=mcp_headers(bearer=_SYNTHETIC_BEARER),
@@ -1882,8 +1887,12 @@ def _run_gpt_query_agent(
                 and request.exact_field is None and request.cursor is None
             ),
         )
+        date_priority_binding = bind_mail_date_priority(
+            user_text=prompt, arguments=wire_params["arguments"], tool_name=request.tool_name,
+        )
         with (reviewed_annotation_query_scope(annotation_binding),
-              _source_document_full_read_scope(document_read_binding)):
+              _source_document_full_read_scope(document_read_binding),
+              mail_date_priority_scope(date_priority_binding)):
             data = mcp_call(request)
         responses.append(data)
         if len(responses) == 1 and not evidence_citation_ids(data):

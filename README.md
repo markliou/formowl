@@ -8,6 +8,7 @@ spreadsheets/XLSX, tables/databases, images, speech, non-speech audio/music,
 video, and connected business systems. Email is the first diagnostic fixture.
 All adapters enter the same evidence, governance, permission, and query architecture.
 An explicitly requested, sealed complete document-only scope may use bounded full reading after an initial zero-citation lookup (at most 200 paragraphs and 60,000 NFC Unicode characters); this direct-source recovery remains 待測 and does not establish ontology-aware readiness.
+Explicit latest-mail lookup may use per-term token antichains in a sealed source-lookup date version and validate mail in Date order within 500ms / 8192 reads; answers always remain partial because index segmentation may omit mail, and only the newest among found, verified matches may be described (SPEC §7.3.1, 待測).
 
 ## Active Architecture
 

@@ -2156,6 +2156,49 @@ SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS: Final = 200
 SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS: Final = 60_000
 
 
+def _finalize_mail_date_presentation(payload, metadata):
+    """Compaction cannot preserve a latest claim after losing its first group."""
+    evidence = payload.get("evidence", payload.get("evidence_snippets", ()))
+    first = next((item for item in evidence if item.get("mail_date_priority")), None)
+    metadata["selected_message_presented"] = bool(
+        first and first["mail_date_priority"].get("outer_message_date") == metadata.get("selected_date")
+        and metadata.get("selected_parent_citation_hash") in {item.get("citation_hash") for item in evidence})
+    # Complete token SQL never proves recall for the unchanged substring matcher.
+    metadata["latest_claim_verified"] = False
+    if not metadata["selected_message_presented"]:
+        metadata.setdefault("newest_candidate_date", metadata.get("selected_date"))
+        metadata["selected_date"] = None
+    metadata["claim_scope"] = (
+        "在已查到並驗證的相符郵件中，日期最新的一封"
+        if metadata["selected_message_presented"] and metadata.get("selected_date") is not None else
+        "僅限本次保留且已驗證的相符郵件；日期無法完整比較")
+    unknown = metadata.get("unknown_date_count")
+    metadata["coverage_note"] = (
+        "索引分詞可能漏掉郵件，不保證整個信箱最新。"
+        + (f"索引候選中有 {unknown} 封日期未知。" if unknown is not None else "候選日期未知數尚未確定。"))
+    if metadata.get("newer_candidates_unvalidated"):
+        metadata["coverage_note"] += "預算或讀取限制前尚有較新的候選未完成驗證。"
+    if evidence:
+        payload["status"] = "partial"
+        if isinstance(payload.get("answer"), dict):
+            payload["answer"]["status"] = "partial"
+    metadata.pop("current_date", None)
+    # Recovery fingerprints must bind the final presentation decision too.
+    agent = payload.get("query_agent", {})
+    bundle = agent.get("context_bundle", {})
+    recovery = bundle.get("source_recovery", {})
+    if recovery:
+        recovery["status"] = payload.get("status", recovery.get("status"))
+        recovery["mail_date_priority"] = dict(metadata)
+        recovery["recovery_fingerprint"] = sha256_json({key: value for key, value in recovery.items()
+                                                        if key != "recovery_fingerprint"})
+        bundle["bundle_fingerprint"] = sha256_json({key: value for key, value in bundle.items()
+                                                   if key != "bundle_fingerprint"})
+        if isinstance(payload.get("answer"), dict):
+            payload["answer"]["answer_hash"] = sha256_json(recovery)
+    return payload
+
+
 def _build_source_start_semantic_handler(
     revision: Issue56IngestionRevision,
     *,
@@ -2316,6 +2359,20 @@ def _build_source_start_semantic_handler(
             "deadline": time.monotonic() + SOURCE_START_EVIDENCE_TIME_BUDGET_MS / 1000,
             "reads": 0, "evidence": 0, "context_bytes": 0,
         }
+        from formowl_mail.issue56_sealed_source import _MAIL_DATE_PRIORITY
+        date_binding = _MAIL_DATE_PRIORITY.get()
+        date_metadata = {}
+        date_priority = False
+        if date_binding is not None:
+            public = {key: value for key, value in arguments.items()
+                      if key not in {"requester_user_id", "workspace_id", "session_id"}}
+            if (date_binding != (request_contract["original_query_hash"], required_terms,
+                                sha256_json({"name": "query_mail_evidence" if mail_tool else "query_effective_graph_view",
+                                             "arguments": public}))
+                    or query_class != "evidence_lookup" or not required_terms
+                    or request_contract["source_family_scope"] != ["mail"]):
+                raise ContractValidationError("mail date priority request binding is invalid")
+            date_priority = True
         # Runtime scopes the absolute TURN deadline; the read/recheck phase
         # separately retains its bounded UAT cap. Cached presentation does not read.
         presentation_deadline = _SOURCE_EVIDENCE_DEADLINE.get()
@@ -2333,6 +2390,11 @@ def _build_source_start_semantic_handler(
             native_locator is None and placement is None and query_class == "evidence_lookup" and bool(requested_fields) and len(identifier_terms) == 1
             and any(normalize_source_occurrence_structured_surface(field) in applicable_fields for field in requested_fields)
         )
+        if auto_exact:
+            date_priority = False  # Preserve the existing primary native/exact route.
+        if date_priority:
+            # Apply AM's 500ms cap only after excluding primary native/exact.
+            source_budget["deadline"] = min(source_budget["deadline"], time.monotonic() + .5)
         cell = _trace(trace, "phase", "applicability", auto_exact=auto_exact,
                       explicit_exact=table_query is not None, requested_fields=len(requested_fields),
                       hints=len(field_query_hints), query_class=query_class)
@@ -2398,7 +2460,7 @@ def _build_source_start_semantic_handler(
 
         def cache_overflow(item):
             # This seam receives a fully guarded/projected unit, never a source ref.
-            if (auto_exact or deferred or not field_terms or not _ordinary_presentation_unit(item)
+            if (date_priority or auto_exact or deferred or not field_terms or not _ordinary_presentation_unit(item)
                     or time.monotonic() >= source_budget["deadline"]):
                 return
             units = {entry["citation_hash"]: entry for entry in (*admitted_items, *presentation_cache)}
@@ -2555,6 +2617,12 @@ def _build_source_start_semantic_handler(
             # the governed context walk.
             if required_terms and len(required_terms) == 1 and len(protected_terms) > 1:
                 protected_terms = set(required_terms)
+            if date_priority:
+                project.source_lookup_token_groups = tuple(tuple(sorted(set(tokenizer.analyze(term).tokens)))
+                                                          for term in required_terms)
+                project.source_lookup_terms = tuple(sorted({token for group in project.source_lookup_token_groups for token in group}))
+                project.source_lookup_preferred_terms = ()
+                return
             if (
                 query_class == "evidence_lookup"
                 and not auto_exact
@@ -3151,6 +3219,19 @@ def _build_source_start_semantic_handler(
             if full_read_projection:
                 snippet["snippet"] = unicodedata.normalize("NFC", snippet["snippet"])
                 return snippet
+            if date_priority and active_family == "mail":
+                snippet["mail_date_priority"] = {
+                    "outer_message_date": date_metadata.get("current_date"),
+                    "authored_event_time_verified": False,
+                    "candidate_inventory_complete": bool(date_metadata.get("date_inventory_complete")),
+                    "predicate_coverage_verified": date_metadata.get("predicate_coverage_verified", False),
+                }
+                snippet["snippet"] = (
+                    "[依郵件寄送日期排列；僅能稱在已查到並驗證的相符郵件中，日期最新的一封。"
+                    "索引分詞可能漏掉郵件，不保證整個信箱最新。"
+                    + (f"索引候選中有 {date_metadata['unknown_date_count']} 封日期未知。"
+                       if date_metadata.get("unknown_date_count") is not None else "候選日期未知數尚未確定。")
+                    + "信內引文不代表當日新事件。] " + snippet["snippet"])
             projected = admit(observation, snippet, scope_id)
             if projected is not None and context_anchor is None:
                 last_anchor = observation
@@ -3159,6 +3240,41 @@ def _build_source_start_semantic_handler(
         def read_source(**kwargs: Any) -> RevisionOwnedMailSourceScan:
             nonlocal active_family, active_selector, context_anchor
             nonlocal reserved_native_slots, deferred_replay, context_limit_reached
+
+            if date_priority:
+                active_family, active_selector = "mail", selector
+                def consume_date(item, scope):
+                    nonlocal active_selector
+                    active_selector = scope if scope in selector_ids else None
+                    return kwargs["observation_callback"](item, scope)
+
+                def matcher(item, parent, scope):
+                    if placement is not None:
+                        from formowl_retrieval.gateway import _source_occurrence_pair_scope
+                        key = ("guarded_date_inventory", item.extractor_run_id, item.asset_id, scope,
+                               (item.location or {}).get("message_occurrence_id"))
+                        with _source_occurrence_pair_scope((item, parent, key)):
+                            return _placement_mail_group(
+                                placement, item, scope,
+                                _safe_snippet({"snippet": item.text or "", "citation_hash": sha256_json(item.to_dict())}),
+                                source=source, protected_terms=protected_terms, tokenizer=tokenizer) is not None
+                    return _source_mail_observation_match(
+                        item, query_terms=query_terms, required_terms=required_terms,
+                        protected_query_tokens=protected_terms, tokenizer_profile=tokenizer) is not None
+                remaining = min(SOURCE_EVIDENCE_OBSERVATION_LIMIT, kwargs["max_observations"]) - source_budget["reads"]
+                if remaining <= 0:
+                    date_metadata.update(sql_complete=False, candidate_occurrence_count=None, unknown_date_count=None, date_inventory_complete=False,
+                                         latest_claim_verified=False, selected_date=None, stop_reason="observation_limit")
+                    return RevisionOwnedMailSourceScan((), 0, False, "observation_limit")
+                scan = records.scan_date_ordered_mail(
+                    query_token_groups=project.source_lookup_token_groups,
+                    max_observations=remaining, message_limit=limit,
+                    deadline_monotonic=min(kwargs["deadline_monotonic"], source_budget["deadline"]),
+                    mail_import_session_id=selector, matcher=matcher,
+                    observation_callback=consume_date, metadata=date_metadata,
+                )
+                source_budget["reads"] += scan.scanned_observation_count
+                return scan
 
             def consume(observation: Observation, scope: str) -> bool:
                 return kwargs["observation_callback"](observation, scope) and (
@@ -3574,7 +3690,7 @@ def _build_source_start_semantic_handler(
             requested_fields=requested_fields,
             supported_requested_fields=(),
             deadline_monotonic=source_budget["deadline"],
-            time_budget_ms=SOURCE_START_EVIDENCE_TIME_BUDGET_MS,
+            time_budget_ms=500 if date_priority else SOURCE_START_EVIDENCE_TIME_BUDGET_MS,
         )
         full_read_metadata = None
         full_read_skip = None
@@ -3706,7 +3822,10 @@ def _build_source_start_semantic_handler(
             "source_session_binding_fingerprint": revision.safe_binding[
                 "source_session_binding_fingerprint"
             ],
-            "citation_hashes": sorted(item["citation_hash"] for item in evidence),
+            # Date-priority evidence is newest first; compaction groups follow
+            # citation order, so a hash sort could drop the newest group first.
+            "citation_hashes": (list(dict.fromkeys(item["citation_hash"] for item in evidence))
+                                if date_priority else sorted(item["citation_hash"] for item in evidence)),
             "lineage_fingerprints": sorted(
                 item["occurrence_lineage_fingerprint"] for item in evidence
             ),
@@ -3717,6 +3836,9 @@ def _build_source_start_semantic_handler(
             recovery.update(full_read_metadata)
         elif full_read_skip is not None:
             recovery["full_read_skip_reason"] = full_read_skip
+        if date_priority:
+            recovery["mode"] = "mail_date_priority"
+            recovery["mail_date_priority"] = dict(date_metadata)
         recovery["recovery_fingerprint"] = sha256_json(recovery)
         missing_field_hashes = [sha256_json(field) for field in missing]
         coverage_payload = {
@@ -3804,7 +3926,7 @@ def _build_source_start_semantic_handler(
                 "mail_import_session_id": selector,
                 "query_hash": sha256_json(query_text),
                 "evidence_snippets": mail_evidence,
-                **({"query_agent": query_agent} if native_locator is not None else {}),
+                **({"query_agent": query_agent} if native_locator is not None or date_priority else {}),
                 "citations": citations,
                 "warnings": sorted(set(
                     [*double_check.warnings]
@@ -3814,11 +3936,14 @@ def _build_source_start_semantic_handler(
             }
             if payload["requested_field_coverage"] is None:
                 payload.pop("requested_field_coverage")
-            return _admit_source_model_envelope(
+            if date_priority:
+                payload = _finalize_mail_date_presentation(payload, date_metadata)
+            payload = _admit_source_model_envelope(
                 payload, staged_items=double_check.evidence, deferred_items=presentation_deferred,
                 limit=max(0, limit - source_budget["evidence"]), deadline=presentation_deadline,
                 selection_hits=selection_hits, overflow_hashes=overflow_hashes,
             )
+            return _finalize_mail_date_presentation(payload, date_metadata) if date_priority else payload
         payload = {
             "status": status,
             **({"presentation_truncated": True} if header_groups_truncated else {}),
@@ -3850,11 +3975,14 @@ def _build_source_start_semantic_handler(
         if full_read_metadata is not None:
             validate_public_gateway_payload(payload)
             return payload
-        return _admit_source_model_envelope(
+        if date_priority:
+            payload = _finalize_mail_date_presentation(payload, date_metadata)
+        payload = _admit_source_model_envelope(
             payload, staged_items=double_check.evidence, deferred_items=presentation_deferred,
             limit=max(0, limit - source_budget["evidence"]), deadline=presentation_deadline,
                 selection_hits=selection_hits, overflow_hashes=overflow_hashes,
         )
+        return _finalize_mail_date_presentation(payload, date_metadata) if date_priority else payload
 
     handler.authorized_capability_summary = capabilities
     handler.reviewed_annotation_catalog = annotation_catalog
