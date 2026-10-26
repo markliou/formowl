@@ -1452,6 +1452,29 @@ terms, legacy mail calls retain all-lexical-term matching; standalone document
 lookup retains protected-identifier checks plus lexical token intersection,
 not full-natural-language-query subset matching.
 
+
+**2026-10-26 user-authorized small-scope document full read — 待測.**
+After the first frozen `evidence_lookup` returns zero citations, the server may
+replace split refinement with a complete source read only when the original raw
+user prompt explicitly names documents and the bound family scope is exactly
+`document_text`. Comparison, exact/native structured, operational-error and
+exhausted-budget paths are excluded; mail and attachment-table scopes never
+qualify. The complete authorized inventory must be established against the sealed
+revision and bound source-job manifest, not a shortlist or estimate. Both named
+limits must hold: `SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS = 200` and
+`SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS = 60_000` Unicode code points after NFC
+normalization (no token or CJK word count). Incomplete or oversized inventories
+retain the ordinary split/refinement path and record a safe skip reason. Every
+paragraph reuses sealed source hash/revision/lineage/permission checks and native
+citation locators; NFC presentation preserves hashes of the original Observations.
+Read paragraphs in source order and present every bounded batch before any answer
+opportunity. Only complete validation sets private `source_recovery.mode` to
+`small_scope_full_read` and `scan_complete=true`, with paragraph, character and
+document counts. The visible answer discloses that all N authorized documents
+were read; any absence statement is restricted to this completely read document
+scope. This direct-source fallback is not ontology-aware evidence and does not
+change the mail-only generic-source-family term rule.
+
 **Private server-bound term placement — R47 diagnostic deployed / 待測, not general source-fix acceptance.**
 [Frozen impl-r3 peer](.formowl/uat-weekend-20261016/ops/reviewer-anscombe-term-placement-r41-r3-safe.json) and R47 integration bind this narrow exception to flat same-item AND.
 [Occurrence4 limited browser/source proof](.formowl/uat-weekend-20261016/ops/browser-occurrence-r47-manual-review-safe.json) does not prove general recall or completeness;

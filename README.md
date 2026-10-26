@@ -7,6 +7,7 @@ heterogeneous enterprise evidence in native forms: mail, documents, standalone
 spreadsheets/XLSX, tables/databases, images, speech, non-speech audio/music,
 video, and connected business systems. Email is the first diagnostic fixture.
 All adapters enter the same evidence, governance, permission, and query architecture.
+An explicitly requested, sealed complete document-only scope may use bounded full reading after an initial zero-citation lookup (at most 200 paragraphs and 60,000 NFC Unicode characters); this direct-source recovery remains 待測 and does not establish ontology-aware readiness.
 
 ## Active Architecture
 

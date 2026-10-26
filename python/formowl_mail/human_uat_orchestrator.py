@@ -6733,6 +6733,16 @@ class CodexResponsesConversationModel:
                         repair_attempted=final_repair_attempted,
                     )
                     finalization_validated = True
+                    # Server-rendered scope disclosure is independent of model
+                    # wording and is added only after all evidence was presented.
+                    for presented in presented_evidence_results:
+                        full_summary = presented.get("full_read_scope_summary")
+                        full_agent = presented.get("query_agent", {})
+                        full_recovery = full_agent.get("context_bundle", {}).get("source_recovery", {})
+                        if full_summary and full_recovery.get("model_read_complete") is True:
+                            disclosure = f"已讀完全部 {full_recovery['document_count']} 份文件。"
+                            parsed_decision["coverage_note"] = disclosure + " " + parsed_decision.get("coverage_note", "")
+                            break
                     try:
                         assert_no_public_raw_references(
                             {
@@ -10584,6 +10594,69 @@ def compact_evidence_for_model(
     item_limit: int = _MAX_MODEL_EVIDENCE_ITEMS,
     diagnostic: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # This one server-validated mode admits the complete bounded document
+    # scope. Ordinary/mail evidence keeps the existing 16 KiB / item limits.
+    agent = result.get("query_agent")
+    context = agent.get("context_bundle") if isinstance(agent, Mapping) else None
+    recovery = context.get("source_recovery") if isinstance(context, Mapping) else None
+    if (item_limit == _MAX_MODEL_EVIDENCE_ITEMS
+            and isinstance(recovery, Mapping) and recovery.get("mode") == "small_scope_full_read"
+            and recovery.get("scan_complete") is True
+            and recovery.get("source_family_scope") == ["document_text"]):
+        from formowl_gateway.issue56_sealed_source_loader import (
+            SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS, SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS,
+        )
+        items = result.get("evidence")
+        if (recovery.get("model_read_complete") is True and isinstance(items, list)
+                and 0 < len(set(result.get("citations", ()))) <= SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS
+                and all(isinstance(item, Mapping) and isinstance(item.get("snippet"), str)
+                        and item.get("citation_hash") in result.get("citations", ())
+                        and item.get("document_locator") and item.get("revision_binding") for item in items)
+                and len("".join(item["snippet"] for item in items)) <= SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS
+                and result.get("evidence_batch_ends", [None])[-1] == len(items)):
+            return dict(result)
+        if (isinstance(items, list) and 0 < len(items) <= SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS
+                and recovery.get("paragraph_count") == len(items)
+                and type(recovery.get("character_count")) is int
+                and 0 <= recovery["character_count"] <= SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS
+                and all(isinstance(item, Mapping) and isinstance(item.get("snippet"), str)
+                        and item.get("citation_hash") in result.get("citations", ())
+                        and item.get("document_locator") and item.get("revision_binding")
+                        for item in items)):
+            # Contiguous bounded batches share one native tool result. Every
+            # batch is appended before the next provider/answer opportunity.
+            presented, batch_ends, batch_bytes = [], [], 0
+            for item in items:
+                text = item["snippet"]
+                for offset in range(0, max(1, len(text)), 3000):
+                    chunk = {**item, "snippet": text[offset:offset + 3000]}
+                    chunk_bytes = len(json.dumps(chunk, ensure_ascii=False).encode("utf-8"))
+                    if batch_bytes and batch_bytes + chunk_bytes > _MAX_MODEL_EVIDENCE_BYTES:
+                        batch_ends.append(len(presented))
+                        batch_bytes = 0
+                    presented.append(chunk)
+                    batch_bytes += chunk_bytes
+            batch_ends.append(len(presented))
+            summary = {key: recovery[key] for key in (
+                "mode", "scan_complete", "document_count", "source_family_scope", "warnings",
+            ) if key in recovery}
+            summary["model_read_complete"] = True
+            compact = {key: result[key] for key in ("status", "coverage", "answer") if key in result}
+            compact.update(
+                evidence=presented, citations=list(result["citations"]),
+                evidence_batch_ends=batch_ends,
+                query_agent={"request_contract": agent["request_contract"],
+                             "context_bundle": {"source_recovery": summary}},
+                full_read_scope_summary=(
+                    f"已讀完全部 {recovery['document_count']} 份文件。 "
+                    "Disclose this bounded document scope in the answer; this is direct source evidence, "
+                    "not ontology-aware evidence. Any absence statement applies only to these documents."
+                ),
+            )
+            if diagnostic is not None:
+                diagnostic.update(presented_bytes=len(json.dumps(compact, ensure_ascii=False).encode("utf-8")),
+                                  full_read_batch_count=len(batch_ends), presentation_complete=True)
+            return compact
     item_limit = max(0, item_limit)
     truncated = result.get("presentation_truncated") is True
     counts = dict.fromkeys(_COMPACTION_COUNT_KEYS, 0)
