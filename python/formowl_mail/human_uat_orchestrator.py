@@ -6733,16 +6733,6 @@ class CodexResponsesConversationModel:
                         repair_attempted=final_repair_attempted,
                     )
                     finalization_validated = True
-                    # Server-rendered scope disclosure is independent of model
-                    # wording and is added only after all evidence was presented.
-                    for presented in presented_evidence_results:
-                        full_summary = presented.get("full_read_scope_summary")
-                        full_agent = presented.get("query_agent", {})
-                        full_recovery = full_agent.get("context_bundle", {}).get("source_recovery", {})
-                        if full_summary and full_recovery.get("model_read_complete") is True:
-                            disclosure = f"已讀完全部 {full_recovery['document_count']} 份文件。"
-                            parsed_decision["coverage_note"] = disclosure + " " + parsed_decision.get("coverage_note", "")
-                            break
                     try:
                         assert_no_public_raw_references(
                             {
@@ -9928,6 +9918,58 @@ def _typed_note_remainder_is_incomplete(presented: Sequence[Mapping[str, Any]]) 
     return False
 
 
+def _small_scope_document_full_read_metadata(
+    result: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    """Return only server-validated complete document-read metadata."""
+    agent = result.get("query_agent")
+    context = agent.get("context_bundle") if isinstance(agent, Mapping) else None
+    recovery = context.get("source_recovery") if isinstance(context, Mapping) else None
+    citations = result.get("citations")
+    if not isinstance(citations, list) or any(not isinstance(item, str) for item in citations):
+        return None
+    if not isinstance(recovery, Mapping):
+        return None
+    if (recovery.get("mode") != "small_scope_full_read"
+            or recovery.get("scan_complete") is not True
+            or recovery.get("model_read_complete") is not True
+            or recovery.get("source_family_scope") != ["document_text"]):
+        return None
+    from formowl_gateway.issue56_sealed_source_loader import (
+        SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS, SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS,
+    )
+    documents = recovery.get("document_count")
+    paragraphs = recovery.get("paragraph_count")
+    characters = recovery.get("character_count")
+    evidence = result.get("evidence")
+    citations = result.get("citations")
+    batches = result.get("evidence_batch_ends")
+    if (type(documents) is not int or not 1 <= documents <= SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS
+            or type(paragraphs) is not int or not 1 <= paragraphs <= SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS
+            or documents > paragraphs
+            or type(characters) is not int or not 1 <= characters <= SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS
+            or not isinstance(evidence, list) or not evidence
+            or len(set(citations)) != paragraphs
+            or not isinstance(batches, list) or not batches or batches[-1] != len(evidence)
+            or not isinstance(result.get("full_read_scope_summary"), str)):
+        return None
+    citation_set = set(citations)
+    evidence_citations: set[str] = set()
+    if not all(
+        isinstance(item, Mapping)
+        and isinstance(item.get("citation_hash"), str)
+        and item.get("citation_hash") in citation_set
+        and isinstance(item.get("document_locator"), Mapping)
+        and item.get("revision_binding")
+        for item in evidence
+    ):
+        return None
+    evidence_citations.update(item["citation_hash"] for item in evidence)
+    if evidence_citations != citation_set:
+        return None
+    return recovery
+
+
 def _render_typed_evidence_notes(
     payload: Mapping[str, Any], request: UatEvidenceToolRequest | None,
     presented: Sequence[Mapping[str, Any]],
@@ -9949,20 +9991,26 @@ def _render_typed_evidence_notes(
         reject("typed_note_coverage_status_invalid")
     if payload["response_kind"] == "clarification" and limitations:
         reject("typed_note_clarification_with_limitations")
+    full_read = next((metadata for result in presented
+                      if (metadata := _small_scope_document_full_read_metadata(result)) is not None), None)
     by_index: dict[int, tuple[str, str]] = {}
+    seen_indexes: set[int] = set()
     for item in limitations:
         if not isinstance(item, dict) or set(item) != {"field_index", "reason", "scope"}:
             reject("typed_note_item_keys_invalid")
         if type(item["field_index"]) is not int or not 0 <= item["field_index"] < len(fields):
             reject("typed_note_index_out_of_range")
-        if item["field_index"] in by_index:
+        if item["field_index"] in seen_indexes:
             reject("typed_note_duplicate_index")
+        seen_indexes.add(item["field_index"])
         if not isinstance(item["reason"], str) or item["reason"] not in _FIELD_LIMITATION_REASONS:
             reject("typed_note_reason_invalid")
         if not isinstance(item["scope"], str) or item["scope"] not in _FIELD_LIMITATION_SCOPES:
             reject("typed_note_scope_invalid")
         if item["scope"] == "unverified_requested_remainder" and item["reason"] != "not_established":
             reject("typed_note_remainder_reason_invalid")
+        if full_read is not None and item["scope"] == "unverified_requested_remainder":
+            continue
         by_index[item["field_index"]] = (item["reason"], item["scope"])
     # Retained evidence may affect retrieval notes, but never authorize a
     # remainder limitation for this turn's field catalog.
@@ -9987,14 +10035,23 @@ def _render_typed_evidence_notes(
     # Retained evidence affects cited retrieval coverage only, never the current
     # field catalog or its support. No source text, locators, or model prose.
     retrieval = "unknown"
+    if full_read is not None:
+        retrieval = "complete"
     # The same presented-envelope predicate used by final validation takes
     # precedence over nested exact completeness, including subquery coverage.
-    if _evidence_results_are_incomplete(coverage_evidence):
+    elif _evidence_results_are_incomplete(coverage_evidence):
         retrieval = "incomplete"
     elif coverage_evidence and all(_has_deterministic_complete_mail_coverage(r) for r in coverage_evidence):
         retrieval = "complete"
-    retrieval_label = {"unknown": "未知", "incomplete": "不完整", "complete": "完整"}[retrieval]
-    notes = [f"檢索涵蓋範圍：{retrieval_label}（僅依已提供的受治理中繼資料判定）。"]
+    if full_read is not None:
+        notes = [
+            "檢索涵蓋範圍：已完整讀取指定文件範圍"
+            f"（{full_read['document_count']} 份文件、{full_read['paragraph_count']} 段）；"
+            "不代表整個工作區。"
+        ]
+    else:
+        retrieval_label = {"unknown": "未知", "incomplete": "不完整", "complete": "完整"}[retrieval]
+        notes = [f"檢索涵蓋範圍：{retrieval_label}（僅依已提供的受治理中繼資料判定）。"]
     support: set[str] = set()
     if request is not None:
         for result in presented:
@@ -10607,10 +10664,17 @@ def compact_evidence_for_model(
             SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS, SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS,
         )
         items = result.get("evidence")
+        citations = result.get("citations")
         if (recovery.get("model_read_complete") is True and isinstance(items, list)
-                and 0 < len(set(result.get("citations", ()))) <= SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS
+                and isinstance(citations, list) and all(isinstance(item, str) for item in citations)
+                and 0 < len(set(citations)) <= SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS
+                and recovery.get("paragraph_count") == len(set(citations))
+                and type(recovery.get("character_count")) is int
+                and 0 < recovery["character_count"] <= SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS
+                and type(recovery.get("document_count")) is int
+                and recovery["document_count"] > 0
                 and all(isinstance(item, Mapping) and isinstance(item.get("snippet"), str)
-                        and item.get("citation_hash") in result.get("citations", ())
+                        and item.get("citation_hash") in citations
                         and item.get("document_locator") and item.get("revision_binding") for item in items)
                 and len("".join(item["snippet"] for item in items)) <= SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS
                 and result.get("evidence_batch_ends", [None])[-1] == len(items)):
@@ -10618,7 +10682,7 @@ def compact_evidence_for_model(
         if (isinstance(items, list) and 0 < len(items) <= SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS
                 and recovery.get("paragraph_count") == len(items)
                 and type(recovery.get("character_count")) is int
-                and 0 <= recovery["character_count"] <= SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS
+                and 0 < recovery["character_count"] <= SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS
                 and all(isinstance(item, Mapping) and isinstance(item.get("snippet"), str)
                         and item.get("citation_hash") in result.get("citations", ())
                         and item.get("document_locator") and item.get("revision_binding")
@@ -10638,7 +10702,8 @@ def compact_evidence_for_model(
                     batch_bytes += chunk_bytes
             batch_ends.append(len(presented))
             summary = {key: recovery[key] for key in (
-                "mode", "scan_complete", "document_count", "source_family_scope", "warnings",
+                "mode", "scan_complete", "document_count", "paragraph_count", "character_count",
+                "source_family_scope", "warnings",
             ) if key in recovery}
             summary["model_read_complete"] = True
             compact = {key: result[key] for key in ("status", "coverage", "answer") if key in result}
@@ -10649,6 +10714,7 @@ def compact_evidence_for_model(
                              "context_bundle": {"source_recovery": summary}},
                 full_read_scope_summary=(
                     f"已讀完全部 {recovery['document_count']} 份文件。 "
+                    "此文件範圍已全部提供，沒有未查證的其餘範圍。 "
                     "Disclose this bounded document scope in the answer; this is direct source evidence, "
                     "not ontology-aware evidence. Any absence statement applies only to these documents."
                 ),
