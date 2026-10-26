@@ -255,6 +255,49 @@ class Issue56ProviderFinalizationTests(unittest.TestCase):
                 self.assertEqual([s["status"] for s in stages if s.get("stage") == "split_only_refinement"],
                                  ["offered"] if invalid_next else ["offered", "accepted"])
 
+    def test_split_refinement_reaches_backend_through_runtime_server_binder(self):
+        from formowl_gateway import issue56_uat_runtime as runtime
+
+        _, descriptor, arguments, capabilities, _ = self._split_plan()
+        text = "Find progress for aster label project spare in documents."
+        provider = CodexResponsesConversationModel(base_url="https://provider.example.test/v1", api_key="synthetic-key")
+        provider.configure_conversation_tools(safety_identifier="synthetic-split-runtime", tool_descriptors=[descriptor])
+        payloads, requests, stages = [], [], []
+
+        def response(payload):
+            payloads.append(payload)
+            if len(payloads) == 3:
+                return {"status": "completed", "output_text": _decision(citation="synthetic-citation")}
+            terms = arguments["required_terms"] if len(payloads) == 1 else ["aster", "label", "project"]
+            return {"status": "completed", "output": [{"type": "function_call", "call_id": f"split-rt-{len(payloads)}",
+                "name": descriptor["name"], "arguments": json.dumps({**arguments, "required_terms": terms})}]}
+
+        def backend(request):
+            requests.append(request)
+            if len(requests) == 2:
+                return {"status": "partial", "coverage": {"status": "incomplete"},
+                        "evidence": [{"citation_hash": "synthetic-citation", "snippet": "Bounded source evidence."}],
+                        "citations": ["synthetic-citation"]}
+            return self._split_recovery(request)
+
+        token = orchestrator._PRIVATE_UAT_CITATION_TRACE.set(stages)
+        try:
+            with mock.patch.object(provider, "_request_response", side_effect=response):
+                _, _, outcome = runtime._run_gpt_query_agent(
+                    provider, prompt=text, history=(), latest_evidence=None,
+                    safety_identifier="synthetic-split-runtime", formowl_tool_descriptor=descriptor,
+                    authorized_capability_summary=capabilities, mcp_call=backend,
+                )
+        finally:
+            orchestrator._PRIVATE_UAT_CITATION_TRACE.reset(token)
+            provider.close()
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(set(requests[1].required_terms), {"aster", "label", "project"})
+        self.assertEqual(outcome.citation_ids, ("synthetic-citation",))
+        # Only the conversation binder traces; the server binder mirrors silently.
+        self.assertEqual([s["status"] for s in stages if s.get("stage") == "split_only_refinement"],
+                         ["offered", "accepted"])
+
     def test_finalization_reason_codes_preserve_stop_classification_and_safe_projection(self):
         valid = json.loads(_decision(citation="synthetic-citation"))
         cases = [

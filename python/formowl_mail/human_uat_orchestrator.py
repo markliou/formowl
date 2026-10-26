@@ -1207,6 +1207,7 @@ _SPLIT_ONLY_REPLAN_GUIDANCE = (
     "You may split a combined concept into original-request contiguous pieces of at least two characters, "
     "preserving all original characters in order except existing spaces/punctuation between pieces. "
     "Keep every unchanged term, and keep person, company, product and other identity names whole. "
+    "Do not make a requested output field word into its own piece. "
     "Do not add names, omit, replace, translate or rewrite terms. The resulting pieces remain same-item AND "
     "constraints. This exception applies only to the next proposal; no second split is allowed."
 )
@@ -1221,7 +1222,11 @@ class _UatTurnRequestContractBinder:
         user_text: str,
         authorized_capability_summary: Mapping[str, Any] | None,
         latest_evidence: Mapping[str, Any] | None = None,
+        trace_split_refinement: bool = True,
     ) -> None:
+        # The runtime's server-side binder mirrors the split state silently;
+        # the conversation binder owns the private trace events.
+        self._trace_split_refinement = trace_split_refinement
         self._original_query_hash = (
             "sha256:" + hashlib.sha256(user_text.encode("utf-8")).hexdigest()
         )
@@ -1614,7 +1619,8 @@ class _UatTurnRequestContractBinder:
         if not any(len(term) >= 4 and term not in intact for term in self._required_terms):
             return False
         self._split_refinement_offered = self._split_refinement_armed = True
-        _record_private_citation_stage({"stage": "split_only_refinement", "status": "offered"})
+        if self._trace_split_refinement:
+            _record_private_citation_stage({"stage": "split_only_refinement", "status": "offered"})
         return True
 
     def _intact_identity_terms(self) -> set[str]:
@@ -1794,11 +1800,12 @@ class _UatTurnRequestContractBinder:
             if freeze:
                 self._required_terms = terms
                 self._split_refinement_armed = False
-                _record_private_citation_stage({
-                    "stage": "split_only_refinement", "status": "accepted",
-                    "initial_terms_fingerprint": sha256_json(frozen_terms),
-                    "refined_terms_fingerprint": sha256_json(terms),
-                })
+                if self._trace_split_refinement:
+                    _record_private_citation_stage({
+                        "stage": "split_only_refinement", "status": "accepted",
+                        "initial_terms_fingerprint": sha256_json(frozen_terms),
+                        "refined_terms_fingerprint": sha256_json(terms),
+                    })
             return terms
         if allow_server_restored_identifiers:
             self._required_terms = terms
