@@ -6047,6 +6047,7 @@ class CodexResponsesConversationModel:
         provider_request_count = 0
         empty_response_retry_attempted = False
         transport_retry_attempted = False
+        ignored_tool_choice_retry_attempted = False
         stream_recovery_attempted = False
         pre_mcp_recovery: dict[str, Any] | None = None
 
@@ -6655,6 +6656,18 @@ class CodexResponsesConversationModel:
                         response=response,
                     ),
                 )
+            if (
+                not function_calls and force_evidence_tool_choice
+                and request_contract_binder._split_refinement_armed
+                and not ignored_tool_choice_retry_attempted
+                and provider_request_count < _MAX_PROVIDER_REQUESTS_PER_TURN
+                and time.monotonic() < turn_deadline
+            ):
+                # The granted split proposal required the evidence tool, so prose
+                # here ignored that requirement rather than closing the turn.
+                # Nothing is appended; resend the same request once.
+                ignored_tool_choice_retry_attempted = True
+                continue
             if not function_calls:
                 evidence_results = tuple(result for _, result in evidence_records)
                 if formowl_attempts and not any(

@@ -360,6 +360,56 @@ class Issue56ProviderFinalizationTests(unittest.TestCase):
                     self.assertEqual(len(payloads), 3)
                     self.assertNotEqual(outcome.response_kind, "answer")
 
+    def test_ignored_required_split_proposal_resends_the_identical_request_once(self):
+        for ignores in (1, 2):
+            with self.subTest(ignores=ignores):
+                _, descriptor, arguments, capabilities, _ = self._split_plan()
+                provider = CodexResponsesConversationModel(base_url="https://provider.example.test/v1", api_key="synthetic-key")
+                provider.configure_conversation_tools(safety_identifier="synthetic-ignore", tool_descriptors=[descriptor])
+                payloads, requests = [], []
+
+                def call(terms):
+                    return {"status": "completed", "output": [{"type": "function_call", "call_id": f"ignore-{len(payloads)}",
+                        "name": descriptor["name"], "arguments": json.dumps({**arguments, "required_terms": terms})}]}
+
+                def response(payload):
+                    payloads.append(copy.deepcopy(payload))
+                    index = len(payloads)
+                    if index == 1:
+                        return call(arguments["required_terms"])
+                    if index <= 1 + ignores:
+                        self.assertNotEqual(payload["tool_choice"], "auto")
+                        return {"status": "completed", "output_text": _decision(citation="synthetic-citation")}
+                    if index == 2 + ignores:
+                        return call(["aster", "label", "project"])
+                    return {"status": "completed", "output_text": _decision(citation="synthetic-citation")}
+
+                def backend(request):
+                    requests.append(request)
+                    if len(requests) == 2:
+                        return {"status": "partial", "coverage": {"status": "incomplete"},
+                                "evidence": [{"citation_hash": "synthetic-citation", "snippet": "Bounded source evidence."}],
+                                "citations": ["synthetic-citation"]}
+                    return self._split_recovery(request)
+
+                try:
+                    with mock.patch.object(provider, "_request_response", side_effect=response):
+                        outcome = provider.respond(history=(),
+                            user_text="Find progress for aster label project spare in documents.", latest_evidence=None,
+                            safety_identifier="synthetic-ignore", evidence_tool=backend,
+                            formowl_tool_descriptor=descriptor, authorized_capability_summary=capabilities)
+                finally:
+                    provider.close()
+                if ignores == 1:
+                    self.assertEqual(payloads[2]["input"], payloads[1]["input"])
+                    self.assertEqual(len(requests), 2)
+                    self.assertEqual(outcome.citation_ids, ("synthetic-citation",))
+                else:
+                    # A second ignored requirement keeps the existing zero-evidence stop.
+                    self.assertEqual(len(payloads), 3)
+                    self.assertEqual(len(requests), 1)
+                    self.assertEqual(outcome.citation_ids, ())
+
     def test_finalization_reason_codes_preserve_stop_classification_and_safe_projection(self):
         valid = json.loads(_decision(citation="synthetic-citation"))
         cases = [
