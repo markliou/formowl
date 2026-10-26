@@ -1418,7 +1418,29 @@ For mail and eligible graph `evidence_lookup` recovery, the bounded
 at most `80` characters. The request binder accepts only terms that occur as
 contiguous spans in the original request under NFKC/casefold normalization,
 then freezes the first valid set for that turn; retries cannot remove or
-replace it. The sole retained-reference exception is the unique server-validated
+replace it except for the **2026-10-26 user-authorized split-only refinement**:
+after the first frozen lookup returns zero citations and bound source recovery
+has no non-null recheck variant or explicit differing term fingerprints, with
+query budget remaining, the server may offer one next-proposal refinement.
+Each new term must remain a normalized contiguous span of the original request.
+Each frozen term must be exactly reconstructed from an ordered subset of new
+terms, skipping only original whitespace/Unicode punctuation between pieces;
+every new term must participate in a reconstruction. No added, dropped,
+substituted or rewritten content is allowed. Newly split pieces must have at
+least two characters; unchanged short terms retain their existing rules.
+Frozen terms identified by protected identifiers, server-validated retained
+identity, or the shared complete-term reviewed-identity matcher remain intact.
+No name list or guessed identity classification is added. Unknown unreviewed
+names cannot be guaranteed indivisible: the fixed model instruction says to
+preserve person, company and product names whole, but formal split equivalence
+does not establish those roles. Splitting changes the contiguous-term condition
+to same-item AND and may admit unrelated candidates; citation validation remains
+mandatory and is not a guarantee of semantic correctness. All other scope,
+permission, contract and identity checks remain in force. The opportunity is
+consumed by the next proposal even if invalid; accepted terms are re-frozen,
+no second split is allowed, and a second exhausted zero-result lookup stops.
+This exception does not apply to cited, comparison, exact/native structured,
+operational-error or exhausted-budget paths. The retained-reference exception is the unique server-validated
 cited protected identifier above, with explicit current/source-turn provenance;
 all other terms still require current-request grounding. The same AND predicate applies to initial cited observations and
 the same-scope source recheck. These terms constrain relevance, not
@@ -2152,6 +2174,12 @@ binding, and browser acceptance remain pending. Record requested and observed
 identities separately; this policy change does not prove support or rollout.
 Dated earlier model evidence retains its original identity and claim boundary.
 Development worker policy remains `gpt-6.1-sol`/`high`.
+Under the same 2026-10-26 user decision, UAT stays xhigh throughout and the
+browser acceptance runner's per-turn response wait and CDP command timeout
+default to180 seconds, with the corresponding elapsed diagnostic validation
+upper bound aligned to180 seconds. Provider240s and turn300s limits remain unchanged; the
+existing page fetch has no shorter full-response deadline. This waiting policy
+does not establish browser acceptance.
 
 The same authorization permits downtime repair within Master's bounded recovery
 assignment. Master records a time-based recovery plan with milestones, time

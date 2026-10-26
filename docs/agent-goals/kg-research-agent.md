@@ -1,5 +1,12 @@
 # Knowledge Graph Research Agent Goal
 
+## 2026-10-26 AC1′ split-only refinement / 待審查、待測
+User authorized one next-proposal split exception after eligible unchanged-condition
+zero-result recovery. Known identities remain intact; unknown unreviewed names
+remain a disclosed limitation. Canonical focused10 PASS/0.289s; final configured
+journal-loop recheck PASS/0.145s; authority valid but blocked. SPEC includes the separate worker's180s wait policy. No provider/deploy/
+commit; AC2 awaits Claude review/commit. Report: `/tmp/herdr-bus/codex-to-claude-workorder-20261026ac.md`.
+
 ## 2026-10-26 AB2 finalization diagnostics / 待審查、待測
 Added allowlisted finalization reason codes, aligned the no-evidence typed parser
 with its schema while retaining safe stop, and supplied fixed validation rules to
