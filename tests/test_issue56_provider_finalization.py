@@ -51,6 +51,210 @@ def _mail_tool_descriptor() -> dict:
 
 
 class Issue56ProviderFinalizationTests(unittest.TestCase):
+    @staticmethod
+    def _split_recovery(request, *, variant=None):
+        return {"status": "pending_review", "citations": [], "evidence": [], "query_agent": {
+            "status": "replan_required", "stop_reason": "time_budget_exhausted",
+            "original_query_hash": request.request_contract["original_query_hash"],
+            "request_contract": request.request_contract,
+            "context_bundle": {"source_recovery": {
+                "artifact_id": "formowl_bounded_source_recovery_v1", "attempted": True,
+                "query_hash": orchestrator.sha256_json(request.query_text),
+                "source_family_scope": request.request_contract["source_family_scope"],
+                "status": "pending_review", "initial_status": "no_answer", "recheck_variant": variant,
+                "scan": {"complete": False, "scanned_observation_count": 4, "stop_reason": "observation_limit"},
+                "warnings": ["used", "incomplete"],
+            }}}}
+
+    def _split_plan(self, *, terms=("aster", "label project"), user_text=None):
+        text = user_text or "Find progress for aster label project spare in documents."
+        binder, descriptor, arguments, capabilities = self._field_plan(
+            family="document_text", user_text=text, field="progress", terms=terms,
+        )
+        arguments["query_text"] = "Retrieve source evidence: " + text
+        request = orchestrator._parse_tool_request(arguments, tool_descriptor=descriptor,
+                                                   request_contract_binder=binder)
+        return binder, descriptor, arguments, capabilities, request
+
+    def test_split_partition_reconstructs_all_terms_without_stripping_internal_punctuation(self):
+        cases = [
+            (("ab", "label project"), ("ab", "label", "project"), True),
+            (("a", "label， project"), ("a", "label", "project"), True),
+            (("label-project",), ("label", "project"), True),
+            (("label+project",), ("label", "project"), False),
+            (("label.project work",), ("labelproject", "work"), False),
+            (("(label project)",), ("label", "project"), False),
+            (("label project!",), ("label", "project"), False),
+            (("label project",), ("label", "project", "spare"), False),
+            (("label project",), ("label",), False),
+            (("label project",), ("label", "other"), False),
+            (("label project",), ("l", "abel", "project"), False),
+            (("abab",), ("ab",), False),
+        ]
+        for frozen, proposed, expected in cases:
+            with self.subTest(frozen=frozen, proposed=proposed):
+                self.assertEqual(orchestrator._is_split_only_refinement(frozen, proposed), expected)
+
+    def test_split_binder_is_grounded_atomic_and_refreezes_only_once(self):
+        binder, descriptor, arguments, _, request = self._split_plan()
+        self.assertTrue(binder.arm_split_refinement(request, self._split_recovery(request), remaining_calls=2))
+        original = binder._required_terms
+        for terms in (["aster", "label"], ["aster", "label", "spare"],
+                      ["aster", "label", "project", "spare"], ["aster", "label", "invented"]):
+            with self.subTest(terms=terms), self.assertRaises(ContractValidationError):
+                orchestrator._parse_tool_request({**arguments, "required_terms": terms},
+                    tool_descriptor=descriptor, request_contract_binder=binder)
+            self.assertEqual(binder._required_terms, original)
+        # Failure in later query-shape checks must not re-freeze the earlier term proposal.
+        with self.assertRaises(ContractValidationError):
+            orchestrator._parse_tool_request({**arguments, "page_size": 0,
+                "required_terms": ["aster", "label", "project"]},
+                tool_descriptor=descriptor, request_contract_binder=binder)
+        self.assertEqual(binder._required_terms, original)
+        accepted = orchestrator._parse_tool_request({**arguments, "required_terms": ["aster", "label", "project"]},
+            tool_descriptor=descriptor, request_contract_binder=binder)
+        self.assertEqual(accepted.required_terms, ("aster", "label", "project"))
+        self.assertFalse(binder._split_refinement_armed)
+        self.assertFalse(binder.arm_split_refinement(accepted, self._split_recovery(accepted), remaining_calls=1))
+        with self.assertRaisesRegex(ContractValidationError, "changed within the turn"):
+            binder.bind_required_terms(["as", "ter", "label", "project"])
+
+    def test_split_protects_existing_identifier_retained_and_shared_reviewed_surfaces(self):
+        for identity, proposed, kind in (
+            ("AB-1234", ["ab", "1234", "label", "project"], "protected"),
+            ("aster works", ["aster", "works", "label", "project"], "reviewed"),
+            ("青禾科技", ["青禾", "科技", "label", "project"], "reviewed"),
+        ):
+            with self.subTest(kind=kind, identity=identity):
+                binder, descriptor, arguments, _, request = self._split_plan(
+                    terms=(identity, "label project"),
+                    user_text=f"Find progress for {identity} label project in documents.",
+                )
+                if kind == "reviewed":
+                    binder._annotation_catalog = {"entries": [{"annotation_id": "synthetic-reviewed", "target": identity}]}
+                self.assertTrue(binder.arm_split_refinement(request, self._split_recovery(request), remaining_calls=2))
+                with self.assertRaises(ContractValidationError):
+                    binder.bind_required_terms(proposed)
+                # The same identity may remain whole while another term is split.
+                self.assertEqual(binder.bind_required_terms([identity, "label", "project"]),
+                                 tuple(sorted((identity.casefold(), "label", "project"))))
+        binder, _, _, _, request = self._split_plan()
+        binder._reference_binding = {"identifier": "aster"}
+        self.assertTrue(binder.arm_split_refinement(request, self._split_recovery(request), remaining_calls=2))
+        with self.assertRaises(ContractValidationError):
+            binder.bind_required_terms(["as", "ter", "label", "project"])
+        binder, _, _, _, request = self._split_plan(terms=("AB-1234 label project",),
+            user_text="Find progress for AB-1234 label project in documents.")
+        self.assertTrue(binder.arm_split_refinement(request, self._split_recovery(request), remaining_calls=2))
+        with self.assertRaises(ContractValidationError):
+            binder.bind_required_terms(["ab", "1234", "label", "project"])
+        self.assertEqual(binder.bind_required_terms(["ab-1234", "label", "project"]),
+                         ("ab-1234", "label", "project"))
+        # Unknown names have no invented role classification under the authorized boundary.
+        binder, _, _, _, request = self._split_plan(terms=("青禾科技", "label project"),
+            user_text="Find progress for 青禾科技 label project in documents.")
+        self.assertTrue(binder.arm_split_refinement(request, self._split_recovery(request), remaining_calls=2))
+        self.assertEqual(binder.bind_required_terms(["青禾", "科技", "label", "project"]),
+                         tuple(sorted(("青禾", "科技", "label", "project"))))
+
+    def test_split_offer_requires_eligible_unchanged_zero_result_and_remaining_budget(self):
+        for case in ("null", "missing", "different_variant", "different_fingerprints", "cited", "error",
+                     "exact", "table", "comparison", "no_budget", "unattempted"):
+            with self.subTest(case=case):
+                binder, _, _, _, request = self._split_plan()
+                result = self._split_recovery(request)
+                recovery = result["query_agent"]["context_bundle"]["source_recovery"]
+                if case == "missing":
+                    recovery.pop("recheck_variant")
+                elif case == "different_variant":
+                    recovery["recheck_variant"] = "identity_only"
+                elif case == "different_fingerprints":
+                    recovery.update(initial_required_terms_fingerprint="first", recheck_required_terms_fingerprint="different")
+                elif case == "cited":
+                    result["citations"] = ["synthetic-citation"]
+                elif case == "error":
+                    result["query_agent"]["status"] = "error"
+                elif case == "exact":
+                    request = orchestrator.replace(request, request_contract={**request.request_contract,
+                        "query_class": "exact_set_or_inventory", "maximum_claim_strength":
+                        orchestrator.SEMANTIC_CLAIM_STRENGTH_BY_CLASS["exact_set_or_inventory"]})
+                elif case == "table":
+                    request = orchestrator.replace(request, table_query={
+                        "filters": [{"field": "category", "value": "archived"}], "projection_fields": ["category"]})
+                elif case == "comparison":
+                    binder._comparison_targets = ("ab-123", "cd-456")
+                elif case == "unattempted":
+                    recovery["attempted"] = False
+                expected = case in {"null", "missing"}
+                self.assertEqual(binder.arm_split_refinement(request, result,
+                    remaining_calls=0 if case == "no_budget" else 2), expected)
+
+    def test_split_loop_one_offer_second_zero_stops_and_invalid_next_proposal_consumes_it(self):
+        for case in ("second_zero", "invalid_next", "second_cited", "second_zero_no_recovery"):
+            invalid_next = case == "invalid_next"
+            with self.subTest(case=case):
+                _, descriptor, arguments, capabilities, _ = self._split_plan()
+                provider = CodexResponsesConversationModel(base_url="https://provider.example.test/v1", api_key="synthetic-key")
+                provider.configure_conversation_tools(safety_identifier="synthetic-split-turn",
+                                                      tool_descriptors=[descriptor])
+                payloads, requests, stages = [], [], []
+
+                def response(payload):
+                    payloads.append(copy.deepcopy(payload))
+                    index = len(payloads)
+                    self.assertEqual(payload["tools"], payloads[0]["tools"])
+                    self.assertEqual(payload["prompt_cache_key"], payloads[0]["prompt_cache_key"])
+                    if index > 1:
+                        prefix = payloads[-2]["input"]
+                        self.assertEqual(payload["input"][:len(prefix)], prefix)
+                    if index == 2:
+                        envelope = json.loads(next(item["output"] for item in reversed(payload["input"])
+                                                   if item.get("type") == "function_call_output"))
+                        self.assertIn("split_only_refinement", envelope["execution_control"])
+                        self.assertIs(envelope["execution_control"]["split_only_refinement"], True)
+                        self.assertTrue(any(item.get("role") == "developer"
+                            and item.get("content") == orchestrator._SPLIT_ONLY_REPLAN_GUIDANCE for item in payload["input"]))
+                        self.assertIn("identity names whole", orchestrator._SPLIT_ONLY_REPLAN_GUIDANCE)
+                    if index == 3:
+                        self.assertEqual(case, "second_cited")
+                        self.assertEqual(payload["tool_choice"], "none")
+                        return {"status": "completed", "output_text": _decision(citation="synthetic-citation")}
+                    terms = arguments["required_terms"] if index == 1 else ["aster", "label", "project"]
+                    if invalid_next and index == 2:
+                        terms = [*terms, "spare"]
+                    return {"status": "completed", "output": [{"type": "function_call", "call_id": f"split-call-{index}",
+                        "name": descriptor["name"], "arguments": json.dumps({**arguments, "required_terms": terms})}]}
+
+                def backend(request):
+                    requests.append(request)
+                    if len(requests) == 2 and case == "second_cited":
+                        return {"status": "partial", "coverage": {"status": "incomplete"},
+                                "evidence": [{"citation_hash": "synthetic-citation", "snippet": "Bounded source evidence."}],
+                                "citations": ["synthetic-citation"]}
+                    if len(requests) == 2 and case == "second_zero_no_recovery":
+                        return {"status": "no_answer", "citations": []}
+                    return self._split_recovery(request)
+
+                token = orchestrator._PRIVATE_UAT_CITATION_TRACE.set(stages)
+                try:
+                    with mock.patch.object(provider, "_request_response", side_effect=response):
+                        outcome = provider.respond(history=(),
+                            user_text="Find progress for aster label project spare in documents.", latest_evidence=None,
+                            safety_identifier="synthetic-split-turn", evidence_tool=backend,
+                            formowl_tool_descriptor=descriptor, authorized_capability_summary=capabilities)
+                finally:
+                    orchestrator._PRIVATE_UAT_CITATION_TRACE.reset(token)
+                    provider.close()
+                self.assertEqual(outcome.response_kind, "answer" if case == "second_cited" else "clarification")
+                self.assertEqual(outcome.citation_ids, ("synthetic-citation",) if case == "second_cited" else ())
+                self.assertEqual(len(requests), 1 if invalid_next else 2)
+                self.assertEqual(len(payloads), 3 if case == "second_cited" else 2)
+                if case == "second_cited":
+                    record, = outcome.provider_diagnostic["finalization_validation"]
+                    self.assertEqual(record["validation_result"], "passed")
+                self.assertEqual([s["status"] for s in stages if s.get("stage") == "split_only_refinement"],
+                                 ["offered"] if invalid_next else ["offered", "accepted"])
+
     def test_finalization_reason_codes_preserve_stop_classification_and_safe_projection(self):
         valid = json.loads(_decision(citation="synthetic-citation"))
         cases = [

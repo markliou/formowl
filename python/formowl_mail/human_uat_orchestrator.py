@@ -1161,6 +1161,57 @@ def _required_terms_overlapping_output_fields(
     return overlapping
 
 
+def _is_split_only_refinement(frozen: Sequence[str], proposed: Sequence[str]) -> bool:
+    """Reconstruct every old term; skip only separators between new pieces."""
+    if tuple(frozen) == tuple(proposed):
+        return False
+    all_used = (1 << len(proposed)) - 1
+    combined = {0}
+    for original in frozen:
+        visited: set[tuple[int, int]] = set()
+        partitions: set[int] = set()
+
+        def visit(position: int, used: int) -> None:
+            if (position, used) in visited:
+                return
+            visited.add((position, used))
+            if position == len(original):
+                partitions.add(used)
+                return
+            starts = [position]
+            if used:
+                while position < len(original) and (
+                    original[position].isspace()
+                    or unicodedata.category(original[position]).startswith("P")
+                ):
+                    position += 1
+                    starts.append(position)
+            for index, piece in enumerate(proposed):
+                bit = 1 << index
+                if used & bit or (piece != original and len(piece) < 2):
+                    continue
+                for start in starts:
+                    if original.startswith(piece, start):
+                        visit(start + len(piece), used | bit)
+
+        visit(0, 0)
+        if not partitions:
+            return False
+        combined = {previous | current for previous in combined for current in partitions}
+    return all_used in combined
+
+
+_SPLIT_ONLY_REPLAN_GUIDANCE = (
+    "One server-authorized split-only replan is available within the remaining query budget. "
+    "The current required_terms are matched as contiguous literal strings; zero results do not prove absence. "
+    "You may split a combined concept into original-request contiguous pieces of at least two characters, "
+    "preserving all original characters in order except existing spaces/punctuation between pieces. "
+    "Keep every unchanged term, and keep person, company, product and other identity names whole. "
+    "Do not add names, omit, replace, translate or rewrite terms. The resulting pieces remain same-item AND "
+    "constraints. This exception applies only to the next proposal; no second split is allowed."
+)
+
+
 class _UatTurnRequestContractBinder:
     """Bind one capability-scoped request contract to all tool calls in a turn."""
 
@@ -1208,6 +1259,8 @@ class _UatTurnRequestContractBinder:
             _without_attached_document_labels(self._normalized_user_text) != self._normalized_user_text
         )
         self._required_terms: tuple[str, ...] | None = None
+        self._split_refinement_offered = False
+        self._split_refinement_armed = False
         self._mail_qualifier = _original_mail_qualifier(self._normalized_user_text)
         # A closed transform's page words describe retained evidence, not a new
         # lookup. Require actual citeable state, never capability metadata alone.
@@ -1343,7 +1396,8 @@ class _UatTurnRequestContractBinder:
                    "Omission is an invalid plan, not a fallback decision. Empty IDs are NOT annotation use or "
                    "source absence. Do not invent relevance or force wrong IDs. Properties are output needs, "
                    "NOT additional literal required_terms unless the user "
-                   "actually asks for a literal content constraint. Never remove a frozen term. Catalog labels "
+                   "actually asks for a literal content constraint. Preserve frozen terms unless this turn's server "
+                   "explicitly grants the one-shot split-only control exception. Catalog labels "
                    "are navigation metadata, not evidence or executable dates/values; retrieve and cite originals."
                    if self._annotation_catalog else "")
             ),
@@ -1528,6 +1582,66 @@ class _UatTurnRequestContractBinder:
             "UAT evidence tool query requires typed expansion"
         )
 
+    def arm_split_refinement(
+        self, request: UatEvidenceToolRequest, result: Mapping[str, Any], *, remaining_calls: int,
+    ) -> bool:
+        """Offer one refinement only for bound, unchanged-condition source exhaustion."""
+        contract = request.request_contract
+        agent = result.get("query_agent")
+        context = agent.get("context_bundle") if isinstance(agent, Mapping) else None
+        recovery = context.get("source_recovery") if isinstance(context, Mapping) else None
+        if (
+            self._split_refinement_offered or remaining_calls <= 0
+            or not self._required_terms or request.required_terms != self._required_terms
+            or self._comparison_targets or self._cooccurrence_targets
+            or self._native_page is not None or self._mail_qualifier is not None
+            or not isinstance(contract, Mapping) or contract.get("query_class") != "evidence_lookup"
+            or any(value is not None for value in (
+                request.table_query, request.exact_inventory_kind, request.exact_field, request.cursor,
+            ))
+            or not _source_fallback_exhausted(request, result)
+            or not isinstance(recovery, Mapping) or recovery.get("attempted") is not True
+            or recovery.get("recheck_variant") is not None
+        ):
+            return False
+        initial = recovery.get("initial_required_terms_fingerprint")
+        rechecked = recovery.get("recheck_required_terms_fingerprint")
+        if initial is not None and rechecked is not None and initial != rechecked:
+            return False
+        # Offer nothing when no frozen term could form two pieces of two characters
+        # or every candidate is a known identity that must stay intact.
+        intact = self._intact_identity_terms()
+        if not any(len(term) >= 4 and term not in intact for term in self._required_terms):
+            return False
+        self._split_refinement_offered = self._split_refinement_armed = True
+        _record_private_citation_stage({"stage": "split_only_refinement", "status": "offered"})
+        return True
+
+    def _intact_identity_terms(self) -> set[str]:
+        from .issue56_sealed_source import (
+            _reviewed_identity_descriptors, _reviewed_identity_surface_has_complete_term,
+        )
+        protected = set(protected_reference_identifiers(self._normalized_user_text))
+        if self._reference_binding:
+            protected.add(self._reference_binding["identifier"])
+        entries = (self._annotation_catalog or {}).get("entries", ())
+        surfaces = {value for descriptors in _reviewed_identity_descriptors(entries).values()
+                    for _, value in descriptors if value}
+        return {term for term in self._required_terms or () if (
+            term in protected or _reviewed_identity_surface_has_complete_term(term, surfaces)
+        )}
+
+    def _split_preserves_known_identities(self, proposed: Sequence[str]) -> bool:
+        # Extract per piece: joining proposed pieces could falsely re-create an
+        # identifier that has been split apart. Topics around an intact ID may split.
+        frozen_ids = {identifier for term in self._required_terms or ()
+                      for identifier in protected_reference_identifiers(term)}
+        proposed_ids = {identifier for term in proposed
+                        for identifier in protected_reference_identifiers(term)}
+        if not frozen_ids.issubset(proposed_ids):
+            return False
+        return self._intact_identity_terms().issubset(proposed)
+
     def bind_required_terms(
         self,
         candidate: Any,
@@ -1610,7 +1724,13 @@ class _UatTurnRequestContractBinder:
             raise ContractValidationError("UAT cooccurrence requires all explicit targets")
         target = self._comparison_target(terms) if self._comparison_targets else None
         frozen_terms = self._comparison_terms.get(target) if target else self._required_terms
+        split_refinement = False
         if frozen_terms is not None and terms != frozen_terms:
+            split_refinement = (
+                self._split_refinement_armed and not target
+                and self._split_preserves_known_identities(terms)
+                and _is_split_only_refinement(frozen_terms, terms)
+            )
             restored_identifier_scope = (
                 allow_server_restored_identifiers
                 and request_contract is not None
@@ -1618,7 +1738,7 @@ class _UatTurnRequestContractBinder:
                 and set(protected_reference_identifiers(self._normalized_user_text)).issubset(terms)
                 and set(frozen_terms).issubset(terms)
             )
-            if not restored_identifier_scope:
+            if not restored_identifier_scope and not split_refinement:
                 raise ContractValidationError("UAT evidence required terms changed within the turn")
         shared_terms = tuple(term for term in terms if term != target)
         if target and (
@@ -1669,6 +1789,16 @@ class _UatTurnRequestContractBinder:
             if freeze:
                 self._comparison_terms[target] = terms
                 self._comparison_shared_terms = shared_terms
+            return terms
+        if split_refinement:
+            if freeze:
+                self._required_terms = terms
+                self._split_refinement_armed = False
+                _record_private_citation_stage({
+                    "stage": "split_only_refinement", "status": "accepted",
+                    "initial_terms_fingerprint": sha256_json(frozen_terms),
+                    "refined_terms_fingerprint": sha256_json(terms),
+                })
             return terms
         if allow_server_restored_identifiers:
             self._required_terms = terms
@@ -6770,6 +6900,7 @@ class CodexResponsesConversationModel:
                     else:
                         validation_stage = {"stage": "argument_schema"}
                         request = None
+                        split_refinement_proposal = request_contract_binder._split_refinement_armed
                         try:
                             request = _parse_tool_request(
                                 parsed_arguments,
@@ -6827,6 +6958,15 @@ class CodexResponsesConversationModel:
                                     remaining_mcp_calls=(_MAX_TOOL_CALLS_PER_TURN - formowl_attempts),
                                     validation_code=rejection["rejection_code"],
                                 )
+                        # The exception belongs only to this next proposal, including
+                        # its existing annotation fallback. Invalid plans consume it
+                        # without changing the frozen terms or granting another slot.
+                        request_contract_binder._split_refinement_armed = False
+                        if split_refinement_proposal and request is None:
+                            return _safe_stop_outcome(
+                                reason="invalid_arguments", model_name=self.model_name,
+                                evidence_records=evidence_records,
+                            )
                         if request is not None:
                             query_fingerprint = _tool_request_fingerprint(request)
                             # Hint-only differences are identity metadata, not new evidence work.
@@ -6923,10 +7063,29 @@ class CodexResponsesConversationModel:
                                             suppress_retained_citations=True,
                                         )
                                     if _source_fallback_exhausted(request, result) and not comparison_pending:
+                                        split_offer = (
+                                            len(evidence_records) == 1 and not seen_citation_ids
+                                            and request_contract_binder.arm_split_refinement(
+                                                request, result,
+                                                remaining_calls=_MAX_TOOL_CALLS_PER_TURN - formowl_attempts,
+                                            )
+                                        )
+                                        if not split_offer:
+                                            return _safe_stop_outcome(
+                                                reason="no_evidence",
+                                                model_name=self.model_name,
+                                                evidence_records=evidence_records,
+                                            )
+                                        # Trusted one-shot control overrides the ordinary
+                                        # repeat-frozen-terms guidance, never source prose.
+                                        response_input.append({
+                                            "role": "developer",
+                                            "content": _SPLIT_ONLY_REPLAN_GUIDANCE,
+                                        })
+                                    if split_refinement_proposal and not evidence_citation_ids(result):
                                         return _safe_stop_outcome(
-                                            reason="no_evidence",
-                                            model_name=self.model_name,
-                                            evidence_records=evidence_records,
+                                            reason=_infer_evidence_stop_reason((result,)),
+                                            model_name=self.model_name, evidence_records=evidence_records,
                                         )
                                     if _mail_citeable_result_finalizes_turn(request, result) and not comparison_pending:
                                         # Mail evidence is already governed and
@@ -7004,6 +7163,8 @@ class CodexResponsesConversationModel:
                                         ),
                                         "stop_reason": (stop_reason if formowl_halted else None),
                                     }
+                                    if request_contract_binder._split_refinement_armed:
+                                        tool_output["execution_control"]["split_only_refinement"] = True
                 else:
                     public_term_attempts += 1
                     try:

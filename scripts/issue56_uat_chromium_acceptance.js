@@ -8,14 +8,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// Allow bounded cold-start variance while remaining below the configured
-// 180-second UAT turn ceiling used for live acceptance.
-const CDP_COMMAND_TIMEOUT_MS = 90000;
+// Match the 2026-10-26 180-second browser acceptance wait policy.
+const CDP_COMMAND_TIMEOUT_MS = 180000;
 const MAX_PROVIDER_ATTEMPT_DIAGNOSTICS = 3;
 // Three MCP calls + one terminology call, followed by the final answer and
 // its single bounded repair.
 const MAX_PROVIDER_REQUESTS_PER_TURN = 3 + 1 + 2;
-const MAX_UAT_TURN_MS = 120000;
+const MAX_UAT_TURN_MS = 180000;
 const safeRunnerPhases = new Set([
   'startup', 'browser_launch', 'cdp_connect', 'target_create',
   'page_navigation', 'auth_gate', 'ready_check', 'ordinary_submit',
@@ -868,7 +867,7 @@ function boundedTimingList(value) {
     const phase = timing.phase;
     const elapsed = timing.elapsed_ms;
     if (!safePhases.has(phase) || typeof elapsed !== 'number' ||
-        !Number.isFinite(elapsed) || elapsed < 0 || elapsed > 120000) {
+        !Number.isFinite(elapsed) || elapsed < 0 || elapsed > MAX_UAT_TURN_MS) {
       return [];
     }
     return [{phase, elapsed_ms: Math.round(elapsed * 1000) / 1000}];
@@ -889,7 +888,7 @@ function boundedDiagnostic(diagnostic, body, citations) {
     const timeout = mcpSource.timeout;
     if (Number.isInteger(callCount) && callCount >= 0 && callCount <= 3 &&
         typeof elapsed === 'number' && Number.isFinite(elapsed) &&
-        elapsed >= 0 && elapsed <= 120000 && Array.isArray(statuses) &&
+        elapsed >= 0 && elapsed <= MAX_UAT_TURN_MS && Array.isArray(statuses) &&
         statuses.length <= 3 && safeStatuses.every(status => status !== null) &&
         typeof timeout === 'boolean') {
       const failureReason = mcpSource.failure_reason;
@@ -988,7 +987,7 @@ function classify(
   // Keep all page-side validation local; it must not capture Node helpers.
   const MAX_PROVIDER_ATTEMPT_DIAGNOSTICS = 3;
   const MAX_PROVIDER_REQUESTS_PER_TURN = 3 + 1 + 2;
-  const MAX_UAT_TURN_MS = 120000;
+  const MAX_UAT_TURN_MS = 180000;
   const payload = record.payload || {};
   const body = payload.response || payload;
   const diagnostic = payload.diagnostic || body.diagnostic || {};
@@ -1333,7 +1332,7 @@ function classify(
           if (!timing || typeof timing !== 'object') return [];
           const elapsed = timing.elapsed_ms;
           if (!phases.has(timing.phase) || typeof elapsed !== 'number' ||
-              !Number.isFinite(elapsed) || elapsed < 0 || elapsed > 120000) {
+              !Number.isFinite(elapsed) || elapsed < 0 || elapsed > MAX_UAT_TURN_MS) {
             return [];
           }
           return [{phase: timing.phase,
@@ -1416,7 +1415,7 @@ function classify(
         if (Number.isInteger(mcpSource.call_count) &&
             mcpSource.call_count >= 0 && mcpSource.call_count <= 3 &&
             typeof elapsed === 'number' && Number.isFinite(elapsed) &&
-            elapsed >= 0 && elapsed <= 120000 && Array.isArray(statuses) &&
+            elapsed >= 0 && elapsed <= MAX_UAT_TURN_MS && Array.isArray(statuses) &&
             statuses.length <= 3 &&
             statuses.every(item => token(item, 64)) &&
             typeof mcpSource.timeout === 'boolean') {
@@ -1891,7 +1890,7 @@ async function main() {
       safeOutput({status: 'runner_error', runner_diagnostic: state}, {final: true});
       return 1;
     }
-    const turnMs = Number(process.env.FORMOWL_UAT_TIMEOUT_MS || 90000);
+    const turnMs = Number(process.env.FORMOWL_UAT_TIMEOUT_MS || 180000);
     if (!Number.isInteger(turnMs) || turnMs < 1000 || turnMs > 180000) {
       recordRunnerFailure(state, 'timeout_invalid');
       safeOutput({status: 'runner_error', runner_diagnostic: state}, {final: true});
@@ -2880,7 +2879,7 @@ async function selfCheck() {
   closedCdp.close();
   child.stdio[4].emit('error', {code: 'ECONNRESET'});
   assert.equal(closedFailure, false);
-  assert.equal(CDP_COMMAND_TIMEOUT_MS, 90000);
+  assert.equal(CDP_COMMAND_TIMEOUT_MS, 180000);
   const slowChild = new EventEmitter();
   slowChild.stdio = [
     null, null, null, new PassThrough(), new PassThrough(),
@@ -3211,6 +3210,28 @@ async function selfCheck() {
     classify('mail', completedProviderRecord, turn).status,
     'mail_cited_result',
   );
+  for (const [elapsedMs, valid] of [[150000, true], [180001, false]]) {
+    const slowRecord = JSON.parse(JSON.stringify(completedProviderRecord));
+    const diagnostic = slowRecord.payload.diagnostic;
+    diagnostic.provider_attempts[0].elapsed_ms = elapsedMs;
+    diagnostic.mcp.elapsed_ms = elapsedMs;
+    diagnostic.provider_phase_timings = [
+      {phase: 'provider_request', elapsed_ms: elapsedMs},
+    ];
+    for (const classifier of [classify, browserClassify]) {
+      const result = classifier('mail', slowRecord, turn);
+      assert.equal(result.status, valid ? 'mail_cited_result' : 'mail_failed');
+      assert.equal(result.acceptance_checks.provider_completed, valid);
+      assert.equal(result.diagnostic.provider_attempts.length, valid ? 1 : 0);
+      assert.equal(result.diagnostic.mcp !== null, valid);
+      const safe = boundedDiagnostic(result.diagnostic, slowRecord.payload,
+        slowRecord.payload.citations);
+      assert.equal(safe.provider_attempts.length, valid ? 1 : 0);
+      assert.equal(safe.mcp !== null, valid);
+    }
+    assert.equal(boundedTimingList(diagnostic.provider_phase_timings).length,
+      valid ? 1 : 0);
+  }
   const partialProviderRecord = JSON.parse(JSON.stringify(completedProviderRecord));
   partialProviderRecord.payload.status = 'partial';
   partialProviderRecord.payload.answer = '';

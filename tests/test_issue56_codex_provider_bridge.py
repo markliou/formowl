@@ -802,7 +802,9 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                             "status": "pending_review", "citations": [],
                             "warnings": ["mail_evidence_source_fallback_used"],
                         }
-                    return _exhausted_graph_recovery(request, family=family, complete=complete)
+                    result = _exhausted_graph_recovery(request, family=family, complete=complete)
+                    result["query_agent"]["context_bundle"]["source_recovery"]["recheck_variant"] = "identity_only"
+                    return result
 
                 evidence_tool = mock.Mock(side_effect=recover)
                 with mock.patch.object(

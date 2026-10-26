@@ -1,6 +1,15 @@
 # Agent Handoff Log
 Lifecycle label: `active`.
 
+## 2026-10-26 AC1′ bounded split refinement / 待審查、待測
+One server-offered next proposal may strictly partition frozen terms after eligible
+zero-result recovery; invalid next proposal or second zero stops, no second split.
+Existing protected/retained/reviewed identities stay intact; unknown-name and
+same-item AND relevance limits remain explicit. Canonical focused10 PASS/0.289s;
+final configured journal-loop recheck PASS/0.145s; authority valid/blocked. Separate worker implemented180s browser waits/diagnostics.
+No provider/deploy/commit; AC2 pending review/commit. Worker requested sol/high,
+actual unverified. Report: `/tmp/herdr-bus/codex-to-claude-workorder-20261026ac.md`.
+
 ## 2026-10-26 AB2 bounded finalization diagnostics / 待審查、待測
 Allowlisted safe reason codes survive existing diagnostic projection; typed parser
 mode now matches the no-evidence schema, retaining citation_rejected and safe stop.

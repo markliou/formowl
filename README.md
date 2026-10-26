@@ -155,6 +155,11 @@ The **2026-10-26 user override** requests `gpt-5.6-luna` with
 `gpt-5.6-luna/low` request (which superseded the dated 2026-10-15
 `gpt-6-luna/high` request). Runtime/provider support, observed model/effort binding, and browser
 acceptance remain pending; this is not rollout evidence.
+The same 2026-10-26 choice keeps `xhigh` throughout the turn. The Chromium
+acceptance runner's per-turn wait default and CDP command timeout are both
+180 seconds, with provider-attempt and MCP-total elapsed diagnostics aligned to
+that bound. Provider 240-second and overall turn 300-second budgets remain
+unchanged. The webpage fetch has no shorter application response timer.
 Development workers continue to request `gpt-6.1-sol`/`high`, recording actual
 configuration as unverified when it is not observed. Dated model evidence keeps
 its original identity. See [SPEC §8.1.1](SPEC.md#811-development-worker-tier-and-metadata-recording).
