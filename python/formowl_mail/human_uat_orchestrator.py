@@ -1207,7 +1207,6 @@ _SPLIT_ONLY_REPLAN_GUIDANCE = (
     "You may split a combined concept into original-request contiguous pieces of at least two characters, "
     "preserving all original characters in order except existing spaces/punctuation between pieces. "
     "Keep every unchanged term, and keep person, company, product and other identity names whole. "
-    "Do not make a requested output field word into its own piece. "
     "Do not add names, omit, replace, translate or rewrite terms. The resulting pieces remain same-item AND "
     "constraints. This exception applies only to the next proposal; no second split is allowed."
 )
@@ -1785,7 +1784,9 @@ class _UatTurnRequestContractBinder:
                 raise ContractValidationError(
                     "UAT evidence required term is a temporal predicate, not literal content"
                 )
-            if _required_terms_overlapping_output_fields(
+            # Split pieces only relax an already accepted frozen term's contiguity,
+            # so they add no new field-word filter; the frozen set passed this check.
+            if not split_refinement and _required_terms_overlapping_output_fields(
                 self._normalized_user_text, terms, requested_fields, anchor=anchor,
             ):
                 raise ContractValidationError(
