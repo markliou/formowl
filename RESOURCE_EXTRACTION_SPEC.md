@@ -35,9 +35,10 @@ ExtractionError
 source-completeness evidence
 ```
 
-The **2026-10-25** user override requests UAT answer model `gpt-5.6-luna` with
-`reasoning_effort=low`, superseding the dated 2026-10-15 request for
-`gpt-6-luna/high`; runtime/provider verification and browser acceptance remain
+The **2026-10-26** user override requests UAT answer model `gpt-5.6-luna` with
+`reasoning_effort=xhigh`, superseding the 2026-10-25 `gpt-5.6-luna/low` request
+(which superseded the dated 2026-10-15 `gpt-6-luna/high` request);
+runtime/provider verification, observed model/effort binding and browser acceptance remain
 pending. This does not change extractor, embedding, or worker model roles or
 authorize re-extraction. See [SPEC §8.1.1](SPEC.md#811-development-worker-tier-and-metadata-recording)
 for the separate development worker policy and recovery authorization.

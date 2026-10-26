@@ -42,7 +42,7 @@ from formowl_mail.human_uat_orchestrator import (  # noqa: E402
 )
 
 _MODEL = "gpt-5.6-luna"
-_REASONING_EFFORT = "low"
+_REASONING_EFFORT = "xhigh"
 _MAX_PROVIDER_API_KEY_BYTES = 16 * 1024
 _MAX_REFERENCE_REPAIR_MANIFEST_BYTES = 1024 * 1024
 

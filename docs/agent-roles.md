@@ -20,9 +20,10 @@ No descendants, duplication, or additional worker is authorized. The two-worker
 cap remains in force, but a missing or unavailable handle is not an availability
 gate for bounded work. No silent model, effort, or worker identity relabelling
 is authorized.
-The 2026-10-25 user override requests UAT answer model `gpt-5.6-luna` with
-`reasoning_effort=low`, superseding the dated 2026-10-15 request for
-`gpt-6-luna/high`; runtime/provider support, observed identity, and browser
+The 2026-10-26 user override requests UAT answer model `gpt-5.6-luna` with
+`reasoning_effort=xhigh`, superseding the 2026-10-25 `gpt-5.6-luna/low` request
+(which superseded the dated 2026-10-15 `gpt-6-luna/high` request);
+runtime/provider support, observed model/effort binding, and browser
 acceptance remain pending. This is not rollout evidence or a change to the
 sol/high worker tier. Dated earlier model evidence retains its original identity.
 Explicit user assignments govern provider, Docker, source, and UAT actions.

@@ -224,6 +224,7 @@ _CODEX_CUSTOM_PROVIDER_ID = "formowl_uat_custom"
 _CODEX_CUSTOM_PROVIDER_NAME = "FormOwl UAT custom provider"
 _CODEX_CUSTOM_PROVIDER_WIRE_API = "responses"
 _DEFAULT_CODEX_MODEL = "gpt-5.6-luna"
+_DEFAULT_CODEX_REASONING_EFFORT = "xhigh"
 _CODEX_SYSTEM_SKILL_NAMES = (
     "imagegen",
     "openai-docs",
@@ -2988,7 +2989,7 @@ class CodexAppServerConversationModel:
         *,
         workspace_dir: str | Path,
         model: str = _DEFAULT_CODEX_MODEL,
-        reasoning_effort: str = "high",
+        reasoning_effort: str = _DEFAULT_CODEX_REASONING_EFFORT,
         max_threads: int = _MAX_CODEX_THREADS,
         clock: Callable[[], datetime] | None = None,
         timezone_name: str = _DEFAULT_UAT_TIMEZONE,
@@ -5047,7 +5048,7 @@ class VerifiedDiagnosticDeployment:
 def diagnostic_deployment_settings(
     *, host: str, port: int, record_raw_uat_interactions: bool,
     temporary_access_enabled: bool, provider_base_url: str,
-    typed_evidence_notes: bool = False, model: str = _DEFAULT_CODEX_MODEL, reasoning_effort: str = "high",
+    typed_evidence_notes: bool = False, model: str = _DEFAULT_CODEX_MODEL, reasoning_effort: str = _DEFAULT_CODEX_REASONING_EFFORT,
     websocket: bool = False, codex_native_requests: bool = False,
 ) -> dict[str, Any]:
     """Pure manifest helper; startup supplies actual resolved settings, not JSON."""
@@ -5413,7 +5414,7 @@ class CodexResponsesConversationModel:
         base_url: str,
         api_key: str,
         model: str = _DEFAULT_CODEX_MODEL,
-        reasoning_effort: str = "high",
+        reasoning_effort: str = _DEFAULT_CODEX_REASONING_EFFORT,
         timeout_seconds: float = 240.0,
         clock: Callable[[], datetime] | None = None,
         timezone_name: str = _DEFAULT_UAT_TIMEZONE,

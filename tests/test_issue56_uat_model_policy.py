@@ -66,7 +66,7 @@ class Issue56UatModelPolicyTests(unittest.TestCase):
                     self.assertEqual(web.main(), 0)
                 model = service.call_args.args[0]
                 self.assertEqual(model._model, MODEL)
-                self.assertEqual(model._reasoning_effort, "low")
+                self.assertEqual(model._reasoning_effort, "xhigh")
                 if custom:
                     self.assertTrue(model._stream_initial_requests)
                 server.return_value.serve_forever.assert_called_once_with()
@@ -86,7 +86,7 @@ class Issue56UatModelPolicyTests(unittest.TestCase):
                 request.assert_called_once()
                 payload = request.call_args.args[0]
                 self.assertEqual(payload["model"], explicit or MODEL)
-                self.assertEqual(payload["reasoning"], {"effort": "high"})
+                self.assertEqual(payload["reasoning"], {"effort": "xhigh"})
                 self.assertIs(payload["store"], False)
 
     def test_app_server_thread_and_turn_default_and_explicit_historical_model(self):
@@ -109,7 +109,7 @@ class Issue56UatModelPolicyTests(unittest.TestCase):
                 transport.start_thread.assert_called_once()
                 transport.run_turn.assert_called_once()
                 self.assertEqual(transport.start_thread.call_args.kwargs["model"], explicit or MODEL)
-                self.assertEqual(transport.run_turn.call_args.kwargs["reasoning_effort"], "high")
+                self.assertEqual(transport.run_turn.call_args.kwargs["reasoning_effort"], "xhigh")
 
     def _prepare(self, path):
         return owner.prepare_codex_runtime_state_for_custom_provider(
@@ -173,7 +173,7 @@ class Issue56UatModelPolicyTests(unittest.TestCase):
             temporary_access_enabled=True, provider_base_url=BASE_URL,
         )
         self.assertEqual(settings["model"], MODEL)
-        self.assertEqual(settings["reasoning_effort"], "high")
+        self.assertEqual(settings["reasoning_effort"], "xhigh")
         self.assertEqual(settings["provider_transport"], "codex_responses")
 
 

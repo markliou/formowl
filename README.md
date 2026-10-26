@@ -150,9 +150,10 @@ may claim that KG + ontology already beats strong RAG.
 
 ## Model Policy
 
-The **2026-10-25 user override** requests `gpt-5.6-luna` with
-`reasoning_effort=low` for UAT, superseding the dated 2026-10-15 request for
-`gpt-6-luna/high`. Runtime/provider support, observed model binding, and browser
+The **2026-10-26 user override** requests `gpt-5.6-luna` with
+`reasoning_effort=xhigh` for UAT, superseding the 2026-10-25
+`gpt-5.6-luna/low` request (which superseded the dated 2026-10-15
+`gpt-6-luna/high` request). Runtime/provider support, observed model/effort binding, and browser
 acceptance remain pending; this is not rollout evidence.
 Development workers continue to request `gpt-6.1-sol`/`high`, recording actual
 configuration as unverified when it is not observed. Dated model evidence keeps

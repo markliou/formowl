@@ -64,9 +64,10 @@ active goal and must not be selected for restart.
   raw paths/content, prompts or secrets. Missing/mismatched metadata is
   diagnostic `unverified`, not a blocker. Never label an unobserved fallback as
   sol/high.
-- The 2026-10-25 user override requests UAT answer model `gpt-5.6-luna` with
-  `reasoning_effort=low`, superseding the dated 2026-10-15 request for
-  `gpt-6-luna/high`. Runtime/provider support, observed model binding, and
+- The 2026-10-26 user override requests UAT answer model `gpt-5.6-luna` with
+  `reasoning_effort=xhigh`, superseding the 2026-10-25 `gpt-5.6-luna/low` request
+  (which superseded the dated 2026-10-15 `gpt-6-luna/high` request).
+  Runtime/provider support, observed model/effort binding, and
   browser acceptance remain pending; this is not rollout evidence. Worker
   requests remain sol/high, and dated earlier model evidence is preserved.
   Master owns the authorized downtime repair and time-based recovery plan.

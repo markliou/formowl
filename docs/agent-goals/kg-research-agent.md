@@ -70,7 +70,9 @@ slices are dated, not standing bans on later explicitly authorized work.
 Up to two ordinary workers may request `gpt-6.1-sol`/`high`; actual configuration
 for this Worker A checkpoint is **unverified**, not a blocker. No descendants,
 duplication, silent tier substitution or broad cross-role takeover. UAT now requests
-`gpt-5.6-luna`/`low` (2026-10-25, superseding the 2026-10-15 request); runtime/browser proof is recorded separately. Current explicit bounded assignments govern permitted actions;
+`gpt-5.6-luna`/`xhigh` (2026-10-26, superseding the 2026-10-25 low request,
+which superseded the 2026-10-15 request). Runtime/provider support, observed
+model/effort binding and browser acceptance remain pending for xhigh. Current explicit bounded assignments govern permitted actions;
 dated closures constrain their own slices, not later authorized work.
 
 ## Objective
