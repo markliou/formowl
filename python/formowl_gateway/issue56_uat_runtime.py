@@ -1772,6 +1772,7 @@ def _run_gpt_query_agent(
     request_contract_binder = _UatTurnRequestContractBinder(
         user_text=prompt,
         authorized_capability_summary=authorized_capability_summary,
+        trace_split_refinement=False,
     )
     if request_contract_binder._mail_qualifier is not None:
         latest_evidence = None  # Current obligation cannot use the retained catalog.
@@ -1867,6 +1868,12 @@ def _run_gpt_query_agent(
         with reviewed_annotation_query_scope(annotation_binding):
             data = mcp_call(request)
         responses.append(data)
+        if len(responses) == 1 and not evidence_citation_ids(data):
+            # Mirror the conversation binder's one-shot split-only grant so the
+            # server-side freeze accepts the same refined terms on the next call.
+            request_contract_binder.arm_split_refinement(
+                request, data, remaining_calls=_MAX_MCP_CALLS_PER_TURN - len(responses),
+            )
         if (request.request_contract and evidence_citation_ids(data)
                 and data.get("status") not in {"error", "permission_denied"}):
             if reference_only:
