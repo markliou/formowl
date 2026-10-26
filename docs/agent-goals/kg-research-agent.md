@@ -1,5 +1,12 @@
 # Knowledge Graph Research Agent Goal
 
+## 2026-10-26 AL annotation preparation / 待審查、AL5 gated
+AL1–4 prepared in existing reader/annotation owners: explicit subject quotes,
+whole-Observation grouping, pinned resume/dynamic lanes, new-host setup plan,
+and 23 remaining scopes (279434 units). AL5 paired sample is prepared only;
+AG2/GPU gates still pending. No full run, commit, deployment or methodology
+readiness claim. Safe report: `/tmp/herdr-bus/codex-to-claude-workorder-20261026al.md`.
+
 ## 2026-10-26 AC1′ split-only refinement / 待審查、待測
 User authorized one next-proposal split exception after eligible unchanged-condition
 zero-result recovery. Known identities remain intact; unknown unreviewed names

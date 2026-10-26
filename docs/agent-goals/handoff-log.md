@@ -1,4 +1,11 @@
 # Agent Handoff Log
+
+
+## 2026-10-26 AL / prepared, pending review
+Reader/annotation/setup owner edits and 23 scope plans are prepared; AL5 remains
+pending AG2 completion/GPU availability. No model calls/full run/commit/deploy;
+methodology blocked. Report: `/tmp/herdr-bus/codex-to-claude-workorder-20261026al.md`.
+The pre-existing handoff retention overrun is a separate maintenance issue.
 Lifecycle label: `active`.
 
 ## 2026-10-26 AI/AJ bounded document full read / 待審查、待測

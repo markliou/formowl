@@ -27,6 +27,7 @@ import queue
 import sys
 import threading
 import time
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
@@ -42,6 +43,8 @@ def _text_len(observation) -> int:
 
 def chunks(items: list[tuple[str, int]], budget: int) -> list[list[str]]:
     """Consecutive groups of at most ``budget`` estimated chars; one oversize item stays whole."""
+    if budget <= 0:
+        raise ValueError("focus budget must be positive")
     out, current, size = [], [], 0
     for observation_id, length in items:
         if current and size + length > budget:
@@ -52,6 +55,119 @@ def chunks(items: list[tuple[str, int]], budget: int) -> list[list[str]]:
     if current:
         out.append(current)
     return out
+
+
+def regroup_unit(unit: dict, budget: int, load) -> list[dict]:
+    """Regroup full Observations; source identity, native spans and lineage stay unchanged."""
+    from formowl_contract import sha256_json
+
+    focus = list(unit["focus_observation_ids"])
+    sources = {oid: load(oid) for oid in focus}
+    sizes = {oid: _text_len(o) for oid, o in sources.items()}
+    context = [oid for oid in unit["observation_ids"] if oid not in focus]
+    headers = [oid for oid, o in sources.items() if o.observation_type == "email_header"]
+    if unit.get("kind") == "attachment" and not any(load(oid).observation_type == "table_row" for oid in context):
+        first_row = next((oid for oid, o in sources.items() if o.observation_type == "table_row"), None)
+        if first_row:
+            headers.append(first_row)
+    parts = chunks(list(sizes.items()), budget) or [[]]
+    return [{**unit, "unit_id": f"{unit['unit_id']}:part:" + sha256_json(
+                {"focus_chars": budget, "focus": part, "context": context + headers})[7:31],
+             "original_unit_id": unit.get("original_unit_id", unit["unit_id"]),
+             "original_focus_observation_ids": focus,
+             "observation_ids": list(dict.fromkeys(context + headers + part)),
+             "focus_observation_ids": part, "focus_chars": budget,
+             "oversize_observation_ids": [oid for oid in part if sizes[oid] > budget]}
+            for part in parts]
+
+
+def regroup_command(args) -> int:
+    from formowl_contract import sha256_json
+    from formowl_ingestion.storage.records import ObservationStore
+
+    stores, hashes = {}, {}
+    with open(args.units) as source, open(args.output, "x") as output:
+        for line in source:
+            unit = json.loads(line)
+            store = stores.setdefault(unit["store"], ObservationStore(unit["store"], create_directory=False))
+
+            expected = unit.get("expected_observation_hashes")
+            if expected is not None and set(expected) != set(unit["observation_ids"]):
+                raise ValueError("input Observation pin inventory mismatch")
+
+            def load(oid):
+                o = store.get(oid)
+                if o is None:
+                    raise FileNotFoundError(str(store._store._shard_record_path(oid)))
+                value = sha256_json(o.to_dict())
+                if expected is not None and expected[oid] != value:
+                    raise ValueError("input Observation pin changed")
+                hashes[(unit["store"], oid)] = value
+                return o
+
+            parts = regroup_unit(unit, args.focus_chars, load)
+            for part in parts:
+                # Context is also pinned, though it is not new focus coverage.
+                for oid in part["observation_ids"]:
+                    load(oid)
+                part["expected_observation_hashes"] = {
+                    oid: hashes[(unit["store"], oid)] for oid in part["observation_ids"]}
+                part["source_hash_binding"] = "verified_input_pins" if expected is not None else "captured_at_regroup"
+                output.write(json.dumps(part) + "\n")
+    return 0
+
+
+def endpoint_urls(urls: str, urls_file: str | None = None) -> list[str]:
+    values = json.loads(Path(urls_file).read_text()) if urls_file else urls.split(",")
+    if not isinstance(values, list) or not values:
+        raise ValueError("endpoint list must be nonempty")
+    result = []
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError("invalid annotation endpoint")
+        url = value.strip().rstrip("/")
+        parts = urlsplit(url)
+        if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
+            raise ValueError("invalid annotation endpoint")
+        if url not in result:
+            result.append(url)
+    return result
+
+
+def dispatch(work: queue.Queue, process, urls: str, urls_file: str | None = None) -> None:
+    """One worker per URL. Reload additions/removals; errors stop scheduling and propagate."""
+    stop, errors = threading.Event(), queue.Queue()
+    active = set(endpoint_urls(urls, urls_file))
+    threads: dict[str, threading.Thread] = {}
+
+    def lane(url):
+        try:
+            while not stop.is_set() and url in active:
+                try:
+                    unit = work.get_nowait()
+                except queue.Empty:
+                    return
+                process(url, unit)
+        except BaseException as exc:
+            errors.put(exc)
+            stop.set()
+
+    try:
+        while not work.empty() or any(t.is_alive() for t in threads.values()):
+            active = set(endpoint_urls(urls, urls_file))
+            if stop.is_set():
+                break
+            for url in active:
+                if not work.empty() and (url not in threads or not threads[url].is_alive()):
+                    threads[url] = threading.Thread(target=lane, args=(url,))
+                    threads[url].start()
+            stop.wait(0.1)
+    finally:
+        stop.set()
+        for thread in threads.values():
+            thread.join()
+    if not errors.empty():
+        raise errors.get()
 
 
 def build_scope(jobs: list[tuple[str, str, str | None]], month: str, focus_chars: int):
@@ -333,6 +449,33 @@ def retry_feedback(units: dict, progress_path: Path, raw_path: Path, from_run: s
     return feedback
 
 
+def bind_run(args, out: Path, feedback=None) -> None:
+    """Resume skips are valid only for the same source, complete scope and reader policy."""
+    from formowl_contract import sha256_json
+    from formowl_graph.local_semantic_reader import LocalOllamaReader
+
+    with open(args.units, "rb") as handle:
+        scope_hash = "sha256:" + hashlib.file_digest(handle, "sha256").hexdigest()
+    pins = {"units_sha256": scope_hash, "source_revision": args.source_revision,
+            "ontology_revision": args.ontology_revision, "model": args.model,
+            "reader": LocalOllamaReader("http://unused", args.model,
+                num_ctx=getattr(args, "num_ctx", 32768)).configuration,
+            "max_input_bytes": 256 * 1024, "max_output_tokens": 8192, "max_observations": 256,
+            "retry_from_run": getattr(args, "from_run", None), "feedback_sha256": sha256_json(feedback)}
+    path = out / f"run-{args.run_id}.configuration.json"
+    if path.exists():
+        if json.loads(path.read_text()) != pins:
+            raise ValueError("scope or reader policy changed; use a NEW run id")
+        return
+    progress = out / "progress.jsonl"
+    if progress.exists():
+        with progress.open() as handle:
+            if any(json.loads(line)["run"] == args.run_id for line in handle):
+                raise ValueError("legacy run has no sealed configuration; use a NEW run id")
+    with path.open("x") as handle:
+        json.dump(pins, handle, indent=2)
+
+
 def run_command(args, feedback: dict[str, list[str]] | None = None) -> int:
     from formowl_contract import sha256_json
     from formowl_graph.candidates import read_and_store_source_unit
@@ -341,6 +484,8 @@ def run_command(args, feedback: dict[str, list[str]] | None = None) -> int:
     from formowl_ingestion.storage.records import ObservationStore
 
     out = Path(args.output)
+    out.mkdir(parents=True, exist_ok=True)
+    bind_run(args, out, feedback)
     progress_path = out / "progress.jsonl"
     stores = {"semantic_metadata_store": SemanticMetadataStore(out),
               "candidate_atom_store": CandidateAtomStore(out),
@@ -357,60 +502,61 @@ def run_command(args, feedback: dict[str, list[str]] | None = None) -> int:
     observation_stores: dict[str, ObservationStore] = {}
     lock = threading.Lock()
 
-    def lane(url: str) -> None:
-        reader = LocalOllamaReader(url, args.model)
+    readers = {}
+
+    def process(url: str, unit: dict) -> None:
+        reader = readers.setdefault(url, LocalOllamaReader(url, args.model, num_ctx=getattr(args, "num_ctx", 32768)))
         ledgers = _RecordingLedgerStore(stores["semantic_metadata_store"])
         lane_stores = {**stores, "semantic_metadata_store": ledgers}
-        while True:
-            try:
-                unit = work.get_nowait()
-            except queue.Empty:
-                return
-            with lock:
-                store = observation_stores.setdefault(unit["store"], ObservationStore(unit["store"]))
-            items = [store.get(observation_id) for observation_id in unit["observation_ids"]]
-            row = {"run": args.run_id, "unit": unit["unit_id"], "kind": unit["kind"], "lane": url.rsplit(":", 1)[-1],
-                   "source_unit_id": "su_" + sha256_json(unit["unit_id"])[7:39]}
-            reader.last, ledgers.last = {}, None
-            reader.feedback = list((feedback or {}).get(unit["unit_id"], []))
-            started = time.time()
-            try:
-                result = read_and_store_source_unit(
-                    source_unit_id=row["source_unit_id"], observations=items,
-                    expected_observation_hashes={o.observation_id: sha256_json(o.to_dict()) for o in items},
-                    source_revision_fingerprint=args.source_revision,
-                    permission_scope_fingerprint=sha256_json(items[0].to_dict()["permission_scope"]),
-                    source_complete=True, extractor_run_id=args.run_id, ontology_revision_id=args.ontology_revision,
-                    model_name=args.model, reasoning_effort="none", reader=reader.extract_structured_json,
-                    configuration=reader.configuration, focus_observation_ids=unit["focus_observation_ids"],
-                    **lane_stores)
-                value = result.read_ledger.value
-                row.update(status=value["annotation_status"],
-                           reason=value.get("failure_reason") or value.get("stop_reason"),
-                           atoms=len(result.candidate_atoms), relations=len(result.candidate_relations),
-                           ledger=result.read_ledger.semantic_metadata_id)
-            except Exception as exc:
-                value = ledgers.last.value if ledgers.last is not None else {}
-                row.update(status=value.get("annotation_status", "error"),
-                           reason=value.get("failure_reason") or value.get("stop_reason") or str(exc)[:120],
-                           ledger=ledgers.last.semantic_metadata_id if ledgers.last is not None else None)
-            if feedback is not None:
-                row["retry_of"] = args.from_run
-            row.update(seconds=round(time.time() - started, 1),
-                       **{key: value for key, value in reader.last.items() if key != "content"})
-            with lock:
-                with progress_path.open("a") as handle:
-                    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-                if reader.last.get("content") is not None:
-                    with (out / f"raw-{args.run_id}.jsonl").open("a") as handle:
-                        handle.write(json.dumps({"unit": unit["unit_id"], "content": reader.last["content"]},
-                                                ensure_ascii=False) + "\n")
-
-    threads = [threading.Thread(target=lane, args=(url,)) for url in args.urls.split(",")]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+        with lock:
+            store = observation_stores.setdefault(unit["store"], ObservationStore(unit["store"]))
+        items = []
+        for observation_id in unit["observation_ids"]:
+            item = store.get(observation_id)
+            if item is None:
+                raise FileNotFoundError(str(store._store._shard_record_path(observation_id)))
+            items.append(item)
+        row = {"run": args.run_id, "unit": unit["unit_id"], "kind": unit["kind"], "lane": url.rsplit(":", 1)[-1],
+               "source_unit_id": "su_" + sha256_json(unit["unit_id"])[7:39]}
+        reader.last, ledgers.last = {}, None
+        reader.feedback = list((feedback or {}).get(unit["unit_id"], []))
+        started = time.time()
+        try:
+            result = read_and_store_source_unit(
+                source_unit_id=row["source_unit_id"], observations=items,
+                expected_observation_hashes=(unit["expected_observation_hashes"]
+                    if "expected_observation_hashes" in unit else {
+                        o.observation_id: sha256_json(o.to_dict()) for o in items}),
+                source_revision_fingerprint=args.source_revision,
+                permission_scope_fingerprint=sha256_json(items[0].to_dict()["permission_scope"]),
+                source_complete=True, extractor_run_id=args.run_id, ontology_revision_id=args.ontology_revision,
+                model_name=args.model, reasoning_effort="none", reader=reader.extract_structured_json,
+                configuration=reader.configuration, focus_observation_ids=unit["focus_observation_ids"],
+                **lane_stores)
+            value = result.read_ledger.value
+            row.update(status=value["annotation_status"],
+                       reason=value.get("failure_reason") or value.get("stop_reason"),
+                       atoms=len(result.candidate_atoms), relations=len(result.candidate_relations),
+                       ledger=result.read_ledger.semantic_metadata_id)
+        except OSError:
+            raise
+        except Exception as exc:
+            value = ledgers.last.value if ledgers.last is not None else {}
+            row.update(status=value.get("annotation_status", "error"),
+                       reason=value.get("failure_reason") or value.get("stop_reason") or str(exc)[:120],
+                       ledger=ledgers.last.semantic_metadata_id if ledgers.last is not None else None)
+        if feedback is not None:
+            row["retry_of"] = args.from_run
+        row.update(seconds=round(time.time() - started, 1),
+                   **{key: value for key, value in reader.last.items() if key != "content"})
+        with lock:
+            with progress_path.open("a") as handle:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+            if reader.last.get("content") is not None:
+                with (out / f"raw-{args.run_id}.jsonl").open("a") as handle:
+                    handle.write(json.dumps({"unit": unit["unit_id"], "content": reader.last["content"]},
+                                            ensure_ascii=False) + "\n")
+    dispatch(work, process, args.urls, getattr(args, "urls_file", None))
     print(json.dumps({"run": args.run_id, "finished": True}), flush=True)
     return 0
 
@@ -419,7 +565,12 @@ def report_command(args) -> int:
     """Per-scope ledger summary: each unit's best status over the given runs. Gaps stay gaps."""
     from formowl_contract import sha256_json
 
-    units = [json.loads(line)["unit_id"] for line in open(args.units)]
+    with open(args.units) as handle:
+        inventory = [json.loads(line) for line in handle]
+    units = [unit["unit_id"] for unit in inventory]
+    originals = collections.defaultdict(list)
+    for unit in inventory:
+        originals[unit.get("original_unit_id", unit["unit_id"])].append(unit["unit_id"])
     runs = list(args.run_id)
     best: dict[str, dict] = {}
     for row in map(json.loads, (Path(args.output) / "progress.jsonl").open()):
@@ -439,6 +590,10 @@ def report_command(args) -> int:
     report = {"artifact_id": "formowl_semantic_annotation_scope_report_v1",
               "units_sha256": "sha256:" + hashlib.sha256(Path(args.units).read_bytes()).hexdigest(),
               "run_ids": runs, "unit_count": len(units), "status_counts": dict(status),
+              "original_unit_count": len(originals),
+              "original_units_annotated": sum(all(u in coverage for u in children) for children in originals.values()),
+              "oversize_observation_count": len({oid for unit in inventory
+                  for oid in unit.get("oversize_observation_ids", [])}),
               "gap_reasons": dict(reasons.most_common()),
               "candidate_atoms": sum(best[u].get("atoms") or 0 for u in coverage),
               "annotated_coverage_fingerprint": sha256_json(coverage),
@@ -518,36 +673,32 @@ def reconcile_command(args) -> int:
     lock = threading.Lock()
     relation_store = CandidateRelationStore(out)
 
-    def lane(url: str) -> None:
-        reader = LocalOllamaReader(url, args.model)
-        while True:
-            try:
-                key, group = work.get_nowait()
-            except queue.Empty:
-                return
-            started, row = time.time(), {"run": args.reconcile_run_id, "group": key, "size": len(group),
-                                         "lane": url.rsplit(":", 1)[-1]}
-            try:
-                result = reconcile_group(group, reader=reader, extractor_run_id=args.reconcile_run_id,
-                                         model_name=args.model, semantic_metadata_store=ledgers,
-                                         candidate_relation_store=relation_store)
-                row.update(status="reconciled", relations=collections.Counter(r.relation_type for r in result.relations),
-                           ledger=result.ledger.semantic_metadata_id)
-            except Exception as exc:
-                row.update(status="failed", reason=str(exc)[:120])
-            row.update(seconds=round(time.time() - started, 1))
-            with lock, progress_path.open("a") as handle:
-                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    readers = {}
 
-    threads = [threading.Thread(target=lane, args=(url,)) for url in args.urls.split(",")]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    def process(url: str, item) -> None:
+        key, group = item
+        reader = readers.setdefault(url, LocalOllamaReader(url, args.model))
+        started, row = time.time(), {"run": args.reconcile_run_id, "group": key, "size": len(group),
+                                     "lane": url.rsplit(":", 1)[-1]}
+        try:
+            result = reconcile_group(group, reader=reader, extractor_run_id=args.reconcile_run_id,
+                                     model_name=args.model, semantic_metadata_store=ledgers,
+                                     candidate_relation_store=relation_store)
+            row.update(status="reconciled", relations=collections.Counter(r.relation_type for r in result.relations),
+                       ledger=result.ledger.semantic_metadata_id)
+        except OSError:
+            raise
+        except Exception as exc:
+            row.update(status="failed", reason=str(exc)[:120])
+        row.update(seconds=round(time.time() - started, 1))
+        with lock, progress_path.open("a") as handle:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    dispatch(work, process, args.urls, getattr(args, "urls_file", None))
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
+    os.umask(0o077)  # scope inventories and raw provider outputs may contain private source data
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     scope = commands.add_parser("scope")
@@ -558,6 +709,10 @@ def main(argv: list[str] | None = None) -> int:
     scope.add_argument("--month")
     scope.add_argument("--focus-chars", type=int, default=3500)
     scope.add_argument("--output", required=True)
+    regroup = commands.add_parser("regroup", help="smaller complete-Observation groups with original-unit coverage")
+    regroup.add_argument("--units", required=True)
+    regroup.add_argument("--output", required=True)
+    regroup.add_argument("--focus-chars", type=int, default=1500)
     run = commands.add_parser("run")
     retry = commands.add_parser("retry", help="rerun units that did not end annotated, with feedback")
     retry.add_argument("--from-run", required=True)
@@ -570,6 +725,7 @@ def main(argv: list[str] | None = None) -> int:
     reconcile.add_argument("--reconcile-run-id", required=True)
     reconcile.add_argument("--model", default="hf.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf:latest")
     reconcile.add_argument("--urls", default=os.environ.get("FORMOWL_OLLAMA_URLS", "http://127.0.0.1:11434"))
+    reconcile.add_argument("--urls-file", help="reloadable JSON URL array; replaces --urls")
     reconcile.add_argument("--dry-run", action="store_true", help="only count groups")
     reconcile.add_argument("--limit", type=int, help="run only the first N groups (diagnostic)")
     report = commands.add_parser("report", help="per-scope ledger summary over one or more runs")
@@ -579,6 +735,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "scope":
         return scope_command(args)
+    if args.command == "regroup":
+        return regroup_command(args)
     if args.command == "report":
         return report_command(args)
     if args.command == "reconcile":
@@ -600,6 +758,8 @@ def _run_arguments(run) -> None:
     run.add_argument("--source-revision", required=True)
     run.add_argument("--ontology-revision", default="issue56_core_ontology_candidate_v1")
     run.add_argument("--model", default="hf.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf:latest")
+    run.add_argument("--num-ctx", type=int, default=32768)
+    run.add_argument("--urls-file", help="reloadable JSON URL array; replaces --urls")
     run.add_argument("--urls", default=os.environ.get("FORMOWL_OLLAMA_URLS", "http://127.0.0.1:11434"))
 
 

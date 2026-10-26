@@ -5,13 +5,15 @@ import json
 import unittest
 from unittest import mock
 
+import jsonschema
+
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError, Observation, sha256_json
 from formowl_graph.candidates import read_and_store_source_unit
 from formowl_graph.local_semantic_reader import Adapter, LocalOllamaReader, flat_schema, presented
 from formowl_graph.storage import CandidateAtomStore, CandidateRelationStore, SemanticMetadataStore
 
-BODY = "From: Name A 人名甲 ( 公司乙 )\nPO No. 4500123 交期 2025/12/08\nPO No. 4500124 交期 2025/12/09"
+BODY = "From: Person B 人乙 ( OrgB )\nPO No. 4500123 交期 2025/12/08\nPO No. 4500124 交期 2025/12/09"
 
 
 def _observation(observation_id: str, text: str, payload: dict | None = None) -> Observation:
@@ -50,13 +52,13 @@ class AdapterLocationTests(unittest.TestCase):
         self.assertEqual(self.adapter.relocated, 0)
 
     def test_whitespace_only_difference_maps_to_the_unique_source_text(self) -> None:
-        span = self.adapter.span({"observation_id": "obs_body", "quote": "人名甲 (公司乙)"})
-        self.assertEqual(span["quote"], "人名甲 ( 公司乙 )")
+        span = self.adapter.span({"observation_id": "obs_body", "quote": "人乙 (OrgB)"})
+        self.assertEqual(span["quote"], "人乙 ( OrgB )")
         self.assertEqual(self.adapter.relocated, 1)
 
     def test_other_differences_and_repeats_are_left_for_the_validator(self) -> None:
-        changed = self.adapter.span({"observation_id": "obs_body", "quote": "人名甲（公司乙）"})
-        self.assertEqual(changed["quote"], "人名甲（公司乙）")
+        changed = self.adapter.span({"observation_id": "obs_body", "quote": "人乙（OrgB）"})
+        self.assertEqual(changed["quote"], "人乙（OrgB）")
         repeated = self.adapter.span({"observation_id": "obs_body", "quote": "PONo."})
         self.assertEqual(repeated["quote"], "PONo.")
         self.adapter.span({"observation_id": "obs_body", "quote": "PO No."})
@@ -65,19 +67,19 @@ class AdapterLocationTests(unittest.TestCase):
 
     def test_subject_outside_its_quote_is_located_in_the_cited_observation(self) -> None:
         data = self.adapter.convert({"records": [_record(
-            subject="Name A 人名甲 ( 公司乙 )",
+            subject="Person B 人乙 ( OrgB )",
             subject_quote={"observation_id": "obs_body", "quote": "PO No. 4500123"})]})
         identity = data["identities"][0]
-        self.assertEqual(identity["value_surface"], "Name A 人名甲 ( 公司乙 )")
-        self.assertEqual(identity["evidence"][0]["quote"], "Name A 人名甲 ( 公司乙 )")
-        self.assertEqual(data["atoms"][0]["assertion"]["target"], "Name A 人名甲 ( 公司乙 )")
+        self.assertEqual(identity["value_surface"], "Person B 人乙 ( OrgB )")
+        self.assertEqual(identity["evidence"][0]["quote"], "Person B 人乙 ( OrgB )")
+        self.assertEqual(data["atoms"][0]["assertion"]["target"], "Person B 人乙 ( OrgB )")
         self.assertEqual(self.adapter.counts["surface_located"], 1)
 
     def test_invented_label_and_subject_are_cleared_but_the_fact_is_kept(self) -> None:
         data = self.adapter.convert({"records": [
             _record(subject="4500123", subject_label="訂單編號",
                     subject_quote={"observation_id": "obs_body", "quote": "PO No. 4500123"}),
-            _record(subject="地圖車驗證", subject_quote=None)]})
+            _record(subject="虛構測試專案", subject_quote={"observation_id": "obs_body", "quote": "PO No. 4500123"})]})
         self.assertIsNone(data["identities"][0]["type_surface"])
         self.assertEqual(len(data["identities"]), 1)
         self.assertIsNone(data["atoms"][1]["assertion"]["target"])
@@ -89,8 +91,29 @@ class AdapterLocationTests(unittest.TestCase):
         schema = flat_schema(["obs_head", "obs_body"], 8, ["obs_body"])
         claim = schema["properties"]["records"]["items"]["anyOf"][1]["properties"]
         self.assertEqual(claim["evidence"]["items"]["properties"]["observation_id"]["enum"], ["obs_body"])
-        subject_quote = claim["subject_quote"]["anyOf"][0]["properties"]["observation_id"]["enum"]
+        subject_quote = claim["subject_quote"]["properties"]["observation_id"]["enum"]
         self.assertEqual(subject_quote, ["obs_head", "obs_body"])
+
+    def test_named_subject_requires_an_explicit_subject_quote(self) -> None:
+        with self.assertRaisesRegex(ContractValidationError, "subject quote"):
+            self.adapter.convert({"records": [_record(subject="4500123")]})
+
+    def test_targetless_fact_does_not_promote_actor_topic_or_item(self) -> None:
+        data = self.adapter.convert({"records": [_record(
+            topic="4500123", actor="Person B", item_or_row="4500123")]})
+        self.assertIsNone(data["atoms"][0]["assertion"]["target"])
+        self.assertEqual(data["identities"], [])
+
+    def test_schema_pairs_a_named_subject_with_a_nonnull_quote(self) -> None:
+        schema = flat_schema(["obs_body"], 8)
+        data = {"read_status": "complete", "records": [_record(subject="4500123")], "relations": []}
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(data, schema)
+        data["records"][0]["subject_quote"] = {"observation_id": "obs_body", "quote": "PO No. 4500123"}
+        jsonschema.validate(data, schema)
+        data["records"][0] = _record(actor="Person B", item_or_row="4500123")
+        jsonschema.validate(data, schema)
+        self.assertIsNone(self.adapter.convert(data)["atoms"][0]["assertion"]["target"])
 
     def test_read_inventory_is_filled_only_for_a_reported_complete_read(self) -> None:
         self.assertEqual(self.adapter.convert({"read_status": "complete"})["read_observation_ids"], ["obs_body"])
@@ -99,11 +122,11 @@ class AdapterLocationTests(unittest.TestCase):
     def test_model_view_drops_only_opaque_hashes_and_ids(self) -> None:
         observation = _observation("obs_body", BODY, payload={
             "message_fingerprint": "sha256:" + "a" * 64, "thread_id": "mailthread_0123456789abcdef",
-            "header_value": "Name A"})
+            "header_value": "Person B"})
         unit = {"observations": [observation.to_dict()], "focus_observation_ids": ["obs_body"],
                 "context_observation_ids": []}
         view = presented(unit)["observations"][0]
-        self.assertEqual(view["payload"], {"header_value": "Name A"})
+        self.assertEqual(view["payload"], {"header_value": "Person B"})
         self.assertEqual(view["text"], BODY)
         self.assertNotIn("permission_scope", view)
 

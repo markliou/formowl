@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import queue
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -24,6 +26,113 @@ class ChunkTests(unittest.TestCase):
 
     def test_empty_input_has_no_chunks(self) -> None:
         self.assertEqual(annotation.chunks([], 100), [])
+
+    def test_regroup_keeps_whole_observations_and_original_unit_coverage(self) -> None:
+        unit = {"unit_id": "original", "observation_ids": ["head", "a", "b", "c"],
+                "focus_observation_ids": ["a", "b", "c"], "parent": "message"}
+        sources = {oid: SimpleNamespace(text="x" * n, payload={}, observation_type="paragraph")
+                   for oid, n in [("a", 30), ("b", 30), ("c", 200)]}
+        parts = annotation.regroup_unit(unit, 80, sources.__getitem__)
+        self.assertEqual([p["focus_observation_ids"] for p in parts], [["a", "b"], ["c"]])
+        self.assertEqual([p["original_unit_id"] for p in parts], ["original", "original"])
+        self.assertTrue(parts[1]["oversize_observation_ids"] == ["c"])
+        self.assertEqual(parts[1]["observation_ids"], ["head", "c"])
+        self.assertEqual(parts[0]["parent"], "message")
+
+    def test_regroup_carries_first_table_row_as_context_and_changes_membership_id(self) -> None:
+        unit = {"unit_id": "attachment", "kind": "attachment", "observation_ids": ["header", "data"],
+                "focus_observation_ids": ["header", "data"]}
+        source = {oid: SimpleNamespace(text="x" * 60, payload={}, observation_type="table_row")
+                  for oid in ["header", "data"]}
+        small = annotation.regroup_unit(unit, 80, source.__getitem__)
+        large = annotation.regroup_unit(unit, 200, source.__getitem__)
+        self.assertEqual(small[1]["observation_ids"], ["header", "data"])
+        self.assertEqual(small[1]["focus_observation_ids"], ["data"])
+        self.assertNotEqual(small[0]["unit_id"], large[0]["unit_id"])
+
+    def test_regroup_refuses_changed_source_pin(self) -> None:
+        from formowl_contract import sha256_json
+        root = _paths.fresh_test_dir("regroup-pins")
+        observation = SimpleNamespace(to_dict=lambda: {"text": "changed"}, text="changed", payload={},
+                                      observation_type="paragraph")
+        unit = {"unit_id": "original", "store": "test-store", "observation_ids": ["a"],
+                "focus_observation_ids": ["a"], "expected_observation_hashes": {"a": sha256_json("old")}}
+        (root / "units").write_text(json.dumps(unit) + "\n")
+        with patch("formowl_ingestion.storage.records.ObservationStore") as store:
+            store.return_value.get.return_value = observation
+            with self.assertRaisesRegex(ValueError, "pin"):
+                annotation.regroup_command(SimpleNamespace(
+                    units=str(root / "units"), output=str(root / "output"), focus_chars=80))
+
+
+class DispatchTests(unittest.TestCase):
+    def test_removed_lane_finishes_current_unit_then_stops(self) -> None:
+        root = _paths.fresh_test_dir("annotation-remove-lane")
+        config = root / "urls.json"
+        config.write_text(json.dumps(["http://lane-a:1"]))
+        work = queue.Queue()
+        for value in range(3):
+            work.put(value)
+        received, replacement = [], threading.Event()
+
+        def process(url, value):
+            received.append((url, value))
+            if value == 0:
+                config.write_text(json.dumps(["http://lane-b:2"]))
+                self.assertTrue(replacement.wait(3))
+            else:
+                replacement.set()
+
+        annotation.dispatch(work, process, "http://lane-a:1", str(config))
+        self.assertEqual([v for url, v in received if url == "http://lane-a:1"], [0])
+        self.assertEqual(sorted(v for _, v in received), [0, 1, 2])
+
+    def test_resume_binds_scope_and_reader_policy_but_allows_new_urls(self) -> None:
+        root = _paths.fresh_test_dir("annotation-run-pins")
+        units = root / "units.jsonl"
+        units.write_text('{"unit_id":"a","focus_chars":1500}\n')
+        args = SimpleNamespace(units=str(units), run_id="run_pins", model="local-model",
+                               source_revision="source", ontology_revision="ontology", num_ctx=32768,
+                               urls="http://lane-a:1")
+        annotation.bind_run(args, root)
+        args.urls = "http://lane-b:2"
+        annotation.bind_run(args, root)
+        units.write_text('{"unit_id":"a","focus_chars":3500}\n')
+        with self.assertRaisesRegex(ValueError, "NEW run id"):
+            annotation.bind_run(args, root)
+
+    def test_dynamic_file_adds_one_lane_without_repeating_work(self) -> None:
+        root = _paths.fresh_test_dir("annotation-lanes")
+        config = root / "urls.json"
+        config.write_text(json.dumps(["http://lane-a:1"]))
+        work = queue.Queue()
+        for value in range(3):
+            work.put(value)
+        received, second = [], threading.Event()
+
+        def process(url, value):
+            received.append((url, value))
+            if value == 0:
+                config.write_text(json.dumps(["http://lane-a:1", "http://lane-b:2"]))
+                self.assertTrue(second.wait(3))
+            else:
+                second.set()
+
+        annotation.dispatch(work, process, "http://lane-a:1", str(config))
+        self.assertEqual(sorted(v for _, v in received), [0, 1, 2])
+        self.assertTrue(any(url == "http://lane-b:2" for url, _ in received))
+
+    def test_source_io_failure_is_raised_in_main_thread(self) -> None:
+        work = queue.Queue()
+        work.put("a")
+        work.put("b")
+
+        def process(url, value):
+            raise OSError("source-file.json")
+
+        with self.assertRaisesRegex(OSError, "source-file.json"):
+            annotation.dispatch(work, process, "http://lane-a:1")
+        self.assertEqual(work.qsize(), 1)
 
 
 class DocumentScopeTests(unittest.TestCase):
@@ -140,6 +249,23 @@ class DocumentScopeTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
+    def test_original_unit_needs_every_regrouped_child(self) -> None:
+        import contextlib
+        import io
+        root = _paths.fresh_test_dir("annotation-original-report")
+        (root / "units.jsonl").write_text("".join(json.dumps(
+            {"unit_id": u, "original_unit_id": "original"}) + "\n" for u in ["a", "b"]))
+        (root / "progress.jsonl").write_text(json.dumps(
+            {"run": "r", "unit": "a", "status": "annotated", "ledger": "ledger_a"}) + "\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            annotation.main(["report", "--units", str(root / "units.jsonl"), "--output", str(root),
+                             "--run-id", "r"])
+        report = json.loads(out.getvalue())
+        self.assertEqual(report["original_unit_count"], 1)
+        self.assertEqual(report["original_units_annotated"], 0)
+        self.assertFalse(report["scope_complete"])
+
     def test_annotated_read_stands_and_gaps_keep_their_latest_reason(self) -> None:
         import contextlib
         import io
