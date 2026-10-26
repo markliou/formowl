@@ -3641,7 +3641,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         self.assertEqual(request["tools"], [])
         self.assertEqual(request["tool_choice"], "none")
         self.assertEqual(request["parallel_tool_calls"], False)
-        self.assertEqual(request["reasoning"], {"effort": "high"})
+        self.assertEqual(request["reasoning"], {"effort": "xhigh"})
         self.assertFalse(request["store"])
         self.assertEqual(request["text"]["format"]["type"], "json_schema")
         self.assertTrue(request["text"]["format"]["strict"])
@@ -5084,7 +5084,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
 
         self.assertEqual(len(received), 1)
         self.assertEqual(received[0]["model"], "gpt-5.6-luna")
-        self.assertEqual(received[0]["reasoning"], {"effort": "high"})
+        self.assertEqual(received[0]["reasoning"], {"effort": "xhigh"})
         evidence_tool.assert_not_called()
         self.assertEqual(outcome.response_kind, "clarification")
         self.assertEqual(
@@ -5981,7 +5981,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         self.assertEqual(tool["name"], "query_effective_graph_view")
         self.assertEqual(tool["inputSchema"], expected_tool["inputSchema"])
         self.assertEqual(tool["description"], expected_tool["description"])
-        self.assertEqual(transport.turn_call["reasoning_effort"], "high")
+        self.assertEqual(transport.turn_call["reasoning_effort"], "xhigh")
         self.assertIn(
             "formowl_turn_request_contract",
             transport.turn_call["additional_context"],

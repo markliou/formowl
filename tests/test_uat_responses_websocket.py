@@ -158,7 +158,7 @@ class CodexNativeWebSocketShapeTests(unittest.TestCase):
 class ResponsesWebSocketTests(unittest.TestCase):
     def _read(self, server: _Server):
         model = CodexResponsesConversationModel(base_url=f"http://127.0.0.1:{server.port}/v1", api_key="synthetic-key",
-                                                model="gpt-5.6-luna", reasoning_effort="low", websocket=True)
+                                                websocket=True)
         return model.extract_structured_json(
             instructions="Return JSON.", source_unit={"observations": []},
             response_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"],
@@ -175,7 +175,7 @@ class ResponsesWebSocketTests(unittest.TestCase):
         self.assertEqual(server.headers["authorization"], "Bearer synthetic-key")
         self.assertEqual(server.request["type"], "response.create")
         self.assertNotIn("stream", server.request)
-        self.assertEqual((server.request["model"], server.request["reasoning"]), ("gpt-5.6-luna", {"effort": "low"}))
+        self.assertEqual((server.request["model"], server.request["reasoning"]), ("gpt-5.6-luna", {"effort": "xhigh"}))
         self.assertTrue(server.pong)
 
     def test_fields_codex_does_not_send_are_omitted(self) -> None:

@@ -2144,9 +2144,10 @@ of the observed model, effort, or worker identity; it does not prohibit
 continuing explicitly bounded work through an available execution path.
 The methodology authority and independent three-reviewer gate remain unchanged.
 
-Under the **2026-10-25 user override**, the requested UAT answer model is
-`gpt-5.6-luna` with `reasoning_effort=low`, superseding the dated 2026-10-15
-request for `gpt-6-luna/high`. Runtime/provider support, the observed model/effort
+Under the **2026-10-26 user override**, the requested UAT answer model is
+`gpt-5.6-luna` with `reasoning_effort=xhigh`, superseding the 2026-10-25
+`gpt-5.6-luna/low` request (which superseded the dated 2026-10-15
+`gpt-6-luna/high` request). Runtime/provider support, the observed model/effort
 binding, and browser acceptance remain pending. Record requested and observed
 identities separately; this policy change does not prove support or rollout.
 Dated earlier model evidence retains its original identity and claim boundary.

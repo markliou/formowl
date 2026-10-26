@@ -4255,7 +4255,7 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 base_url=runtime_paths.provider_base_url,
                 api_key=provider_api_key,
                 model="gpt-5.6-luna",
-                reasoning_effort="low",
+                reasoning_effort="xhigh",
                 stream_initial_requests=True,
                 typed_evidence_notes=True,
                 codex_native_requests=True,

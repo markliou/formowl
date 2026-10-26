@@ -1,6 +1,15 @@
 # Agent Handoff Log
 Lifecycle label: `active`.
 
+## 2026-10-26 UAT model policy / Z preparation / 待測
+The 2026-10-26 user override requests UAT `gpt-5.6-luna`/`reasoning_effort=xhigh`,
+superseding the 2026-10-25 low request (which superseded 2026-10-15 gpt-6-luna/high).
+Launcher/adapter defaults and current policy are synchronized; xhigh runtime/provider
+support, observed model/effort binding and browser acceptance remain pending. No rollout
+or methodology/release acceptance. Worker request remains gpt-6.1-sol/high; actual unverified.
+X instruction changes were rejected and parked; baseline instructions remain. The 20
+planner-only samples and provider acceptance checks are pending; no deployment before Claude review.
+
 ## Current checkpoint — 2026-10-25 UTC / scoped local semantic annotation + reconciliation + UAT relation intake / 待測
 Authority remains valid-but-blocked; nothing here is UAT acceptance, completeness or methodology evidence.
 User decisions (2026-10-25): annotation model Gemma 4 26B-A4B (local only); scope first, full later;
