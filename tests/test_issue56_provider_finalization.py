@@ -119,6 +119,24 @@ class Issue56ProviderFinalizationTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractValidationError, "changed within the turn"):
             binder.bind_required_terms(["as", "ter", "label", "project"])
 
+    def test_split_piece_shared_with_a_requested_field_is_not_a_new_field_filter(self):
+        text = "請查 Kestrel 標籤機專案的專案最新進度"
+        binder, descriptor, arguments, _ = self._field_plan(
+            family="document_text", user_text=text, field="專案最新進度", terms=("kestrel", "標籤機專案"),
+        )
+        arguments["query_text"] = "Retrieve source evidence: " + text
+        request = orchestrator._parse_tool_request(arguments, tool_descriptor=descriptor,
+                                                   request_contract_binder=binder)
+        split = {**arguments, "required_terms": ["kestrel", "標籤機", "專案"]}
+        # Outside the one-shot grant the piece is still a field-role overlap.
+        with self.assertRaisesRegex(ContractValidationError, "overlaps a requested output field"):
+            orchestrator._UatTurnRequestContractBinder(
+                user_text=text, authorized_capability_summary={"source_families": ["document_text"]},
+            ).bind_required_terms(split["required_terms"], request_contract=arguments["request_contract"])
+        self.assertTrue(binder.arm_split_refinement(request, self._split_recovery(request), remaining_calls=2))
+        accepted = orchestrator._parse_tool_request(split, tool_descriptor=descriptor, request_contract_binder=binder)
+        self.assertEqual(set(accepted.required_terms), {"kestrel", "標籤機", "專案"})
+
     def test_split_protects_existing_identifier_retained_and_shared_reviewed_surfaces(self):
         for identity, proposed, kind in (
             ("AB-1234", ["ab", "1234", "label", "project"], "protected"),
