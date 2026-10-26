@@ -6046,6 +6046,7 @@ class CodexResponsesConversationModel:
         finalization_validation_diagnostics: list[dict[str, Any]] = []
         provider_request_count = 0
         empty_response_retry_attempted = False
+        transport_retry_attempted = False
         stream_recovery_attempted = False
         pre_mcp_recovery: dict[str, Any] | None = None
 
@@ -6458,6 +6459,20 @@ class CodexResponsesConversationModel:
                         "attempt": provider_attempt, "http_status": 408,
                         "reason_code": "stream_disconnected", "retry_transport": "sse",
                     }
+                    continue
+                if (
+                    provider_failure_diagnostic.get("reason_code") == "transport_error"
+                    and provider_failure_diagnostic.get("failure_phase") in {
+                        "websocket_connect", "websocket_send", "websocket_read",
+                    }
+                    and not transport_retry_attempted
+                    and provider_request_count < _MAX_PROVIDER_REQUESTS_PER_TURN
+                    and time.monotonic() < turn_deadline
+                ):
+                    # Each request opens its own stateless (store=False) socket and
+                    # nothing was appended to the turn input, so resending the
+                    # identical request once cannot repeat or invent a tool call.
+                    transport_retry_attempted = True
                     continue
                 if (
                     provider_failure_diagnostic.get("reason_code")

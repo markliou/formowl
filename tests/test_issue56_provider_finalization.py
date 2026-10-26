@@ -316,6 +316,50 @@ class Issue56ProviderFinalizationTests(unittest.TestCase):
         self.assertEqual([s["status"] for s in stages if s.get("stage") == "split_only_refinement"],
                          ["offered", "accepted"])
 
+    def test_websocket_transport_drop_resends_the_identical_request_once(self):
+        for drops in (1, 2):
+            with self.subTest(drops=drops):
+                _, descriptor, arguments, capabilities, _ = self._split_plan()
+                provider = CodexResponsesConversationModel(base_url="https://provider.example.test/v1", api_key="synthetic-key")
+                provider.configure_conversation_tools(safety_identifier="synthetic-drop", tool_descriptors=[descriptor])
+                payloads, requests = [], []
+
+                def response(payload):
+                    payloads.append(copy.deepcopy(payload))
+                    if len(payloads) == 1:
+                        return {"status": "completed", "output": [{"type": "function_call", "call_id": "drop-call",
+                            "name": descriptor["name"], "arguments": json.dumps(arguments)}]}
+                    if len(payloads) <= 1 + drops:
+                        raise orchestrator._UatProviderFailure(
+                            reason_code="transport_error", failure_phase="websocket_read",
+                            transport_exception=OSError("synthetic reset"))
+                    return {"status": "completed", "output_text": _decision(citation="synthetic-citation")}
+
+                def backend(request):
+                    requests.append(request)
+                    return {"status": "partial", "coverage": {"status": "incomplete"},
+                            "evidence": [{"citation_hash": "synthetic-citation", "snippet": "Bounded source evidence."}],
+                            "citations": ["synthetic-citation"]}
+
+                try:
+                    with mock.patch.object(provider, "_request_response", side_effect=response):
+                        outcome = provider.respond(history=(),
+                            user_text="Find progress for aster label project spare in documents.", latest_evidence=None,
+                            safety_identifier="synthetic-drop", evidence_tool=backend,
+                            formowl_tool_descriptor=descriptor, authorized_capability_summary=capabilities)
+                finally:
+                    provider.close()
+                self.assertEqual(len(requests), 1)
+                if drops == 1:
+                    self.assertEqual(len(payloads), 3)
+                    self.assertEqual(payloads[2]["input"], payloads[1]["input"])
+                    self.assertEqual(outcome.response_kind, "answer")
+                    self.assertEqual(outcome.citation_ids, ("synthetic-citation",))
+                else:
+                    # A second drop is not retried again.
+                    self.assertEqual(len(payloads), 3)
+                    self.assertNotEqual(outcome.response_kind, "answer")
+
     def test_finalization_reason_codes_preserve_stop_classification_and_safe_projection(self):
         valid = json.loads(_decision(citation="synthetic-citation"))
         cases = [
