@@ -1,5 +1,12 @@
 # Knowledge Graph Research Agent Goal
 
+## 2026-10-26 AB2 finalization diagnostics / 待審查、待測
+Added allowlisted finalization reason codes, aligned the no-evidence typed parser
+with its schema while retaining safe stop, and supplied fixed validation rules to
+the existing one-shot repair. Canonical focused tests: 9 PASS; authority valid but
+blocked. No provider calls, deployment, commit or acceptance claim. Worker requested
+gpt-6.1-sol/high; actual unverified. Report: `/tmp/herdr-bus/codex-to-claude-workorder-20261026ab.md`.
+
 ## Current UAT checkpoint — 2026-10-22/23 UTC / field-aware source shortlist repair / 待測
 Private-source use was authorized. The COO miss was traced to single-token lexical shortlist ordering: the requested field hint was not applied, so the known `COO=JAPAN` observation ranked 11th and fell outside the bounded source window. The candidate reader now applies bounded optional-field reranking while retaining the original identifier matcher and all source authority checks.
 
