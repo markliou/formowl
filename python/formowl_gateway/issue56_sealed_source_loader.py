@@ -95,7 +95,7 @@ from formowl_mail.semantic_plan import (
     validate_semantic_request_contract,
 )
 from formowl_retrieval.gateway import (
-    _SOURCE_PHASE_TRACE, _trace, _source_trace_phase,
+    _SOURCE_PHASE_TRACE, _trace, _source_trace_phase, _SOURCE_DOCUMENT_FULL_READ_REQUEST,
     _SOURCE_EVIDENCE_DEADLINE, _SOURCE_TERM_PLACEMENT, _SOURCE_OCCURRENCE_PAIR,
     _SourceEvidenceDeadlineExceeded,
     source_evidence_query_terms_scope,
@@ -2151,6 +2151,11 @@ def _reviewed_annotation_literals_match(observation, *, required_terms, target, 
             and (not protected or protected.issubset(tokenizer.analyze(text).tokens)))
 
 
+# User-authorized whole-document recovery; both limits are required.
+SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS: Final = 200
+SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS: Final = 60_000
+
+
 def _build_source_start_semantic_handler(
     revision: Issue56IngestionRevision,
     *,
@@ -2356,6 +2361,7 @@ def _build_source_start_semantic_handler(
         query_terms: set[str] = set()
         protected_terms: set[str] = set()
         active_family: str | None = None
+        full_read_projection = False
         active_selector: str | None = selector
         mail_parents_by_occurrence: dict[tuple[str, str, str, str], Observation] = {}
         unresolved_parent_binding = False
@@ -2709,12 +2715,12 @@ def _build_source_start_semantic_handler(
             check_source_evidence_deadline(deadline)
             last_anchor = None
             semantic_hash = sha256_json(observation.to_dict()) if annotation_hashes else None
-            semantic_match = semantic_hash in annotation_hashes
+            semantic_match = not full_read_projection and semantic_hash in annotation_hashes
             annotation_hint_surfaces = annotation_identity_hints.get(
                 sha256_json(observation.to_dict()),
                 (),
             )
-            annotation_hint_match = bool(annotation_hint_surfaces)
+            annotation_hint_match = not full_read_projection and bool(annotation_hint_surfaces)
             if annotation_hint_match:
                 annotation_hint_counts["projected"] += 1
             if semantic_match:
@@ -3061,8 +3067,8 @@ def _build_source_start_semantic_handler(
                 text = observation.text or observation.caption or ""
                 if not text:
                     return None
-                if semantic_match or context_anchor is not None:
-                    pass  # Reader already revalidated this neighbor against the matched anchor.
+                if full_read_projection or semantic_match or context_anchor is not None:
+                    pass  # Explicit full read or a reader-revalidated neighbor.
                 elif annotation_hint_match:
                     if not _server_annotation_hint_source_match(
                         observation,
@@ -3142,6 +3148,9 @@ def _build_source_start_semantic_handler(
                     "[native identifier occurrence; not proof of an authored update or event date] "
                     + snippet["snippet"]
                 )
+            if full_read_projection:
+                snippet["snippet"] = unicodedata.normalize("NFC", snippet["snippet"])
+                return snippet
             projected = admit(observation, snippet, scope_id)
             if projected is not None and context_anchor is None:
                 last_anchor = observation
@@ -3567,9 +3576,99 @@ def _build_source_start_semantic_handler(
             deadline_monotonic=source_budget["deadline"],
             time_budget_ms=SOURCE_START_EVIDENCE_TIME_BUDGET_MS,
         )
-        evidence, header_groups_truncated = _bounded_mail_header_groups(
-            double_check.evidence, limit=max(0, limit - source_budget["evidence"]),
+        full_read_metadata = None
+        full_read_skip = None
+        provenance = _SOURCE_DOCUMENT_FULL_READ_REQUEST.get()
+        public_arguments = {key: value for key, value in arguments.items()
+                            if key not in {"requester_user_id", "workspace_id", "session_id"}}
+        eligible_full_read = (
+            not mail_tool and not auto_exact and native_locator is None
+            and not context_limit_reached
+            and query_class == "evidence_lookup" and not double_check.evidence
+            and request_contract["source_family_scope"] == ["document_text"]
+            and isinstance(provenance, tuple) and len(provenance) == 4
+            and provenance[0] == request_contract["original_query_hash"]
+            and provenance[1] == ("document_text",) and provenance[3] is True
+            and provenance[2] == sha256_json({"name": "query_effective_graph_view",
+                                             "arguments": public_arguments})
+            and time.monotonic() < source_budget["deadline"]
+            and source_budget["reads"] < SOURCE_EVIDENCE_OBSERVATION_LIMIT
+            and source_budget["evidence"] < limit
+            and double_check.scan is not None
+            and double_check.scan.stop_reason not in {"deadline", "observation_limit"}
         )
+        if eligible_full_read:
+            full_items = []
+            full_hashes = set()
+            characters = 0
+            full_read_projection = True
+            active_family = "document_text"
+            context_anchor = None
+
+            def collect_full_document(observation, scope):
+                nonlocal characters, full_read_skip
+                key = sha256_json(observation.to_dict())
+                if key in full_hashes:
+                    full_read_skip = "source_reference_unavailable"
+                    return False
+                characters += len(unicodedata.normalize("NFC", observation.text or observation.caption or ""))
+                if len(full_items) >= SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS:
+                    full_read_skip = "paragraph_limit"
+                    return False
+                if characters > SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS:
+                    full_read_skip = "character_limit"
+                    return False
+                item = project(observation, scope, source_budget["deadline"])
+                locator = item.get("document_locator", {}) if item else {}
+                if (item is None or type(locator.get("line_start")) is not int
+                        or type(locator.get("line_end")) is not int
+                        or locator["line_start"] < 1 or locator["line_end"] < locator["line_start"]
+                        or not item.get("citation_hash") or not item.get("occurrence_lineage_fingerprint")
+                        or not item.get("revision_binding")):
+                    full_read_skip = "source_validation_incomplete"
+                    return False
+                full_hashes.add(key)
+                full_items.append(item)
+                return True
+
+            try:
+                full_scan = records.scan_authorized_observations(
+                    source_family="document_text", source_scope_ids=tuple(sorted(source.source_scope_ids)),
+                    max_observations=SOURCE_EVIDENCE_OBSERVATION_LIMIT - source_budget["reads"],
+                    deadline_monotonic=source_budget["deadline"],
+                    observation_callback=collect_full_document, _complete_document_scope=True,
+                )
+            except _SourceEvidenceDeadlineExceeded:
+                full_scan = RevisionOwnedMailSourceScan((), 0, False, "deadline")
+                full_read_skip = "deadline"
+            finally:
+                full_read_projection = False
+            source_budget["reads"] += full_scan.scanned_observation_count
+            if full_scan.complete and full_scan.stop_reason is None and full_items:
+                # Native order is source job order, then original line order.
+                source_order = {authority.asset.asset_id: index
+                                for index, authority in enumerate(records.job_authorities)}
+                full_items.sort(key=lambda item: (
+                    source_order[item["document_locator"]["asset_id"]],
+                    item["document_locator"]["line_start"] or 0,
+                    item["document_locator"]["line_end"] or 0,
+                ))
+                full_read_metadata = {
+                    "mode": "small_scope_full_read", "paragraph_count": len(full_items),
+                    "character_count": characters,
+                    "document_count": len({item["document_locator"]["asset_id"] for item in full_items}),
+                    "scan_complete": True,
+                }
+                double_check = replace(double_check, evidence=tuple(full_items), scan=full_scan,
+                                       status="ok", warnings=("used", "complete_coverage_incomplete"))
+            else:
+                full_read_skip = full_read_skip or full_scan.stop_reason or "source_inventory_empty"
+        if full_read_metadata is not None:
+            evidence, header_groups_truncated = list(double_check.evidence), False
+        else:
+            evidence, header_groups_truncated = _bounded_mail_header_groups(
+                double_check.evidence, limit=max(0, limit - source_budget["evidence"]),
+            )
         if context_limit_reached:
             header_groups_truncated = True
             double_check = replace(double_check, warnings=(*double_check.warnings, "context_limit"))
@@ -3614,6 +3713,10 @@ def _build_source_start_semantic_handler(
             "evidence": evidence,
             "warnings": list(double_check.warnings),
         }
+        if full_read_metadata is not None:
+            recovery.update(full_read_metadata)
+        elif full_read_skip is not None:
+            recovery["full_read_skip_reason"] = full_read_skip
         recovery["recovery_fingerprint"] = sha256_json(recovery)
         missing_field_hashes = [sha256_json(field) for field in missing]
         coverage_payload = {
@@ -3744,6 +3847,9 @@ def _build_source_start_semantic_handler(
                 **(dict(coverage) if isinstance(coverage, Mapping) else {}),
             },
         }
+        if full_read_metadata is not None:
+            validate_public_gateway_payload(payload)
+            return payload
         return _admit_source_model_envelope(
             payload, staged_items=double_check.evidence, deferred_items=presentation_deferred,
             limit=max(0, limit - source_budget["evidence"]), deadline=presentation_deadline,

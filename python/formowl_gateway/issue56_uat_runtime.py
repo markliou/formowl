@@ -61,7 +61,8 @@ from formowl_mail.issue56_sealed_source import (
 )
 from formowl_retrieval.gateway import (
     source_evidence_deadline_scope, _SourcePhaseTrace, _source_phase_trace_scope, _trace,
-    _source_term_placement_scope,
+    _source_term_placement_scope, _SOURCE_DOCUMENT_FULL_READ_REQUEST,
+    _source_document_full_read_scope,
 )
 
 from .issue56_diagnostic import (
@@ -644,6 +645,7 @@ class Issue56UatQueryService:
             (request.required_term_placement, sha256_json(wire_request["params"]))
             if request.required_term_placement is not None else None
         )
+        document_read_binding = _SOURCE_DOCUMENT_FULL_READ_REQUEST.get()
         annotation_binding = current_reviewed_annotation_query_binding()
 
         def run_mcp_request() -> None:
@@ -659,7 +661,8 @@ class Issue56UatQueryService:
                     )
                     close_client = True
                 with (_source_term_placement_scope(placement_binding),
-                      reviewed_annotation_query_scope(annotation_binding)):
+                      reviewed_annotation_query_scope(annotation_binding),
+                      _source_document_full_read_scope(document_read_binding)):
                     response = client.post(
                         "/mcp", headers=mcp_headers(bearer=bearer), json=wire_request,
                     )
@@ -1094,6 +1097,7 @@ class Issue56TemporaryLanQueryService:
                 (request.required_term_placement, sha256_json(wire_request["params"]))
                 if request.required_term_placement is not None else None
             )
+            document_read_binding = _SOURCE_DOCUMENT_FULL_READ_REQUEST.get()
             annotation_binding = current_reviewed_annotation_query_binding()
 
             def run_mcp_request() -> None:
@@ -1118,7 +1122,8 @@ class Issue56TemporaryLanQueryService:
                     # must not lend its deadline to this in-flight request.
                     with (source_evidence_deadline_scope(turn_deadline), _source_phase_trace_scope(phase_trace),
                           _source_term_placement_scope(placement_binding),
-                          reviewed_annotation_query_scope(annotation_binding)):
+                          reviewed_annotation_query_scope(annotation_binding),
+                      _source_document_full_read_scope(document_read_binding)):
                         response = client.post(
                                 "/mcp",
                                 headers=mcp_headers(bearer=_SYNTHETIC_BEARER),
@@ -1865,7 +1870,20 @@ def _run_gpt_query_agent(
             user_text=prompt, catalog=catalog,
             arguments=_mcp_query_request(request)["params"]["arguments"],
         ) if catalog is not None else None
-        with reviewed_annotation_query_scope(annotation_binding):
+        # Keep explicit-family provenance from the raw user prompt private;
+        # expanded model query text must never grant whole-document access.
+        wire_params = _mcp_query_request(request)["params"]
+        document_read_binding = (
+            request_contract_binder._original_query_hash, tuple(sorted(_explicit_source_families(prompt))),
+            sha256_json(wire_params), bool(
+                not responses and not request_contract_binder._comparison_targets
+                and not request_contract_binder._cooccurrence_targets
+                and request.table_query is None and request.exact_inventory_kind is None
+                and request.exact_field is None and request.cursor is None
+            ),
+        )
+        with (reviewed_annotation_query_scope(annotation_binding),
+              _source_document_full_read_scope(document_read_binding)):
             data = mcp_call(request)
         responses.append(data)
         if len(responses) == 1 and not evidence_citation_ids(data):
@@ -3641,6 +3659,17 @@ def _private_graph_recheck_trace(
     variant = recovery.get("recheck_variant")
     if variant in {None, "identity_only"}:
         safe["recheck_variant"] = variant
+    if recovery.get("mode") == "small_scope_full_read":
+        safe["mode"] = "small_scope_full_read"
+        for key in ("paragraph_count", "character_count", "document_count"):
+            value = recovery.get(key)
+            if type(value) is int and 0 <= value <= 60_000:
+                safe[key] = value
+    skip = recovery.get("full_read_skip_reason")
+    if skip in {"paragraph_limit", "character_limit", "source_reference_unavailable",
+                "source_validation_incomplete", "deadline", "observation_limit", "callback",
+                "source_inventory_empty"}:
+        safe["full_read_skip_reason"] = skip
     for key in ("hard_term_count", "soft_term_count"):
         value = recovery.get(key)
         if type(value) is int and 0 <= value <= 8:

@@ -249,6 +249,24 @@ _SOURCE_TERM_PLACEMENT: ContextVar[Any] = ContextVar("source_term_placement", de
 _SOURCE_OCCURRENCE_PAIR: ContextVar[Any] = ContextVar("source_occurrence_pair", default=None)
 
 
+# Server-only original-prompt provenance. Never accepted from tool arguments.
+_SOURCE_DOCUMENT_FULL_READ_REQUEST: ContextVar[Any] = ContextVar(
+    "formowl_private_document_full_read_request", default=None,
+)
+
+
+@contextmanager
+def _source_document_full_read_scope(binding: Any) -> Iterator[None]:
+    inherited = _SOURCE_DOCUMENT_FULL_READ_REQUEST.get()
+    if inherited is not None and inherited != binding:
+        raise ContractValidationError("source document request cannot be changed or cleared")
+    token = _SOURCE_DOCUMENT_FULL_READ_REQUEST.set(binding)
+    try:
+        yield
+    finally:
+        _SOURCE_DOCUMENT_FULL_READ_REQUEST.reset(token)
+
+
 @contextmanager
 def _source_term_placement_scope(binding: Any) -> Iterator[None]:
     inherited = _SOURCE_TERM_PLACEMENT.get()

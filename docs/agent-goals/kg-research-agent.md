@@ -191,6 +191,21 @@ exiting zero.
 
 ## 2026-10-26 bounded U work
 U1 implemented with focused verification; U2 private revision inventory blocked by mode 0700. Report: `/tmp/herdr-bus/codex-to-claude-workorder-20261026u.md`.
+## 2026-10-26 AI bounded document full read / 待審查、待測
+Document-only explicit raw-prompt recovery now reuses guarded sealed-reference
+scanning and native citations after the first zero-citation frozen lookup. Both
+200-paragraph/60,000-NFC-codepoint limits apply; mail and ordinary retrieval stay
+unchanged. Canonical focused fixtures pass 12/12 in 57.410s; 316 tests across the
+requested 12 modules retain exactly the 34 sorted baseline failure names. The
+pinned AG1 request replayed locally with zero provider calls: 90 paragraphs,
+18,907 NFC characters, two documents, 90 valid citations/locators and revision-
+lineage bindings, all six ordered presentation batches included. Deployment
+requires Claude review. These checks are diagnostic evidence only. Canonical
+dev-container authority is valid=true, ready=false, errors=[]/blocked;
+the host missing-CJK result is supplemental only. No readiness,
+methodology quality, or completion claim. Worker requested gpt-6.1-sol/high;
+actual model and effort are unverified. Report: `/tmp/herdr-bus/codex-to-claude-workorder-20261026ai.md`.
+
 ## Immutable history
 [Complete distinct pre-edit history](../archive/2026-10-17/weekend-r37-contract-correction-preedit/root/docs/agent-goals/kg-research-agent.md) retains every earlier checkpoint, failure, archive pointer and superseded status.
 [SHA256 manifest](../archive/2026-10-17/weekend-r37-contract-correction-preedit/SHA256SUMS.json) binds all eight preimages; old archives remain unchanged. Historical evidence is not a standing dispatch or retry authorization.

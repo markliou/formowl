@@ -1501,6 +1501,7 @@ class IngestionRevisionSourceRecords:
         context_anchor_callback: Callable[[Observation, str], bool] | None = None,
         context_callback: Callable[[Observation, Observation, str], bool] | None = None,
         _allow_parallel_hydration: bool = False,
+        _complete_document_scope: bool = False,
         preferred_observation_hashes: Sequence[str] = (),
         additive_observation_hashes: Sequence[str] = (),
     ) -> RevisionOwnedMailSourceScan:
@@ -1533,6 +1534,8 @@ class IngestionRevisionSourceRecords:
 
         references = getattr(self, "observation_references", None)
         references_available = isinstance(references, list)
+        if _complete_document_scope and not references_available:
+            return RevisionOwnedMailSourceScan((), 0, False, "source_reference_unavailable")
         if not references_available and not callable(
             getattr(self.runtime_store, "source_family_lexical_lookup", None)
         ):
@@ -1558,9 +1561,20 @@ class IngestionRevisionSourceRecords:
                 if isinstance(scope_id, str) and scope_id:
                     source_scope_by_job_index[job_index] = selector or scope_id
             else:
+                if _complete_document_scope and AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND not in (
+                    _authorized_ingestion_root_source_kinds(authority)
+                ):
+                    continue
                 scope_id = dict(authority.permission_scope).get("scope_id")
                 if isinstance(scope_id, str) and scope_id in source_scope_ids:
                     source_scope_by_job_index[job_index] = scope_id
+        if _complete_document_scope:
+            for job_index in source_scope_by_job_index:
+                job_refs = [ref for ref in references
+                            if isinstance(ref, list) and ref and ref[0] == job_index]
+                if (len(job_refs) != self.job_authorities[job_index].observation_count
+                        or len({ref[1] for ref in job_refs if len(ref) == 3}) != len(job_refs)):
+                    return RevisionOwnedMailSourceScan((), 0, False, "source_reference_unavailable")
         if not source_scope_by_job_index:
             return RevisionOwnedMailSourceScan(
                 observations=(),
@@ -1934,7 +1948,7 @@ class IngestionRevisionSourceRecords:
             or bool(query_terms)
             and callable(getattr(self.runtime_store, "source_family_lexical_lookup", None))
         )
-        if should_shortlist:
+        if should_shortlist and not _complete_document_scope:
             if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                 return RevisionOwnedMailSourceScan(
                     observations=tuple(selected),
@@ -2288,7 +2302,7 @@ class IngestionRevisionSourceRecords:
                     ),
                 )
 
-        if indexed_source:
+        if indexed_source and not _complete_document_scope:
             return RevisionOwnedMailSourceScan(
                 observations=tuple(selected), scanned_observation_count=scanned,
                 complete=False, stop_reason="indexed_query_terms_unavailable",
@@ -2394,11 +2408,16 @@ class IngestionRevisionSourceRecords:
         context_anchor_callback: Callable[[Observation, str], bool] | None = None,
         context_callback: Callable[[Observation, Observation, str], bool] | None = None,
         _allow_parallel_hydration: bool = False,
+        _complete_document_scope: bool = False,
         preferred_observation_hashes: Sequence[str] = (),
         additive_observation_hashes: Sequence[str] = (),
     ) -> RevisionOwnedMailSourceScan:
         """Read one authorized source family through sealed job references."""
 
+        if type(_complete_document_scope) is not bool or (
+            _complete_document_scope and source_family != "document_text"
+        ):
+            raise ContractValidationError("complete document scope is invalid")
         if type(_allow_parallel_hydration) is not bool:
             raise ContractValidationError("source hydration opt-in is invalid")
         if len(preferred_observation_hashes) > 128 or any(
@@ -2465,6 +2484,7 @@ class IngestionRevisionSourceRecords:
             context_anchor_callback=context_anchor_callback,
             context_callback=context_callback,
             _allow_parallel_hydration=_allow_parallel_hydration,
+            _complete_document_scope=_complete_document_scope,
             preferred_observation_hashes=preferred_observation_hashes,
             additive_observation_hashes=additive_observation_hashes,
         )

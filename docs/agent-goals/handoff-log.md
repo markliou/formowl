@@ -1,6 +1,21 @@
 # Agent Handoff Log
 Lifecycle label: `active`.
 
+## 2026-10-26 AI bounded document full read / 待審查、待測
+Added one mode to the existing sealed-reference reader, requiring a complete
+job-bound document inventory and both 200 paragraphs / 60,000 NFC code points.
+Every item retains original hash/revision/lineage/permission/native-locator
+validation; ordered batches are all presented before an answer opportunity.
+Ordinary and mail paths retain existing limits and split behavior. New focused
+real sealed-job test first failed on unchanged implementation (zero citations),
+then the final canonical 12-case matrix passed (59.028s), including lexical-index,
+NFC boundary, runtime binding and visible finalization disclosure. Requested 12
+modules: 316 tests/319.067s, 34 failures with names exactly equal to the supplied
+abf0c968 baseline; no new failure names. No provider/deploy/commit; parent owns exact recorded-request replay
+and review. Canonical dev-container methodology --check is valid=true, ready=false, errors=[]
+and blocked; the host missing-CJK probe is supplemental only. No readiness claim. Worker requested gpt-6.1-sol/high; actual model and
+effort are unverified. Report: `/tmp/herdr-bus/codex-to-claude-workorder-20261026ai.md`.
+
 ## 2026-10-26 AC1′ bounded split refinement / 待審查、待測
 One server-offered next proposal may strictly partition frozen terms after eligible
 zero-result recovery; invalid next proposal or second zero stops, no second split.
