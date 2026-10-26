@@ -4696,13 +4696,17 @@ def _finalization_validation_diagnostic(
     available_citation_ids: Sequence[str],
     validation_result: str,
     repair_attempted: bool,
+    reason_code: str | None = None,
 ) -> dict[str, Any]:
+    reason = ({"reason_code": _safe_finalization_reason(reason_code)}
+              if reason_code is not None else {})
     _record_private_citation_stage({
         "stage": "finalization",
         "final_model": _private_citation_ids_snapshot(final_citation_ids),
         "available_governed": _private_citation_ids_snapshot(available_citation_ids),
         "validation_result": validation_result,
         "repair_attempted": bool(repair_attempted),
+        **reason,
     })
     return {
         "final_model": _citation_ids_snapshot(final_citation_ids),
@@ -4712,6 +4716,7 @@ def _finalization_validation_diagnostic(
             or "parse_rejected"
         ),
         "repair_attempted": bool(repair_attempted),
+        **reason,
     }
 
 
@@ -5016,6 +5021,8 @@ def safe_provider_loop_diagnostics(value: Mapping[str, Any] | None) -> dict[str,
                     "available_governed": snapshots[1],
                     "validation_result": validation_result,
                     "repair_attempted": repair_attempted,
+                    **({"reason_code": _safe_finalization_reason(raw["reason_code"])}
+                       if "reason_code" in raw else {}),
                 }
             )
         safe["finalization_validation"] = validations if valid_validations else []
@@ -5944,6 +5951,7 @@ class CodexResponsesConversationModel:
             final_citation_ids: Sequence[str],
             validation_result: str,
             repair_attempted: bool,
+            reason_code: str | None = None,
         ) -> None:
             available_citation_ids = sorted(
                 {
@@ -5964,6 +5972,7 @@ class CodexResponsesConversationModel:
                     available_citation_ids=available_citation_ids,
                     validation_result=validation_result,
                     repair_attempted=repair_attempted,
+                    reason_code=reason_code,
                 ),
                 limit=_MAX_FINALIZATION_VALIDATION_DIAGNOSTICS,
             )
@@ -6499,18 +6508,25 @@ class CodexResponsesConversationModel:
                     evidence_citation_ids(result) for result in presented_evidence_results
                 ):
                     try:
-                        uncited_decision = _parse_decision(self._response_text(response))
-                    except (ContractValidationError, RuntimeError):
+                        uncited_decision = _parse_decision(
+                            self._response_text(response), typed_evidence_notes=typed_notes_active,
+                            field_request=field_request,
+                            presented_evidence=tuple(presented_evidence_results),
+                            presented_prior_evidence=presented_prior_evidence,
+                        )
+                    except (ContractValidationError, RuntimeError) as exc:
                         _record_finalization_validation(
                             final_citation_ids=(),
                             validation_result="parse_rejected",
                             repair_attempted=final_repair_attempted,
+                            reason_code=_finalization_validation_reason(exc),
                         )
                     else:
                         _record_finalization_validation(
                             final_citation_ids=uncited_decision["citation_ids"],
                             validation_result="citation_rejected",
                             repair_attempted=final_repair_attempted,
+                            reason_code="no_citeable_evidence",
                         )
                     return _safe_stop_outcome(
                         reason=stop_reason
@@ -6600,6 +6616,7 @@ class CodexResponsesConversationModel:
                                 )
                             ),
                             repair_attempted=final_repair_attempted,
+                            reason_code=_finalization_validation_reason(exc),
                         )
                     # Only validated ordinary no-tool output gains this existing
                     # one-shot slot; lookup and evidence validation stay unchanged.
@@ -6630,6 +6647,7 @@ class CodexResponsesConversationModel:
                                     reason_code=reason_code,
                                     ordinary_no_tools=ordinary_no_tool_repair,
                                     required_prior_citations=required_prior_citations,
+                                    field_count=len(note_fields),
                                 ),
                             },
                         ])
@@ -9051,6 +9069,74 @@ def _validation_stop_reason(error: Exception) -> str:
     )
 
 
+_FINALIZATION_EXCEPTION_REASONS = {
+    "Codex returned no UAT answer": "no_text",
+    "UAT Responses provider returned no answer": "no_text",
+    "UAT response kind is invalid": "response_kind_invalid",
+    "UAT answer text is invalid": "answer_text_invalid",
+    "UAT display format is invalid": "display_format_invalid",
+    "UAT coverage status is invalid": "coverage_status_invalid",
+    "UAT coverage note is invalid": "coverage_note_invalid",
+    "UAT incomplete coverage must be disclosed": "incomplete_coverage_undisclosed",
+    "UAT citation identifiers are invalid": "citation_ids_invalid",
+    "UAT citation identifiers must be unique": "citation_ids_duplicate",
+    "UAT citation identifier limit exceeded": "citation_ids_limit",
+}
+_FINALIZATION_REASON_RULES = {
+    "no_text": "Return a nonempty structured JSON decision.",
+    "invalid_json": "Return one valid JSON object without prose or code fences.",
+    "key_set_mismatch": "Use exactly the keys in the current decision schema.",
+    "citation_ids_not_array": "citation_ids must be a JSON array.",
+    "response_kind_invalid": "response_kind must be one of the values allowed by the current decision schema.",
+    "answer_text_invalid": f"answer_text must be nonblank text of at most {_MAX_ANSWER_CHARS} characters.",
+    "display_format_invalid": "display_format must be one of the values allowed by the current decision schema.",
+    "coverage_status_invalid": "coverage_status must be complete, incomplete, or not_applicable.",
+    "coverage_note_invalid": "coverage_note must be text; in typed notes mode it must be the empty string.",
+    "incomplete_coverage_undisclosed": "When coverage_status is incomplete, disclose the limitation in coverage_note.",
+    "citation_ids_invalid": "Every citation_id must be a nonblank string from the presented governed citation set.",
+    "citation_ids_duplicate": "citation_ids must contain no duplicate identifiers.",
+    "citation_ids_limit": f"citation_ids must contain at most {_MAX_RESPONSE_CITATIONS} identifiers.",
+    "no_citeable_evidence": "No current citeable evidence is available; clarify without claiming source absence.",
+    "typed_note_coverage_note_not_empty": "coverage_note must be the empty string; the server renders it.",
+    "typed_note_limitations_not_array": "field_limitations must be a JSON array.",
+    "typed_note_limitations_limit": "field_limitations must contain at most eight items.",
+    "typed_note_coverage_status_invalid": "coverage_status must be complete, incomplete, or not_applicable.",
+    "typed_note_clarification_with_limitations": "For clarification, field_limitations must be [].",
+    "typed_note_item_keys_invalid": "Each field limitation must have exactly field_index, reason, and scope.",
+    "typed_note_index_out_of_range": "Use only integer indices in the current field catalog.",
+    "typed_note_duplicate_index": "Do not repeat a field_index.",
+    "typed_note_reason_invalid": "reason must be not_established, ambiguous, or conflicting.",
+    "typed_note_scope_invalid": "scope must be presented_evidence or unverified_requested_remainder.",
+    "typed_note_remainder_reason_invalid": "unverified_requested_remainder requires reason not_established.",
+    "typed_note_remainder_unsupported": (
+        "Use unverified_requested_remainder only when current presented coverage is authoritatively incomplete; "
+        "unknown coverage or missing field-support metadata does not qualify."
+    ),
+}
+_FINALIZATION_REASON_CODES = frozenset(
+    {*_FINALIZATION_EXCEPTION_REASONS.values(), *_FINALIZATION_REASON_RULES,
+     "other", "no_citeable_evidence"}
+)
+
+
+class _FinalizationValidationError(RuntimeError):
+    """Carry a fixed diagnostic code without changing legacy stop-reason text."""
+
+    def __init__(self, message: str, reason_code: str) -> None:
+        super().__init__(message)
+        self.reason_code = _safe_finalization_reason(reason_code)
+
+
+def _safe_finalization_reason(value: Any) -> str:
+    return _safe_enum_value(value, _FINALIZATION_REASON_CODES) or "other"
+
+
+def _finalization_validation_reason(error: Exception) -> str:
+    if isinstance(error, _FinalizationValidationError):
+        return _safe_finalization_reason(error.reason_code)
+    return _FINALIZATION_EXCEPTION_REASONS.get(str(error), "other")
+
+
 def _finalization_stop_reason(error: Exception) -> str:
     message = str(error).casefold()
     if message == "uat final answer failed public safety validation":
@@ -9072,6 +9158,7 @@ def _final_repair_context(
     reason_code: str | None = None,
     ordinary_no_tools: bool = False,
     required_prior_citations: Sequence[str] = (),
+    field_count: int = 0,
 ) -> str:
     if ordinary_no_tools:
         if reason_code == "transform_identity_failed":
@@ -9099,6 +9186,16 @@ def _final_repair_context(
     if prior_evidence is not None:
         available.update(evidence_citation_ids(prior_evidence))
     repair_reason = reason_code or _validation_stop_reason(error)
+    validation_reason = _finalization_validation_reason(error)
+    rule = _FINALIZATION_REASON_RULES.get(validation_reason, "Follow the current decision schema and validation rules.")
+    # Catalog size is server-owned and bounded; no exception/draft text is replayed.
+    catalog_size = min(8, max(0, field_count))
+    if validation_reason.startswith("typed_note_"):
+        rule += (
+            f" The current field catalog has N={catalog_size}: field_index must be an integer "
+            "from 0 through N-1, with no duplicate indices; for N=0 use []. "
+            "For clarification, field_limitations must be []."
+        )
     preservation = (
         "For this explicit preservation request, an answer must include every prior-visible "
         f"citation {list(required_prior_citations)}; the retained union is not the obligation. "
@@ -9107,7 +9204,8 @@ def _final_repair_context(
     )
     return (
         preservation + "Trusted finalization repair: the previous draft failed "
-        f"{repair_reason}. No more tools are available. Return one concise, "
+        f"{repair_reason}. Validation rule ({validation_reason}): {rule} "
+        "No more tools are available. Return one concise, "
         "useful citation-bound response using only the already presented "
         "evidence and the smallest sufficient subset (at most "
         f"{_MAX_RESPONSE_CITATIONS}) of these governed citation identifiers "
@@ -9630,31 +9728,42 @@ def _render_typed_evidence_notes(
 ) -> dict[str, Any]:
     fields = _typed_note_fields(request)
     limitations = payload["field_limitations"]
-    if (payload["coverage_note"] != "" or not isinstance(limitations, list)
-            or len(limitations) > 8
-            or not isinstance(payload["coverage_status"], str)
-            or payload["coverage_status"] not in {"complete", "incomplete", "not_applicable"}
-            or (payload["response_kind"] == "clarification" and limitations)):
-        raise RuntimeError("Codex returned invalid typed evidence notes")
+    def reject(reason: str) -> None:
+        raise _FinalizationValidationError("Codex returned invalid typed evidence notes", reason)
+
+    if payload["coverage_note"] != "":
+        reject("typed_note_coverage_note_not_empty")
+    if not isinstance(limitations, list):
+        reject("typed_note_limitations_not_array")
+    if len(limitations) > 8:
+        reject("typed_note_limitations_limit")
+    if (not isinstance(payload["coverage_status"], str)
+            or payload["coverage_status"] not in {"complete", "incomplete", "not_applicable"}):
+        reject("typed_note_coverage_status_invalid")
+    if payload["response_kind"] == "clarification" and limitations:
+        reject("typed_note_clarification_with_limitations")
     by_index: dict[int, tuple[str, str]] = {}
     for item in limitations:
-        if (not isinstance(item, dict) or set(item) != {"field_index", "reason", "scope"}
-                or type(item["field_index"]) is not int
-                or not 0 <= item["field_index"] < len(fields)
-                or item["field_index"] in by_index
-                or not isinstance(item["reason"], str)
-                or item["reason"] not in _FIELD_LIMITATION_REASONS
-                or not isinstance(item["scope"], str)
-                or item["scope"] not in _FIELD_LIMITATION_SCOPES
-                or (item["scope"] == "unverified_requested_remainder"
-                    and item["reason"] != "not_established")):
-            raise RuntimeError("Codex returned invalid typed evidence notes")
+        if not isinstance(item, dict) or set(item) != {"field_index", "reason", "scope"}:
+            reject("typed_note_item_keys_invalid")
+        if type(item["field_index"]) is not int or not 0 <= item["field_index"] < len(fields):
+            reject("typed_note_index_out_of_range")
+        if item["field_index"] in by_index:
+            reject("typed_note_duplicate_index")
+        if not isinstance(item["reason"], str) or item["reason"] not in _FIELD_LIMITATION_REASONS:
+            reject("typed_note_reason_invalid")
+        if not isinstance(item["scope"], str) or item["scope"] not in _FIELD_LIMITATION_SCOPES:
+            reject("typed_note_scope_invalid")
+        if item["scope"] == "unverified_requested_remainder" and item["reason"] != "not_established":
+            reject("typed_note_remainder_reason_invalid")
         by_index[item["field_index"]] = (item["reason"], item["scope"])
     # Retained evidence may affect retrieval notes, but never authorize a
     # remainder limitation for this turn's field catalog.
     if (any(scope == "unverified_requested_remainder" for _, scope in by_index.values())
             and not _typed_note_remainder_is_incomplete(presented)):
-        raise RuntimeError("Codex returned unsupported typed remainder scope")
+        raise _FinalizationValidationError(
+            "Codex returned unsupported typed remainder scope", "typed_note_remainder_unsupported",
+        )
 
     # Merely presenting retained evidence does not make an uncited ordinary
     # follow-up evidence-dependent. Strict typed validation above still applies.
@@ -9723,11 +9832,11 @@ def _parse_decision(
     presented_prior_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(final_message, str) or not final_message.strip():
-        raise RuntimeError("Codex returned no UAT answer")
+        raise _FinalizationValidationError("Codex returned no UAT answer", "no_text")
     try:
         payload = json.loads(final_message)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("Codex returned an invalid UAT answer") from exc
+        raise _FinalizationValidationError("Codex returned an invalid UAT answer", "invalid_json") from exc
     required_keys = {
         "response_kind",
         "answer_text",
@@ -9738,12 +9847,10 @@ def _parse_decision(
     }
     if typed_evidence_notes:
         required_keys.add("field_limitations")
-    if (
-        not isinstance(payload, dict)
-        or set(payload) != required_keys
-        or not isinstance(payload["citation_ids"], list)
-    ):
-        raise RuntimeError("Codex returned an invalid UAT answer")
+    if not isinstance(payload, dict) or set(payload) != required_keys:
+        raise _FinalizationValidationError("Codex returned an invalid UAT answer", "key_set_mismatch")
+    if not isinstance(payload["citation_ids"], list):
+        raise _FinalizationValidationError("Codex returned an invalid UAT answer", "citation_ids_not_array")
     if typed_evidence_notes:
         payload = _render_typed_evidence_notes(
             payload, field_request, presented_evidence, presented_prior_evidence,

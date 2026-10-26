@@ -51,6 +51,167 @@ def _mail_tool_descriptor() -> dict:
 
 
 class Issue56ProviderFinalizationTests(unittest.TestCase):
+    def test_finalization_reason_codes_preserve_stop_classification_and_safe_projection(self):
+        valid = json.loads(_decision(citation="synthetic-citation"))
+        cases = [
+            ("", "no_text", "Codex returned no UAT answer"),
+            ("{", "invalid_json", "Codex returned an invalid UAT answer"),
+            (json.dumps({**valid, "extra": "private-rejected-draft"}), "key_set_mismatch",
+             "Codex returned an invalid UAT answer"),
+            (json.dumps({**valid, "citation_ids": "wrong"}), "citation_ids_not_array",
+             "Codex returned an invalid UAT answer"),
+            (json.dumps({**valid, "answer_text": "x" * (orchestrator._MAX_ANSWER_CHARS + 1)}),
+             "answer_text_invalid", "UAT answer text is invalid"),
+            (json.dumps({**valid, "coverage_status": "invalid"}), "coverage_status_invalid",
+             "UAT coverage status is invalid"),
+            (json.dumps({**valid, "citation_ids": ["same", "same"]}), "citation_ids_duplicate",
+             "UAT citation identifiers must be unique"),
+        ]
+        for text, reason, legacy_message in cases:
+            with self.subTest(reason=reason):
+                with self.assertRaises((ContractValidationError, RuntimeError)) as caught:
+                    orchestrator._parse_decision(text)
+                self.assertEqual(str(caught.exception), legacy_message)
+                self.assertEqual(orchestrator._finalization_validation_reason(caught.exception), reason)
+                self.assertEqual(orchestrator._finalization_stop_reason(caught.exception),
+                                 orchestrator._finalization_stop_reason(RuntimeError(legacy_message)))
+                record = orchestrator._finalization_validation_diagnostic(
+                    final_citation_ids=(), available_citation_ids=(),
+                    validation_result="parse_rejected", repair_attempted=False, reason_code=reason,
+                )
+                outcome = orchestrator.UatConversationOutcome(
+                    response_kind="clarification", answer_text="Synthetic clarification.",
+                    display_format="narrative", model_name="synthetic-model",
+                    provider_diagnostic={"finalization_validation": [record]},
+                )
+                projected = _browser_projection(outcome, (), latest_evidence=None)
+                http = _safe_provider_diagnostic(projected["diagnostic"])
+                self.assertEqual(http["finalization_validation"][0]["reason_code"], reason)
+                for unsafe in ("private-rejected-draft", ["not-a-code"], None):
+                    record["reason_code"] = unsafe
+                    sanitized = orchestrator.safe_provider_loop_diagnostics({"finalization_validation": [record]})
+                    self.assertEqual(sanitized["finalization_validation"][0]["reason_code"], "other")
+                del record["reason_code"]
+                self.assertNotIn("reason_code", orchestrator.safe_provider_loop_diagnostics(
+                    {"finalization_validation": [record]})["finalization_validation"][0])
+        self.assertEqual(orchestrator._finalization_validation_reason(RuntimeError("private-rejected-draft")),
+                         "other")
+
+    def test_typed_finalization_reasons_distinguish_rules_without_changing_rejection(self):
+        binder, descriptor, arguments, _ = self._field_plan(
+            family="mail", user_text="Find inspection interval for prism compass.",
+            field="inspection interval", terms=("prism compass",),
+        )
+        request = orchestrator._parse_tool_request(arguments, tool_descriptor=descriptor,
+                                                    request_contract_binder=binder)
+        valid = {**json.loads(_decision(citation="synthetic-citation")),
+                 "coverage_note": "", "field_limitations": []}
+        item = {"field_index": 0, "reason": "not_established", "scope": "presented_evidence"}
+        cases = [
+            ({"coverage_note": "not-empty"}, "coverage_note_not_empty"),
+            ({"field_limitations": {}}, "limitations_not_array"),
+            ({"field_limitations": [item] * 9}, "limitations_limit"),
+            ({"coverage_status": "invalid"}, "coverage_status_invalid"),
+            ({"response_kind": "clarification", "field_limitations": [item]}, "clarification_with_limitations"),
+            ({"field_limitations": [{**item, "extra": True}]}, "item_keys_invalid"),
+            ({"field_limitations": [{**item, "field_index": True}]}, "index_out_of_range"),
+            ({"field_limitations": [{**item, "field_index": 1}]}, "index_out_of_range"),
+            ({"field_limitations": [item, item]}, "duplicate_index"),
+            ({"field_limitations": [{**item, "reason": "invalid"}]}, "reason_invalid"),
+            ({"field_limitations": [{**item, "scope": "invalid"}]}, "scope_invalid"),
+            ({"field_limitations": [{**item, "scope": "unverified_requested_remainder", "reason": "ambiguous"}]},
+             "remainder_reason_invalid"),
+            ({"field_limitations": [{**item, "scope": "unverified_requested_remainder"}]}, "remainder_unsupported"),
+        ]
+        for changes, suffix in cases:
+            with self.subTest(reason=suffix):
+                with self.assertRaises(RuntimeError) as caught:
+                    orchestrator._parse_decision(json.dumps({**valid, **changes}), typed_evidence_notes=True,
+                                                 field_request=request)
+                reason = "typed_note_" + suffix
+                self.assertEqual(orchestrator._finalization_validation_reason(caught.exception), reason)
+                self.assertEqual(orchestrator._finalization_stop_reason(caught.exception), "provider_incomplete")
+                self.assertEqual(str(caught.exception), "Codex returned unsupported typed remainder scope"
+                                 if suffix == "remainder_unsupported" else "Codex returned invalid typed evidence notes")
+
+    def _typed_finalization_turn(self, *, citeable, malformed=False):
+        user_text = "Find inspection interval for prism compass in mail."
+        _, descriptor, arguments, capabilities = self._field_plan(
+            family="mail", user_text=user_text, field="inspection interval", terms=("prism compass",),
+        )
+        provider = CodexResponsesConversationModel(
+            base_url="https://provider.example.test/v1", api_key="synthetic-key", typed_evidence_notes=True,
+        )
+        provider.configure_conversation_tools(safety_identifier="typed-finalization-test",
+                                              tool_descriptors=[descriptor])
+        evidence = {"status": "ok" if citeable else "no_results", "coverage": {"status": "incomplete"},
+                    "mail_import_session_id": "authorized-session", "citations": []}
+        citation = "sha256:" + "a" * 64
+        if citeable:
+            evidence.update({"evidence_snippets": [{"source_observation_id": "synthetic-observation",
+                                                    "snippet": "Synthetic inspection interval evidence."}],
+                             "citations": [{"citation_id": citation,
+                                            "source_observation_id": "synthetic-observation"}]})
+        payloads = []
+
+        def response(payload):
+            payloads.append(copy.deepcopy(payload))
+            self.assertIn("field_limitations", payload["text"]["format"]["schema"]["required"])
+            if len(payloads) == 1:
+                return {"status": "completed", "output": [{"type": "function_call", "call_id": "synthetic-call",
+                        "name": descriptor["name"], "arguments": json.dumps(arguments)}]}
+            decision = {**json.loads(_decision(citation=citation)), "coverage_note": "", "field_limitations": []}
+            if not citeable:
+                decision.update(response_kind="clarification", citation_ids=[])
+            if malformed and len(payloads) == 2:
+                decision.update(answer_text="private-rejected-draft", field_limitations=[{
+                    "field_index": 1, "reason": "ambiguous", "scope": "presented_evidence"}])
+            if len(payloads) == 3:
+                repair = payload["input"][-1]["content"]
+                self.assertIn("typed_note_index_out_of_range", repair)
+                self.assertIn("N=1", repair)
+                self.assertIn("from 0 through N-1", repair)
+                self.assertIn("For clarification, field_limitations must be []", repair)
+                self.assertNotIn("private-rejected-draft", json.dumps(payload))
+                self.assertEqual(payload["tools"], payloads[0]["tools"])
+                self.assertEqual(payload["tool_choice"], "none")
+            return {"status": "completed", "output_text": json.dumps(decision)}
+
+        backend = mock.Mock(return_value=evidence)
+        try:
+            with mock.patch.object(provider, "_request_response", side_effect=response):
+                outcome = provider.respond(
+                    history=(), user_text=user_text, latest_evidence=None, safety_identifier="typed-finalization-test",
+                    evidence_tool=backend, formowl_tool_descriptor=descriptor,
+                    authorized_capability_summary=capabilities,
+                )
+        finally:
+            provider.close()
+        self.assertEqual(backend.call_count, 1, (outcome.provider_diagnostic, len(payloads)))
+        return outcome, payloads
+
+    def test_no_evidence_typed_schema_parses_but_still_safely_stops(self):
+        for malformed in (False, True):
+            with self.subTest(malformed=malformed):
+                outcome, payloads = self._typed_finalization_turn(citeable=False, malformed=malformed)
+                self.assertEqual(len(payloads), 2)
+                self.assertEqual(outcome.response_kind, "clarification")
+                self.assertEqual(outcome.citation_ids, ())
+                record, = outcome.provider_diagnostic["finalization_validation"]
+                self.assertEqual(record["validation_result"], "parse_rejected" if malformed else "citation_rejected")
+                self.assertEqual(record["reason_code"], "typed_note_clarification_with_limitations"
+                                 if malformed else "no_citeable_evidence")
+                self.assertFalse(record["repair_attempted"])
+
+    def test_typed_finalization_one_repair_gets_current_catalog_rule_without_draft(self):
+        outcome, payloads = self._typed_finalization_turn(citeable=True, malformed=True)
+        self.assertEqual(len(payloads), 3)
+        self.assertEqual(outcome.response_kind, "answer")
+        records = outcome.provider_diagnostic["finalization_validation"]
+        self.assertEqual([v["validation_result"] for v in records], ["parse_rejected", "passed"])
+        self.assertEqual([v["repair_attempted"] for v in records], [False, True])
+        self.assertEqual(records[0]["reason_code"], "typed_note_index_out_of_range")
+
     def _field_plan(self, *, family, user_text, field="category", terms=("cerulean catalog", "category")):
         tool_name = "query_mail_evidence" if family == "mail" else "query_effective_graph_view"
         descriptor = next(

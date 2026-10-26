@@ -1,6 +1,15 @@
 # Agent Handoff Log
 Lifecycle label: `active`.
 
+## 2026-10-26 AB2 bounded finalization diagnostics / 待審查、待測
+Allowlisted safe reason codes survive existing diagnostic projection; typed parser
+mode now matches the no-evidence schema, retaining citation_rejected and safe stop.
+Existing one-shot repair gains fixed rule text/current field-count bounds without
+draft replay or changed validation/attempt limits. Canonical focused 9 PASS/0.352s;
+authority --check EXIT0 valid=true/ready=false/blocked. No provider/deploy/commit.
+Requested worker gpt-6.1-sol/high, actual unverified. Evidence and initial fixture
+failures: `/tmp/herdr-bus/codex-to-claude-workorder-20261026ab.md`; live follow-up pending.
+
 ## 2026-10-26 UAT model policy / Z preparation / 待測
 The 2026-10-26 user override requests UAT `gpt-5.6-luna`/`reasoning_effort=xhigh`,
 superseding the 2026-10-25 low request (which superseded 2026-10-15 gpt-6-luna/high).
