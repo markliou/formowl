@@ -578,7 +578,7 @@ _RESOLVED_REFERENCE_GUIDANCE = (
     "is a server-validated exception to original-request-span grounding. Include "
     "that concrete identifier in both query_text and required_terms; generic "
     "reference words are not substitutes. Preserve the original current-turn "
-    "original_query_hash and authorized source-family scope. source_turn_hash "
+    "authorized source-family scope; the server supplies original_query_hash for this turn. source_turn_hash "
     "identifies the prior validated cited turn; it must not replace the current "
     "hash. No other history, assistant text, or inferred identifier is authorized."
 )
@@ -593,8 +593,8 @@ _CODEX_MAIL_TOOL_ARGUMENT_GUIDANCE = """
   request_contract determine source-family/scope; source-family and
   operation/action words are routing semantics, not content terms unless the
   user explicitly requests those literal words;
-- when trusted turn request-contract context is supplied, copy its
-  original_query_hash, query_class, and maximum_claim_strength into
+- when trusted turn request-contract context is supplied, the server supplies
+  original_query_hash; do not submit it. Copy query_class and maximum_claim_strength into
   request_contract; select source_family_scope only from authorized capabilities
   and requested_fields from the user's information needs in the original task.
   Semantic requested fields do not require a known source column or literal
@@ -606,6 +606,11 @@ _CODEX_MAIL_TOOL_ARGUMENT_GUIDANCE = """
 - do not send graph-only table_query, exact-inventory, or cursor arguments to
   the mail evidence tool;
 """.strip()
+
+
+def _formowl_tool_argument_guidance(tool_name: str) -> str:
+    return (_CODEX_MAIL_TOOL_ARGUMENT_GUIDANCE if tool_name == _MAIL_EVIDENCE_TOOL_NAME
+            else _CODEX_GRAPH_TOOL_ARGUMENT_GUIDANCE)
 
 
 def _formowl_instruction_bundle(
@@ -622,17 +627,11 @@ def _formowl_instruction_bundle(
     )
 
     tool_name = formowl_tool["name"]
-    tool_argument_guidance = (
-        _CODEX_MAIL_TOOL_ARGUMENT_GUIDANCE
-        if tool_name == _MAIL_EVIDENCE_TOOL_NAME
-        else _CODEX_GRAPH_TOOL_ARGUMENT_GUIDANCE
-    )
+    tool_argument_guidance = _formowl_tool_argument_guidance(tool_name)
     if catalog_mode:
-        tool_argument_guidance = (
-            "Apply ONLY the argument guidance for the current server-selected tool.\n"
-            "When query_mail_evidence is selected:\n" + _CODEX_MAIL_TOOL_ARGUMENT_GUIDANCE
-            + "\nWhen query_effective_graph_view is selected:\n" + _CODEX_GRAPH_TOOL_ARGUMENT_GUIDANCE
-        )
+        # Keep common conversation instructions fixed; render argument guidance
+        # only for the current allowed tool at the request boundary below.
+        tool_argument_guidance = ""
     base_instructions = _CODEX_BASE_INSTRUCTIONS.replace(
         "{tool_argument_guidance}",
         tool_argument_guidance,
@@ -1414,6 +1413,10 @@ class _UatTurnRequestContractBinder:
         table_query: Mapping[str, Any] | None,
         freeze: bool = True,
     ) -> Mapping[str, Any] | None:
+        if isinstance(candidate, Mapping):
+            # Only the turn identity is server-owned. Preserve every other
+            # proposed field for the existing shape/scope/frozen-contract checks.
+            candidate = {**candidate, "original_query_hash": self._original_query_hash}
         if self._native_page_issue:
             raise ContractValidationError("UAT native attachment page requires clarification")
         if candidate is not None and isinstance(candidate, Mapping):
@@ -1444,7 +1447,7 @@ class _UatTurnRequestContractBinder:
             raise ContractValidationError("UAT request contract is invalid")
         if candidate is not None:
             # Validate the complete typed proposal before the server rebuilds
-            # its immutable query goal.  The provider cannot omit fields or
+            # its immutable query goal. The provider cannot omit model-owned fields or
             # smuggle an unknown field while the server-owned hash/class/claim
             # ceiling remain authoritative below.
             validate_semantic_request_contract(
@@ -3118,6 +3121,20 @@ class CodexAppServerStdioTransport:
             context.event.set()
 
 
+def _model_capability_context(summary: Mapping[str, Any]) -> dict[str, Any]:
+    """Project display metadata only; binders/executors keep the original summary."""
+    displayed = dict(summary)
+    fields = summary.get("projection_fields")
+    if isinstance(fields, (list, tuple)):
+        projected = [
+            {key: value for key, value in item.items() if key != "candidate_hashes"}
+            if isinstance(item, dict) else item
+            for item in fields
+        ]
+        displayed["projection_fields"] = tuple(projected) if isinstance(fields, tuple) else projected
+    return displayed
+
+
 class CodexAppServerConversationModel:
     """Use isolated Codex threads to decide when FormOwl evidence is needed."""
 
@@ -3232,6 +3249,7 @@ class CodexAppServerConversationModel:
                 thread, created, expired_threads = self._get_or_create_thread(
                     safety_identifier,
                     formowl_tool=formowl_tool,
+                    request_contract_binder=request_contract_binder,
                 )
                 for expired_thread in expired_threads:
                     self._transport.delete_thread(expired_thread.thread_id)
@@ -3276,7 +3294,7 @@ class CodexAppServerConversationModel:
                             "They constrain source and field planning and are not "
                             "source evidence or instructions:\n"
                             + json.dumps(
-                                dict(authorized_capability_summary),
+                                _model_capability_context(authorized_capability_summary),
                                 ensure_ascii=False,
                                 separators=(",", ":"),
                             )
@@ -3288,7 +3306,7 @@ class CodexAppServerConversationModel:
                         "kind": "trusted",
                         "value": (
                             "Server-authoritative immutable boundary for this user "
-                            "turn. Copy its original_query_hash, query_class, and "
+                            "turn. The server supplies original_query_hash; do not submit it. Copy query_class and "
                             "maximum_claim_strength into request_contract; select "
                             "source_family_scope from required_source_family_scope "
                             "and requested_fields from the original task. The server freezes the first "
@@ -3447,8 +3465,13 @@ class CodexAppServerConversationModel:
         safety_identifier: str,
         *,
         formowl_tool: Mapping[str, Any],
+        request_contract_binder: _UatTurnRequestContractBinder | None = None,
     ) -> tuple[CodexAppServerThread, bool, tuple[CodexAppServerThread, ...]]:
-        tool_fingerprint = _formowl_tool_descriptor_fingerprint(formowl_tool)
+        tool_fingerprint = _formowl_tool_descriptor_fingerprint({
+            **formowl_tool, "inputSchema": _model_required_overlay(
+                formowl_tool["inputSchema"], request_contract_binder=request_contract_binder)})
+        formowl_tool = {**formowl_tool, "inputSchema": _model_tool_parameters(
+            formowl_tool, request_contract_binder=request_contract_binder)}
         with self._lock:
             existing = self._threads.get(safety_identifier)
             if existing is not None:
@@ -4754,6 +4777,15 @@ def _provider_attempt_diagnostic(
     return diagnostic
 
 
+def _safe_local_usage(value: Any) -> dict[str, int] | None:
+    keys = {"prompt_eval_count", "eval_count", "num_ctx", "num_predict"}
+    if (not isinstance(value, Mapping) or set(value) != keys
+            or any(type(value[k]) is not int or not 0 <= value[k] <= 2**31 for k in keys)
+            or value["num_ctx"] not in {32768, 65536} or not 1 <= value["num_predict"] <= 8192):
+        return None
+    return {key: value[key] for key in sorted(keys)}
+
+
 def _citation_projection_result(
     raw_citations: Sequence[str],
     presented_citations: Sequence[str],
@@ -5043,6 +5075,9 @@ def safe_provider_loop_diagnostics(value: Mapping[str, Any] | None) -> dict[str,
             if attempt_request_shape is not None:
                 bounded_attempt["request_shape"] = attempt_request_shape
             bounded_attempt.update(safe_provider_transport_diagnostics(raw))
+            local_usage = _safe_local_usage(raw.get("local_usage"))
+            if local_usage is not None:
+                bounded_attempt["local_usage"] = local_usage
             attempts.append(bounded_attempt)
         safe["provider_attempts"] = (
             attempts[-_MAX_PROVIDER_ATTEMPT_DIAGNOSTICS:] if valid_attempt_tail else []
@@ -5195,11 +5230,13 @@ def diagnostic_deployment_settings(
     temporary_access_enabled: bool, provider_base_url: str,
     typed_evidence_notes: bool = False, model: str = _DEFAULT_CODEX_MODEL, reasoning_effort: str = _DEFAULT_CODEX_REASONING_EFFORT,
     websocket: bool = False, codex_native_requests: bool = False,
+    provider_protocol: str = "responses", expected_model_digest: str | None = None,
+    ollama_num_ctx: int = 32768,
 ) -> dict[str, Any]:
     """Pure manifest helper; startup supplies actual resolved settings, not JSON."""
     if type(typed_evidence_notes) is not bool:
         raise ContractValidationError("UAT typed evidence notes mode is invalid")
-    return {
+    settings = {
         "typed_evidence_notes": typed_evidence_notes,
         "typed_evidence_notes_policy": "typed_evidence_notes_v2",
         "host": host, "port": port, "temporary_lan_diagnostic": True,
@@ -5210,6 +5247,13 @@ def diagnostic_deployment_settings(
         "codex_native_requests": codex_native_requests,
         "provider_endpoint_fingerprint": sha256_json(provider_base_url.rstrip("/")),
     }
+    if provider_protocol == "ollama_chat":
+        settings.update(provider_transport="ollama_chat", stream_initial_requests=False,
+                        codex_native_requests=False, reasoning_effort="not_requested",
+                        applied_reasoning_effort="unverified",
+                        expected_model_digest=expected_model_digest, ollama_num_ctx=ollama_num_ctx,
+                        input_context_completeness="unverified")
+    return settings
 
 
 def _diagnostic_immutable_bytes(path: Path, *, limit: int = 64 * 1024 * 1024) -> bytes:
@@ -5557,7 +5601,7 @@ class CodexResponsesConversationModel:
         self,
         *,
         base_url: str,
-        api_key: str,
+        api_key: str | None = None,
         model: str = _DEFAULT_CODEX_MODEL,
         reasoning_effort: str = _DEFAULT_CODEX_REASONING_EFFORT,
         timeout_seconds: float = 240.0,
@@ -5567,8 +5611,30 @@ class CodexResponsesConversationModel:
         typed_evidence_notes: bool = False,
         websocket: bool = False,
         codex_native_requests: bool = False,
+        provider_protocol: str = "responses",
+        expected_model_digest: str | None = None,
+        ollama_num_ctx: int = 32768,
     ) -> None:
-        normalized_base_url = _normalize_custom_provider_base_url(base_url)
+        if provider_protocol not in {"responses", "ollama_chat"}:
+            raise ContractValidationError("UAT provider protocol is invalid")
+        self._provider_protocol = provider_protocol
+        if provider_protocol == "ollama_chat":
+            parsed = urlsplit(base_url)
+            if (parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "::1"}
+                    or parsed.username is not None or parsed.password is not None
+                    or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
+                    or parsed.port is None or api_key is not None or websocket or codex_native_requests
+                    or type(ollama_num_ctx) is not int or ollama_num_ctx not in {32768, 65536}
+                    or not isinstance(expected_model_digest, str)
+                    or re.fullmatch(r"[a-f0-9]{64}", expected_model_digest) is None):
+                raise ContractValidationError("UAT local provider configuration is invalid")
+            normalized_base_url = base_url.rstrip("/")
+        else:
+            normalized_base_url = _normalize_custom_provider_base_url(base_url)
+        self._ollama_num_ctx = ollama_num_ctx
+        self._expected_model_digest = expected_model_digest
+        self._ollama_verified = False
+        self._ollama_usage: ContextVar[dict[str, Any] | None] = ContextVar("formowl_ollama_usage", default=None)
         if type(codex_native_requests) is not bool:
             raise ContractValidationError("UAT Codex-native request mode is invalid")
         self._codex_native_requests = codex_native_requests
@@ -5584,7 +5650,7 @@ class CodexResponsesConversationModel:
         if type(typed_evidence_notes) is not bool:
             raise ContractValidationError("UAT typed evidence notes mode is invalid")
         self._typed_evidence_notes = typed_evidence_notes
-        if (
+        if provider_protocol == "responses" and (
             not isinstance(api_key, str)
             or not api_key.strip()
             or len(api_key.encode("utf-8")) > _MAX_CODEX_AUTH_CACHE_BYTES
@@ -5609,7 +5675,8 @@ class CodexResponsesConversationModel:
         ):
             raise ContractValidationError("UAT Responses provider timeout is invalid")
         self._responses_url = normalized_base_url.rstrip("/") + "/responses"
-        self._api_key = api_key.strip()
+        self._api_key = api_key.strip() if api_key is not None else None
+        self._ollama_url = normalized_base_url
         self._model = model.strip()
         self._reasoning_effort = reasoning_effort
         self._timeout_seconds = float(timeout_seconds)
@@ -5628,7 +5695,186 @@ class CodexResponsesConversationModel:
 
     @property
     def model_name(self) -> str:
+        if self._provider_protocol == "ollama_chat":
+            return f"ollama:{self._model}"
         return f"codex-responses:{self._model}"
+
+    def _open_local_json(self, request: urllib.request.Request, *, timeout: float) -> tuple[dict[str, Any], int]:
+        # Literal loopback only; neither environment proxies nor redirects may
+        # turn local source context into an external provider request.
+        with urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoResponsesRedirect()).open(
+            request, timeout=timeout,
+        ) as response:
+            body = response.read(_MAX_RESPONSES_BODY_BYTES + 1)
+            status = response.status
+        parsed = _decode_provider_response(body)
+        if parsed is None or not 200 <= status < 300:
+            raise RuntimeError("UAT local provider returned invalid JSON")
+        return parsed, status
+
+    def verify_local_model(self) -> None:
+        """Explicit startup-only installed-tag/digest check, never an inference retry."""
+        if self._provider_protocol != "ollama_chat":
+            raise ContractValidationError("UAT local provider verification is invalid")
+        data, _ = self._open_local_json(
+            urllib.request.Request(self._ollama_url + "/api/tags"), timeout=min(10.0, self._timeout_seconds),
+        )
+        models = data.get("models")
+        matches = [m for m in models if isinstance(m, Mapping) and m.get("name") == self._model] if isinstance(models, list) else []
+        if len(matches) != 1 or matches[0].get("digest") != self._expected_model_digest:
+            raise ContractValidationError("UAT local provider model digest mismatch")
+        self._ollama_verified = True
+
+    def _ollama_chat_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        messages: list[dict[str, Any]] = [{"role": "system", "content": payload["instructions"]}]
+        names: dict[str, str] = {}
+        settled: set[str] = set()
+        for item in payload["input"]:
+            kind = item.get("type")
+            if kind == "function_call":
+                call_id = item["call_id"]
+                arguments = json.loads(item["arguments"])
+                if call_id in names or not isinstance(arguments, dict):
+                    raise RuntimeError("UAT local tool history is invalid")
+                names[call_id] = item["name"]
+                messages.append({"role": "assistant", "content": "", "tool_calls": [{
+                    "id": call_id, "type": "function", "function": {"name": item["name"], "arguments": arguments},
+                }]})
+            elif kind == "function_call_output":
+                call_id = item["call_id"]
+                if call_id not in names or call_id in settled:
+                    raise RuntimeError("UAT local tool result binding is invalid")
+                settled.add(call_id)
+                messages.append({"role": "tool", "tool_name": names[call_id],
+                                 "tool_call_id": call_id, "content": item["output"]})
+            elif item.get("role") in {"system", "developer", "user", "assistant"}:
+                content = item.get("content")
+                if isinstance(content, list):
+                    if any(p.get("type") != "output_text" or not isinstance(p.get("text"), str) for p in content):
+                        raise RuntimeError("UAT local message history is invalid")
+                    content = "".join(p["text"] for p in content)
+                if not isinstance(content, str):
+                    raise RuntimeError("UAT local message history is invalid")
+                messages.append({"role": "system" if item["role"] == "developer" else item["role"], "content": content})
+            else:
+                raise RuntimeError("UAT local message history is invalid")
+        if set(names) != settled:
+            raise RuntimeError("UAT local tool history is unsettled")
+        limit = payload.get("max_output_tokens", 4096)
+        if type(limit) is not int or not 1 <= limit <= 8192:
+            raise RuntimeError("UAT local output budget is invalid")
+        native: dict[str, Any] = {"model": self._model, "messages": messages, "stream": False,
+                                 "options": {"num_ctx": self._ollama_num_ctx, "num_predict": limit}}
+        choice = payload.get("tool_choice", "auto")
+        if choice != "none" and payload.get("tools"):
+            offered = payload["tools"]
+            if isinstance(choice, Mapping):
+                offered = [t for t in offered if t.get("name") == choice.get("name")]
+            if not offered:
+                raise RuntimeError("UAT local selected tool is unavailable")
+            native["tools"] = [{"type": "function", "function": {
+                "name": t["name"], "description": t["description"], "parameters": t["parameters"],
+            }} for t in offered]
+        else:
+            native["format"] = deepcopy(payload["text"]["format"]["schema"])
+        return native
+
+    def _request_ollama_chat(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        self._ollama_usage.set(None)
+        if not self._ollama_verified:
+            raise RuntimeError("UAT local model has not been verified")
+        native = self._ollama_chat_payload(payload)
+        shape = _provider_request_shape_snapshot(native)
+        journal = self._active_journal.get()
+        if journal is not None:
+            if (journal.closed or journal.exhausted or
+                    _responses_wire_hash(payload["input"][:journal.sent_count]) != journal.sent_input_sha256):
+                raise RuntimeError("UAT local conversation retired or prefix changed")
+            journal.sent_count = len(payload["input"])
+            journal.sent_input_sha256 = _responses_wire_hash(payload["input"])
+        timeout = journal.request_timeout if journal is not None and journal.request_timeout is not None else getattr(
+            self, "_active_request_timeout_seconds", self._timeout_seconds)
+        status = None
+        failure_reason = "transport_error"
+        try:
+            data, status = self._open_local_json(urllib.request.Request(
+                self._ollama_url + "/api/chat", data=_responses_wire_json(native), method="POST",
+                headers={"Content-Type": "application/json", "User-Agent": _UAT_BACKEND_USER_AGENT},
+            ), timeout=timeout)
+            failure_reason = "invalid_json_or_shape"
+            usage = {k: data.get(k) for k in ("prompt_eval_count", "eval_count")}
+            if any(type(v) is not int or v < 0 for v in usage.values()):
+                raise RuntimeError("UAT local token counts are unavailable")
+            self._ollama_usage.set({**usage, "num_ctx": self._ollama_num_ctx,
+                                    "num_predict": native["options"]["num_predict"]})
+            if data.get("model") != self._model:
+                failure_reason = "model_identity_mismatch"
+                raise RuntimeError("UAT local response model is invalid")
+            if (data.get("truncated") or data.get("input_truncated")
+                    or usage["prompt_eval_count"] + native["options"]["num_predict"] >= self._ollama_num_ctx):
+                failure_reason = "input_context_limit"
+                raise RuntimeError("UAT local input context cannot be accepted")
+            if data.get("done") is not True or data.get("done_reason") != "stop" or data.get("error"):
+                failure_reason = "incomplete_status"
+                raise RuntimeError("UAT local output is incomplete")
+            message = data.get("message")
+            if not isinstance(message, Mapping) or message.get("role") != "assistant":
+                raise RuntimeError("UAT local response message is invalid")
+            calls = message.get("tool_calls", [])
+            if calls is None:
+                calls = []
+            failure_reason = "invalid_tool_call"
+            allowed = {t["function"]["name"] for t in native.get("tools", [])}
+            output: list[dict[str, Any]] = []
+            if not isinstance(calls, list) or len(calls) > _MAX_TOOL_CALLS_PER_TURN:
+                raise RuntimeError("UAT local response tool shape is invalid")
+            for call in calls:
+                fn = call.get("function") if isinstance(call, Mapping) else None
+                if (not isinstance(fn, Mapping) or fn.get("name") not in allowed
+                        or not isinstance(fn.get("arguments"), dict)):
+                    raise RuntimeError("UAT local response tool shape is invalid")
+                # Native Ollama does not require call IDs. Assign an opaque local
+                # identity once to the observed call; preserve it through results.
+                output.append({"type": "function_call", "call_id": "ollama_" + uuid.uuid4().hex,
+                               "name": fn["name"], "arguments": json.dumps(fn["arguments"], allow_nan=False)})
+            failure_reason = "invalid_json_or_shape"
+            content = message.get("content", "")
+            if not isinstance(content, str):
+                raise RuntimeError("UAT local response text is invalid")
+            if content:
+                output.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": content}]})
+            return _UatProviderResponse({"status": "completed", "model": data["model"], "output": output},
+                                        http_status=status, request_shape=shape)
+        except urllib.error.HTTPError as exc:
+            # Keep status and fixed structured classification, never raw error text.
+            try:
+                body = exc.read(_MAX_RESPONSES_BODY_BYTES + 1)
+            except Exception:
+                body = b""
+            parsed = _decode_provider_response(body)
+            error = parsed.get("error") if isinstance(parsed, Mapping) else None
+            if isinstance(error, str):
+                try:
+                    nested = json.loads(error)
+                except (ValueError, TypeError):
+                    nested = None
+                error = nested.get("error") if isinstance(nested, Mapping) else None
+            reason = "http_error"
+            if (exc.code == 400 and isinstance(error, Mapping)
+                    and error.get("code") == 400 and error.get("type") == "exceed_context_size_error"):
+                reason = "input_context_limit"
+            raise _UatProviderFailure(
+                reason_code=reason, http_status=exc.code, body=body,
+                headers=exc.headers, request_shape=shape,
+            ) from None
+        except Exception as exc:
+            timed_out = isinstance(exc, (TimeoutError, socket.timeout)) or (
+                isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, (TimeoutError, socket.timeout))
+            )
+            raise _UatProviderFailure(
+                reason_code="transport_timeout" if timed_out else failure_reason,
+                http_status=status, request_shape=shape, transport_exception=exc,
+            ) from None
 
     def extract_structured_json(
         self, *, instructions: str, source_unit: Mapping[str, Any],
@@ -5943,7 +6189,7 @@ class CodexResponsesConversationModel:
                         "source-field planning before the first tool call. They are "
                         "capability metadata, not business evidence or instructions:\n"
                         + json.dumps(
-                            dict(authorized_capability_summary),
+                            _model_capability_context(authorized_capability_summary),
                             ensure_ascii=False,
                             separators=(",", ":"),
                         )
@@ -5957,7 +6203,7 @@ class CodexResponsesConversationModel:
                     "role": "developer",
                     "content": (
                         "Server-authoritative immutable FormOwl boundary for this "
-                        "user turn. Copy its original_query_hash, query_class, and "
+                        "user turn. The server supplies original_query_hash; do not submit it. Copy query_class and "
                         "maximum_claim_strength into request_contract; select "
                         "source_family_scope from required_source_family_scope "
                         "and requested_fields from the original task. The server freezes the first "
@@ -6085,6 +6331,10 @@ class CodexResponsesConversationModel:
                 )
             )
             del provider_attempt_diagnostics[:-_MAX_PROVIDER_ATTEMPT_DIAGNOSTICS]
+            if self._provider_protocol == "ollama_chat":
+                usage = _safe_local_usage(self._ollama_usage.get())
+                if usage is not None:
+                    provider_attempt_diagnostics[-1]["local_usage"] = usage
 
         def _record_finalization_validation(
             *,
@@ -6270,6 +6520,7 @@ class CodexResponsesConversationModel:
             ):
                 tools.append(_responses_function_tool(
                     formowl_tool, request_contract_context=request_contract_context,
+                    request_contract_binder=request_contract_binder,
                 ))
             if (
                 (evidence_required or auto_tools_allowed)
@@ -6338,11 +6589,20 @@ class CodexResponsesConversationModel:
                     last_note_context = context
             provider_payload = {
                 "model": self._model,
-                "instructions": journal.instructions if journal is not None else base_instructions + "\n\n" + developer_instructions + note_instructions,
+                "instructions": (journal.instructions + (
+                    "\n\n" + _formowl_tool_argument_guidance(formowl_tool_name) if tools else ""
+                )) if journal is not None else base_instructions + "\n\n" + developer_instructions + note_instructions,
                 # Each attempt owns a snapshot; later appends cannot rewrite a
                 # prior transport payload (including legacy bridge adapters).
                 "input": deepcopy(response_input),
-                "tools": deepcopy(journal.tools) if journal is not None else tools,
+                "tools": [
+                    {**tool, "parameters": _model_required_overlay(
+                        tool["parameters"],
+                        request_contract_binder=(request_contract_binder if tool["name"] in _EVIDENCE_TOOL_NAMES else None),
+                        runtime_required=([key for key in formowl_tool["inputSchema"].get("required", ())
+                            if key != "reviewed_annotation_pin"] if tool["name"] == formowl_tool_name else None),
+                    )} for tool in journal.tools
+                ] if journal is not None else tools,
                 "parallel_tool_calls": False,
                 # This turn is stateless (`store=False`).  Ask Responses for
                 # encrypted reasoning so reasoning items can be replayed with
@@ -7241,7 +7501,7 @@ class CodexResponsesConversationModel:
     ) -> dict[str, Any]:
         """Run one stateless public-only hosted search without private context."""
 
-        if self._active_journal.get() is not None:
+        if self._provider_protocol == "ollama_chat" or self._active_journal.get() is not None:
             return {"status": "unavailable", "reason_code": "public_web_paused_conversation_contract"}
         domain = request.domain.replace("_", " ")
         try:
@@ -7355,6 +7615,10 @@ class CodexResponsesConversationModel:
     def _request_response(
         self, payload: Mapping[str, Any], *, offline_session_id: str | None = None,
     ) -> dict[str, Any]:
+        if self._provider_protocol == "ollama_chat":
+            if offline_session_id is not None:
+                raise RuntimeError("UAT local trial cannot run offline semantic ingestion")
+            return self._request_ollama_chat(payload)
         body = b""
         parsed: dict[str, Any] | None = None
         http_status: int | None = None
@@ -8213,10 +8477,50 @@ def _formowl_tool_descriptor_fingerprint(descriptor: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def _responses_function_tool(
-    tool: Mapping[str, Any], *, request_contract_context: Mapping[str, Any] | None = None,
+def _model_required_overlay(
+    parameters: Mapping[str, Any], *, request_contract_binder: _UatTurnRequestContractBinder | None = None,
+    runtime_required: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Project existing runtime/binder requirements, never fill model decisions."""
+    parameters = deepcopy(dict(parameters))
+    if runtime_required is not None:
+        parameters["required"] = list(runtime_required)
+    if request_contract_binder is not None:
+        required = list(parameters.get("required", ()))
+        if request_contract_binder._annotation_catalog is not None:
+            required.append("reviewed_annotation_ids")
+        if request_contract_binder._native_page is not None:
+            if request_contract_binder._contract is None:
+                required.append("request_contract")
+            contract = parameters.get("properties", {}).get("request_contract", {})
+            if "native_locator" in contract.get("properties", {}):
+                contract["required"] = list(dict.fromkeys((*contract.get("required", ()), "native_locator")))
+        parameters["required"] = list(dict.fromkeys(required))
+    return parameters
+
+
+def _model_tool_parameters(
+    tool: Mapping[str, Any], *, request_contract_binder: _UatTurnRequestContractBinder | None = None,
 ) -> dict[str, Any]:
     parameters = deepcopy(tool["inputSchema"])
+    if tool["name"] in _EVIDENCE_TOOL_NAMES:
+        contract = parameters.get("properties", {}).get("request_contract", {})
+        if contract == {"type": "object"}:
+            from formowl_gateway.remote import _SEMANTIC_REQUEST_CONTRACT_INPUT_SCHEMA
+
+            contract = deepcopy(_SEMANTIC_REQUEST_CONTRACT_INPUT_SCHEMA)
+            parameters["properties"]["request_contract"] = contract
+        contract.get("properties", {}).pop("original_query_hash", None)
+        if "required" in contract:
+            contract["required"] = [key for key in contract["required"] if key != "original_query_hash"]
+    return _model_required_overlay(parameters, request_contract_binder=request_contract_binder)
+
+
+def _responses_function_tool(
+    tool: Mapping[str, Any], *, request_contract_context: Mapping[str, Any] | None = None,
+    request_contract_binder: _UatTurnRequestContractBinder | None = None,
+) -> dict[str, Any]:
+    parameters = _model_tool_parameters(tool, request_contract_binder=request_contract_binder)
     if tool["name"] in _EVIDENCE_TOOL_NAMES:
         # Static offered copy only; the real MCP descriptor/wire keeps its pin.
         offered = parameters.get("properties", {})
@@ -8235,15 +8539,8 @@ def _responses_function_tool(
         # server turn; scope/fields remain proposals and deterministic validation
         # and first-valid binding remain authoritative even if enums are ignored.
         contract = parameters.get("properties", {}).get("request_contract", {})
-        if contract == {"type": "object"}:
-            # The mail descriptor exposes an opaque object for the same already
-            # validated contract. Reuse its declared schema, never a parallel one.
-            from formowl_gateway.remote import _SEMANTIC_REQUEST_CONTRACT_INPUT_SCHEMA
-
-            contract = deepcopy(_SEMANTIC_REQUEST_CONTRACT_INPUT_SCHEMA)
-            parameters["properties"]["request_contract"] = contract
         properties = contract.get("properties", {})
-        for key in ("original_query_hash", "query_class", "maximum_claim_strength"):
+        for key in ("query_class", "maximum_claim_strength"):
             if isinstance(properties.get(key), dict):
                 properties[key]["enum"] = [request_contract_context[key]]
         if "native_locator" in request_contract_context:
@@ -9115,8 +9412,8 @@ def _execution_control_envelope(
             "contract_claim_strength_invalid",
         }:
             specific_hint = (
-                "Submit the complete five-key request_contract. Copy original_query_hash, "
-                "query_class, and maximum_claim_strength from the server-authoritative turn context; "
+                "Submit request_contract with its four model-owned required fields. The server supplies "
+                "original_query_hash; do not submit it. Copy query_class and maximum_claim_strength from the server-authoritative turn context; "
                 "do not derive them from a subquery. Select source_family_scope from "
                 "required_source_family_scope and requested_fields from the original task. "
                 "Keep all valid literal constraints and any already frozen fields and terms. "

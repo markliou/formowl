@@ -10,6 +10,45 @@ All adapters enter the same evidence, governance, permission, and query architec
 An explicitly requested, sealed complete document-only scope may use bounded full reading after an initial zero-citation lookup (at most 200 paragraphs and 60,000 NFC Unicode characters); this direct-source recovery remains 待測 and does not establish ontology-aware readiness.
 Explicit latest-mail lookup may use per-term token antichains in a sealed source-lookup date version and validate mail in Date order within 500ms / 8192 reads; answers always remain partial because index segmentation may omit mail, and only the newest among found, verified matches may be described (SPEC §7.3.1, 待測).
 
+## AQ local answer-model trial — 2026-10-27 / 待測
+
+The existing UAT launcher supports an explicitly selected local diagnostic mode:
+`--temporary-lan-diagnostic --port 8090 --provider-protocol ollama_chat
+--provider-base-url http://127.0.0.1:11435
+--provider-model hf.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf:latest
+--provider-model-digest c2ae7f03f6b5da4a03b394670f6033201d40b314ea875c6039d843f29e6a86e9`.
+These are additional provider options for the existing authorized launcher/source
+configuration, not a rollout command. Do not supply Codex runtime state or key
+files; the local branch does not read them. It rejects non-loopback endpoints,
+proxies/redirects and credentials, checks installed model identity, and has no
+external fallback. The formal frozen methodology model policy is unchanged.
+
+Across all providers, the model-display capability copy omits only per-field
+`candidate_hashes`; full128-field order/labels/identifiers and server-side sealed
+capability/binder/source/exact checks remain intact. Instructions/tool schemas and
+other metadata are preserved. Native HTTP errors retain status and safe structured
+context classification without raw provider text.
+
+Across providers the server binds the current `original_query_hash`; models do
+not copy it into tool proposals. Full MCP contracts and backend hash checks stay
+intact. Offered required fields reflect runtime descriptors/catalog/native-page
+conditions, including per-turn journal overlays; annotation decisions remain
+explicit, with no automatic `[]`. App-server schema changes replace its thread
+and replay bounded history; only logical continuity is claimed.
+Argument guidance includes only the current permitted tool's section, including
+configured journals; final/no-tools requests omit it. Common instructions, tool
+schemas, logical history, validators and budgets remain unchanged.
+
+Native tool stages omit final schema; existing no-tool finalization uses it and
+retains strict parsing and the original bounded repair. Request context defaults
+to approved32768 with actual prompt/eval counts. Explicit `--ollama-num-ctx 65536`
+is allowed only after authorized post-projection overflow and GPU VRAM/API residency
+checks; no65536 request or capacity proof is established here. Near-limit/truncation,
+incomplete output and invalid calls stop safely. Input completeness and applied reasoning
+are unverified. Existing240s provider/300s turn/180s browser budgets remain.
+Synthetic focused checks do not establish real-source/browser acceptance. The
+methodology remains blocked; user approval in the root window precedes any deploy.
+
 ## Active Architecture
 
 Knowledge construction:

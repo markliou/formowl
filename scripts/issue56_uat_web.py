@@ -2865,6 +2865,12 @@ def main() -> int:
         default=os.environ.get("FORMOWL_UAT_CODEX_COMMAND", "codex"),
     )
     parser.add_argument("--codex-provider-api-key-file", type=Path)
+    parser.add_argument("--provider-protocol", choices=("codex", "ollama_chat"), default="codex")
+    parser.add_argument("--provider-base-url")
+    parser.add_argument("--provider-model")
+    parser.add_argument("--provider-model-digest")
+    parser.add_argument("--ollama-num-ctx", type=int, choices=(32768, 65536), default=32768,
+                        help="Default32768;65536 only after authorized overflow and VRAM checks")
     parser.add_argument("--build-ingestion-revision", type=Path)
     parser.add_argument(
         "--ingestion-job", nargs=2, action="append", metavar=("STORE_DIR", "JOB_ID")
@@ -3078,16 +3084,31 @@ def main() -> int:
         parser.error("raw behavior recording is temporary-LAN-only")
     if not args.temporary_lan_diagnostic and not args.public_base_url:
         parser.error("--public-base-url or FORMOWL_ISSUE56_UAT_PUBLIC_BASE_URL is required")
-    if args.codex_runtime_state_dir is None:
+    local_provider = args.provider_protocol == "ollama_chat"
+    if not local_provider and args.codex_runtime_state_dir is None:
         parser.error(
             "--codex-runtime-state-dir or "
             "FORMOWL_ISSUE56_UAT_CODEX_RUNTIME_STATE_DIR is required"
         )
-    runtime_paths = validate_codex_runtime_state(args.codex_runtime_state_dir)
-    provider_env_key = runtime_paths.provider_env_key
-    if args.diagnostic_deployment_manifest is not None and provider_env_key is None:
+    runtime_paths = None if local_provider else validate_codex_runtime_state(args.codex_runtime_state_dir)
+    provider_env_key = runtime_paths.provider_env_key if runtime_paths is not None else None
+    provider_base_url = args.provider_base_url if local_provider else runtime_paths.provider_base_url
+    provider_model = args.provider_model if local_provider else _MODEL
+    if not local_provider and any((args.provider_base_url, args.provider_model, args.provider_model_digest)):
+        parser.error("explicit provider endpoint/model options require ollama_chat")
+    if args.diagnostic_deployment_manifest is not None and provider_env_key is None and not local_provider:
         parser.error("diagnostic deployment binding currently requires the Responses transport")
-    if provider_env_key is None:
+    if local_provider:
+        if (not args.temporary_lan_diagnostic or args.codex_runtime_state_dir is not None
+                or args.codex_provider_api_key_file is not None or not provider_base_url or not provider_model):
+            parser.error("local provider requires explicit endpoint/model and no Codex state or credentials")
+        conversation_model = CodexResponsesConversationModel(
+            provider_protocol="ollama_chat", base_url=provider_base_url, model=provider_model,
+            expected_model_digest=args.provider_model_digest, ollama_num_ctx=args.ollama_num_ctx,
+            reasoning_effort="none", typed_evidence_notes=True,
+        )
+        conversation_model.verify_local_model()
+    elif provider_env_key is None:
         if args.codex_provider_api_key_file is not None:
             parser.error("Codex provider API key file is invalid for ChatGPT runtime state")
         conversation_model = CodexAppServerConversationModel(
@@ -3171,9 +3192,13 @@ def main() -> int:
                     host=args.host, port=args.port,
                     record_raw_uat_interactions=args.record_raw_uat_interactions,
                     temporary_access_enabled=args.temporary_access_code is not None,
-                    provider_base_url=runtime_paths.provider_base_url,
-                    typed_evidence_notes=True, model=_MODEL, reasoning_effort=_REASONING_EFFORT,
-                    codex_native_requests=True, websocket=True,
+                    provider_base_url=provider_base_url,
+                    typed_evidence_notes=True, model=provider_model,
+                    reasoning_effort="none" if local_provider else _REASONING_EFFORT,
+                    codex_native_requests=not local_provider, websocket=not local_provider,
+                    provider_protocol="ollama_chat" if local_provider else "responses",
+                    expected_model_digest=args.provider_model_digest,
+                    ollama_num_ctx=args.ollama_num_ctx,
                 ) if args.diagnostic_deployment_manifest is not None else None
             ),
         )

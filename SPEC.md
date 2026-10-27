@@ -345,6 +345,85 @@ decision is pending user approval. Its custom function may remain in the frozen
 catalog, but that presence does not authorize hosted web execution. No new source,
 provider or browser operation is authorized by this specification paragraph.
 
+**Generic model-capability display projection — 2026-10-27 / 待測.** All
+providers (app-server, Responses and native Ollama) omit only
+`projection_fields[*].candidate_hashes` from the model-display copy. Preserve
+all displayed field entries/order, field/field_hash, structure and authorization
+metadata, reviewed annotation catalog, instructions/descriptions and tool schemas.
+Original full capabilities, sealed schema candidates and reference fingerprints
+remain available to server binders/source/exact execution; no canonical deletion,
+field-count reduction or permission/hash/lineage/citation relaxation. This is a
+display projection, not a change to the frozen methodology or field eligibility.
+
+**Generic server-owned turn hash and required overlay — 2026-10-27 / 待測.**
+For every provider, model-facing tool-schema copies omit `original_query_hash`
+and Copy instructions; the current-turn binder supplies its own hash before
+the unchanged full five-key contract validation and frozen-contract comparisons.
+Model-supplied hashes are ignored only at this proposal boundary. Backend result
+hashes, scope/fields/class/claim/native-locator checks remain authoritative.
+The offered schema follows existing runtime required fields and binder conditions:
+`reviewed_annotation_ids` is required when the catalog is not None (including an
+empty catalog), never auto-filled; native-page contract/locator requirements
+follow existing binder state. Preserve legal typed-expansion alternatives to a
+top-level request_contract, and its four model-owned required fields when present.
+This narrow per-turn required overlay also applies to configured journal catalogs;
+other tool names/order/descriptions/schema remain fixed and logical input remains
+append-only. App-server required-schema changes use its existing thread replacement
+and bounded recovery-history replay; physical thread stability is not claimed.
+Full server/MCP descriptors and contract validators are unchanged. This exception
+does not authorize relaxed validation, budgets, model calls or deployment.
+
+**Selected-tool argument guidance — 2026-10-27 / 待測.** Across providers,
+render only the argument-guidance section for this request's permitted selected
+evidence tool; an unavailable tool's parameter instructions must not be sent.
+Configured journals keep common instructions fixed and project this one section
+per request, omitting it for final/no-tools requests. This is a narrow exception
+to physical instruction-string stability, not to logical append-only history,
+fixed tool schemas/catalog or any shared rule, validator, source guard or budget.
+App-server/nonjournal selected-tool guidance retains its existing semantics.
+
+#### AQ local Ollama 8090 trial exception — 2026-10-27 / 待測
+
+An explicitly selected diagnostic `ollama_chat` protocol in the existing
+conversation owner may map its governed loop to native `/api/chat`. The formal
+frozen experiment/model remains unchanged. Pin the requested Gemma4 tag and
+installed `/api/tags` digest at startup; require matching response model tags.
+Use literal HTTP loopback only, no credentials, proxy, redirect, external fallback,
+or hosted public-terminology execution. Do not change Ollama service settings,
+pull models, or create a parallel Query Agent.
+
+Retain the logical fixed instructions/catalog, append-only bounded journal and
+stable local call IDs bound to observed native function names/object arguments
+and their results. The native wire offers only the selected permitted tools;
+required/named constraints remain enforced by the existing catalog/shape/dispatch
+validators even where native forced choice is unsupported. While tools are
+allowed, send tools without final `format`; ordinary chat and existing no-tool
+finalization send the decision JSON schema without tools. A model may choose
+text while tools are offered: retain the original strict JSON parser and bounded
+repair, without fence removal or hidden schema-completion calls. Each transport
+attempt performs one inference request and consumes the existing provider budget;
+existing requery, source/permission/hash/lineage/citation gates remain unchanged.
+Responses-specific session headers, cache keys, fixed physical tool catalog and
+simultaneous schema settings are not native-wire guarantees or native cache proof.
+
+Requests default to approved `options.num_ctx=32768` and the existing output
+budget, not a server configuration mutation. The explicit allowlist also supports
+65536 only after an authorized post-projection overflow plus GPU VRAM and `/api/ps`
+residency checks; failed capacity checks stop. This option is prepared configuration,
+not evidence of a65536 request, capacity guarantee or permission to raise other
+budgets. Record actual `prompt_eval_count`,
+`eval_count`, context and output limits for each response. Stop on explicit
+truncation, missing counts, `prompt_eval_count + num_predict >= num_ctx`,
+length/incomplete output, timeout, invalid tool shape or model mismatch. Native
+HTTP errors retain numeric status; only fixed structured error type/code identifies
+context-limit rejection, without publishing raw provider bodies/messages. This
+conservative guard cannot prove full input retention without an exact local
+Gemma tokenizer or provider non-truncation guarantee; completeness stays
+unverified. Do not increase context/time/turn/UI budgets silently. Native reasoning
+effort is not requested; applied effort/thinking is unverified. Mock/probe passes
+are diagnostics only; four real questions and browser acceptance remain pending.
+Deployment requires the user's explicit approval in the root window.
+
 The method remains intentionally hybrid:
 
 - strong RAG recovers source evidence through modality-appropriate retrieval;

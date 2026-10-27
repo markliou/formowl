@@ -98,6 +98,30 @@ secrets. An unpinned resume is permitted when explicit pinning is unavailable,
 provided its actual configuration is marked unverified and the work remains
 within the bounded assignment.
 
+**2026-10-27 AQ narrow diagnostic override:** the explicitly selected 8090
+trial may use existing local Ollama Gemma4 via native `/api/chat`, pinned to the
+installed tag/digest, without external credentials/provider fallback. This does
+not change the formal frozen methodology answer-model policy below. Each request
+defaults to approved `options.num_ctx=32768`, retains existing budgets and records
+actual prompt/eval counts; truncation, near-context limit or invalid output stops
+safely. Explicit65536 is a prepared allowlist option only after the authorized
+post-projection overflow and GPU/API residency checks; it is not current use.
+All providers omit only `projection_fields[*].candidate_hashes` in model-display
+copies; full sealed capabilities still reach binders/source/exact validation,
+with field count/order, labels, descriptions and guards unchanged.
+All providers bind original_query_hash server-side and project only that model
+schema key plus current runtime/binder required conditions (including journals);
+annotation choices stay explicit, full MCP/backend hash checks stay intact.
+Render only current permitted tool argument guidance (none for final/no-tools);
+journal common instructions/history, schemas, validators and budgets stay intact.
+Native HTTP errors retain numeric status and fixed structured context-limit classification
+without raw provider text. Native reasoning effort is not requested and actual
+effort is unverified. The logical append-only journal remains; Responses physical headers/catalog/schema
+rules are not represented as native-wire guarantees (SPEC §3.2 AQ exception).
+No commit/deploy is authorized by this policy; user approval in the root window
+is required before rollout. Next-version four-question replay and browser acceptance
+remain pending; authority remains valid but blocked, feature 待測.
+
 **2026-10-26 user override:** the requested UAT answer model is
 `gpt-5.6-luna` with `reasoning_effort=xhigh`, superseding the 2026-10-25
 `gpt-5.6-luna/low` request (which superseded the dated 2026-10-15

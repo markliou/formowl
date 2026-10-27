@@ -29,6 +29,24 @@ DECISION = json.dumps({
 
 
 class Issue56UatModelPolicyTests(unittest.TestCase):
+    def test_local_launcher_never_reads_codex_state_or_credentials(self):
+        argv = ["issue56_uat_web.py", "--temporary-lan-diagnostic", "--port", "8090",
+                "--provider-protocol", "ollama_chat", "--provider-base-url", "http://127.0.0.1:11435",
+                "--provider-model", "synthetic-gemma4:fixture", "--provider-model-digest", "a" * 64]
+        with (mock.patch.object(sys, "argv", argv),
+              mock.patch.object(web, "validate_codex_runtime_state") as state,
+              mock.patch.object(web, "_read_codex_provider_api_key") as key,
+              mock.patch.object(web.CodexResponsesConversationModel, "verify_local_model") as verify,
+              mock.patch.object(web, "create_issue56_temporary_lan_query_service") as service,
+              mock.patch.object(web, "create_mail_human_uat_http_server"), redirect_stdout(io.StringIO())):
+            self.assertEqual(web.main(), 0)
+        state.assert_not_called()
+        key.assert_not_called()
+        verify.assert_called_once_with()
+        model = service.call_args.args[0]
+        self.assertEqual(model.model_name, "ollama:synthetic-gemma4:fixture")
+        self.assertEqual(model._ollama_num_ctx, 32768)
+
     def _respond(self, model):
         evidence_tool = mock.Mock(side_effect=AssertionError("no evidence access"))
         outcome = model.respond(

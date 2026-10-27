@@ -1,5 +1,23 @@
 # Agent Handoff Log
 
+## 2026-10-27 AQ selected-tool guidance / 待主控讀審、待新比較重放
+Attribution36894tokens,60581 vs60564/residual−17/reconstruction limits retained.
+Prior projection replay4clarifications/15POST,2over180s; serverhash/schema17PASS/12modules322tests34FAIL0ERROR,no new failures.
+Serverhash replay2partial cited/2formatFAIL,6POST32k/allunder180s;IDs[] is sourcefallback,not annotation use; originals preserved.
+Current narrow guidance projection renders only the allowed tool section,none for final/no-tools; common rules/history preserved.
+RED2tests/5FAIL→focused18PASS; next same12-module comparison and fresh4question replay remain gated.
+Full MCP/backend hash/frozen/required/schema/validator/budgets unchanged in guidance slice; no otherID repair.
+Default32768/no65536,8090/8088 unchanged,no deploy/commit;authority blocked,worker actual unverified.
+## 2026-10-27 AQ / local Gemma4 integration、待主控讀審
+Existing owner/native `/api/chat`; logical journal/guards/budgets preserved, no
+external provider/credentials/fallback. Request num_ctx32768 approved; token counts
+recorded, truncation/near-limit fails closed, input completeness/effort unverified.
+Synthetic native2call probe PASS; earlier Responses and fenced-output failures kept.
+Focused RED→GREEN11 tests; pinned12-module baseline321tests/34FAIL/0ERROR remains
+NON-GREEN, final comparison pending freeze. No real4-question replay/commit/deploy;
+8088/8090 unchanged. Authority valid but blocked; actual worker tier unverified.
+Report: `/tmp/herdr-bus/codex-to-claude-workorder-20261027aq.md`.
+
 ## 2026-10-27 AP / bounded validation、待Claude審查
 Existing owners retain partial as pending; rejected-only failed, review/serving unchanged.
 Canonical focused77PASS; offline AL5 complete old52/90, new155/220 (parents46/90).
