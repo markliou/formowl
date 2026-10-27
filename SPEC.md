@@ -382,7 +382,24 @@ to physical instruction-string stability, not to logical append-only history,
 fixed tool schemas/catalog or any shared rule, validator, source guard or budget.
 App-server/nonjournal selected-tool guidance retains its existing semantics.
 
-#### AQ local Ollama 8090 trial exception — 2026-10-27 / 待測
+#### AS official Codex UAT operating policy — 2026-10-27 / 待測
+
+The user stopped the Gemma answer-model trial; keep its generic fixes and native
+option. Use the existing official Codex CLI/app-server and isolated existing
+ChatGPT login, explicitly pinned to the official OpenAI provider/backend and the
+requested `gpt-5.6-luna`/`xhigh`. A different returned thread model stops before a
+turn, without alias/upgrade fallback; thread deletion is best effort, not a proved
+remote cleanup. Runtime seal/attestation rejects nonofficial endpoint/provider
+overrides. Existing custom-provider support is retained but unused in this mode.
+The page is for this user personally and UAT only, one question at a time through
+the existing nonblocking service lock. Annotation always uses local Gemma, never
+OpenAI; only official Codex is used for answers, with no self-hosted gateway.
+Model-list metadata may be cached; actual inference/model/effort binding and
+four-question/browser acceptance remain pending. Existing source guards and
+budgets remain unchanged. Deployment still requires the user's root-window
+approval; this policy establishes no rollout or methodology readiness.
+
+#### AQ local Ollama 8090 trial exception (stopped by AS) — 2026-10-27 / 待測
 
 An explicitly selected diagnostic `ollama_chat` protocol in the existing
 conversation owner may map its governed loop to native `/api/chat`. The formal

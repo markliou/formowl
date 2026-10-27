@@ -134,6 +134,70 @@ class Issue56UatModelPolicyTests(unittest.TestCase):
             state_dir=path, base_url=BASE_URL, env_key=ENV_KEY,
         )
 
+    def _official_runtime(self, path):
+        return owner.prepare_codex_runtime_state_from_auth_cache(
+            state_dir=path, auth_cache=json.dumps({
+                "auth_mode": "chatgpt", "OPENAI_API_KEY": None,
+                "tokens": {key: "synthetic" for key in (
+                    "access_token", "account_id", "id_token", "refresh_token")},
+            }),
+        )
+
+    def test_official_runtime_explicitly_pins_provider_and_backend(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = self._official_runtime(Path(temporary) / "runtime")
+            config = tomllib.loads((paths.codex_home / "config.toml").read_text())
+            self.assertEqual(config.get("model_provider"), "openai")
+            self.assertEqual(config.get("chatgpt_base_url"), "https://chatgpt.com/backend-api/")
+            self.assertNotIn("model_providers", config)
+            self.assertEqual(owner.validate_codex_runtime_state(paths.state_dir), paths)
+
+    def test_official_attestation_rejects_provider_or_endpoint_overrides(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = self._official_runtime(Path(temporary) / "runtime")
+            config = tomllib.loads((paths.codex_home / "config.toml").read_text())
+            config.update(model_provider="openai", chatgpt_base_url="https://chatgpt.com/backend-api/")
+            config["features"] = dict.fromkeys(owner._CODEX_DISABLED_FEATURES, False)
+            attestation = dict(
+                config_response={"config": config}, mcp_response={"data": []},
+                skills_response={"data": [{"cwd": str(paths.workspace), "errors": [], "skills": []}]},
+                apps_response={"data": []}, runtime_workspace=paths.workspace,
+            )
+            owner._assert_hardened_codex_runtime(**attestation)
+            for key, value in (
+                ("model_provider", "other"),
+                ("chatgpt_base_url", "https://invalid.example.test/"),
+                ("openai_base_url", "https://invalid.example.test/v1"),
+                ("model_providers", {"openai": {"base_url": "https://invalid.example.test/v1"}}),
+            ):
+                with self.subTest(key=key):
+                    changed = {**config, key: value}
+                    with self.assertRaisesRegex(RuntimeError, "rejected unsafe configuration"):
+                        owner._assert_hardened_codex_runtime(
+                            **{**attestation, "config_response": {"config": changed}})
+
+    def test_app_server_model_mismatch_stops_before_turn_or_evidence(self):
+        transport = owner.CodexAppServerStdioTransport.__new__(owner.CodexAppServerStdioTransport)
+        transport._request = mock.Mock(return_value={
+            "thread": {"id": "synthetic-mismatched-thread"}, "model": "different-model",
+        })
+        transport.delete_thread = mock.Mock()
+        transport.close = mock.Mock()
+        transport.run_turn = mock.Mock(return_value=owner.CodexAppServerTurn(
+            thread_id="synthetic-mismatched-thread", turn_id="synthetic-turn",
+            final_message=DECISION, tool_invocations=(),
+        ))
+        model = owner.CodexAppServerConversationModel(
+            transport, workspace_dir="/tmp/synthetic-model-policy/workspace")
+        evidence = mock.Mock()
+        with self.assertRaisesRegex(RuntimeError, "model mismatch"):
+            model.respond(history=(), user_text="hello", latest_evidence=None,
+                          safety_identifier="synthetic-mismatch", evidence_tool=evidence)
+        transport.delete_thread.assert_called_once_with("synthetic-mismatched-thread")
+        transport.run_turn.assert_not_called()
+        evidence.assert_not_called()
+        self.assertEqual(model._threads, {})
+
     def test_fresh_runtime_pin_and_attestation_preserve_safety(self):
         with tempfile.TemporaryDirectory() as temporary:
             paths = self._prepare(Path(temporary) / "runtime")

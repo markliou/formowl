@@ -219,6 +219,8 @@ _PROVIDER_REQUEST_SHAPE_FIELDS = (
 _MAX_PROVIDER_REQUEST_TOOL_COUNT = 16
 _CODEX_RUNTIME_MARKER = "formowl-uat-codex-runtime-v3.json"
 _CODEX_LOGIN_METHOD = "chatgpt"
+_CODEX_OFFICIAL_PROVIDER_ID = "openai"
+_CODEX_OFFICIAL_CHATGPT_BASE_URL = "https://chatgpt.com/backend-api/"
 _CODEX_CUSTOM_PROVIDER_LOGIN_METHOD = "custom_provider"
 _CODEX_CUSTOM_PROVIDER_ID = "formowl_uat_custom"
 _CODEX_CUSTOM_PROVIDER_NAME = "FormOwl UAT custom provider"
@@ -2598,6 +2600,9 @@ class CodexAppServerStdioTransport:
             or not actual_model
         ):
             raise RuntimeError("Codex app-server returned an invalid thread")
+        if model is not None and actual_model != model:
+            self.delete_thread(thread["id"])
+            raise RuntimeError("Codex app-server model mismatch")
         return CodexAppServerThread(
             thread_id=thread["id"],
             model_name=actual_model,
@@ -8170,7 +8175,11 @@ def _render_hardened_codex_config(
     if login_method == _CODEX_LOGIN_METHOD:
         if provider_base_url is not None or provider_env_key is not None:
             raise ContractValidationError("Codex provider configuration is invalid")
-        lines.append(f'forced_login_method = "{login_method}"')
+        lines.extend((
+            f'forced_login_method = "{login_method}"',
+            f'model_provider = "{_CODEX_OFFICIAL_PROVIDER_ID}"',
+            f'chatgpt_base_url = "{_CODEX_OFFICIAL_CHATGPT_BASE_URL}"',
+        ))
     else:
         provider_base_url = _normalize_custom_provider_base_url(provider_base_url)
         provider_env_key = _normalize_custom_provider_env_key(provider_env_key)
@@ -8249,6 +8258,12 @@ def _assert_hardened_codex_runtime(
         if (
             provider_base_url is not None
             or config.get("forced_login_method") != _CODEX_LOGIN_METHOD
+            or config.get("model_provider") != _CODEX_OFFICIAL_PROVIDER_ID
+            or config.get("model_providers") not in (None, {})
+            or config.get("chatgpt_base_url") != _CODEX_OFFICIAL_CHATGPT_BASE_URL
+            or config.get("openai_base_url") not in (
+                None, "https://api.openai.com/v1", "https://api.openai.com/v1/",
+            )
         ):
             raise RuntimeError("Codex runtime attestation rejected unsafe configuration")
     else:

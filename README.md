@@ -10,7 +10,19 @@ All adapters enter the same evidence, governance, permission, and query architec
 An explicitly requested, sealed complete document-only scope may use bounded full reading after an initial zero-citation lookup (at most 200 paragraphs and 60,000 NFC Unicode characters); this direct-source recovery remains 待測 and does not establish ontology-aware readiness.
 Explicit latest-mail lookup may use per-term token antichains in a sealed source-lookup date version and validate mail in Date order within 500ms / 8192 reads; answers always remain partial because index segmentation may omit mail, and only the newest among found, verified matches may be described (SPEC §7.3.1, 待測).
 
-## AQ local answer-model trial — 2026-10-27 / 待測
+## AS official Codex UAT — 2026-10-27 / 待測
+
+The Gemma answer-model trial is stopped; its generic fixes/native option remain.
+Use the existing official Codex CLI/app-server with the user's isolated ChatGPT
+login and exact `gpt-5.6-luna`/`xhigh`. Official provider/backend settings are pinned;
+a different returned thread model is rejected before a turn, without fallback.
+Four rules: only this user personally uses the UAT page; one question at a time;
+annotation always uses local Gemma, never OpenAI; answers use official Codex only,
+without codex-api/self-hosted gateways. Reuse the existing single-flight lock.
+Catalog visibility is not actual inference/effort proof. Four-question replay and
+browser acceptance remain pending; deployment needs the user's root-window approval.
+
+## AQ local answer-model trial (stopped by AS) — 2026-10-27 / 待測
 
 The existing UAT launcher supports an explicitly selected local diagnostic mode:
 `--temporary-lan-diagnostic --port 8090 --provider-protocol ollama_chat

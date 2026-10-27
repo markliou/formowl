@@ -98,7 +98,17 @@ secrets. An unpinned resume is permitted when explicit pinning is unavailable,
 provided its actual configuration is marked unverified and the work remains
 within the bounded assignment.
 
-**2026-10-27 AQ narrow diagnostic override:** the explicitly selected 8090
+**2026-10-27 AS official Codex UAT override:** stop Gemma answer-model replay;
+retain AQ's generic fixes and native option. Use the existing official Codex CLI
+and isolated ChatGPT login runtime, exact `gpt-5.6-luna`/`xhigh`, with explicit
+official provider/endpoints and rejection of a different returned thread model.
+The page is only for this user personally, one question at a time; annotation
+always uses local Gemma and never OpenAI. No codex-api/self-hosted gateway or
+silent model replacement. Catalog metadata is not live inference/effort proof.
+Four-question replay and browser acceptance remain pending; no deployment without
+the user's own root-window approval. Authority remains valid but blocked.
+
+**2026-10-27 AQ narrow diagnostic override (trial stopped by AS):** the explicitly selected 8090
 trial may use existing local Ollama Gemma4 via native `/api/chat`, pinned to the
 installed tag/digest, without external credentials/provider fallback. This does
 not change the formal frozen methodology answer-model policy below. Each request

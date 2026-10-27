@@ -1,13 +1,13 @@
 # Agent Handoff Log
 
-## 2026-10-27 AQ selected-tool guidance / 待主控讀審、待新比較重放
-Attribution36894tokens,60581 vs60564/residual−17/reconstruction limits retained.
-Prior projection replay4clarifications/15POST,2over180s; serverhash/schema17PASS/12modules322tests34FAIL0ERROR,no new failures.
-Serverhash replay2partial cited/2formatFAIL,6POST32k/allunder180s;IDs[] is sourcefallback,not annotation use; originals preserved.
-Current narrow guidance projection renders only the allowed tool section,none for final/no-tools; common rules/history preserved.
-RED2tests/5FAIL→focused18PASS; next same12-module comparison and fresh4question replay remain gated.
-Full MCP/backend hash/frozen/required/schema/validator/budgets unchanged in guidance slice; no otherID repair.
-Default32768/no65536,8090/8088 unchanged,no deploy/commit;authority blocked,worker actual unverified.
+## 2026-10-27 AS official Codex / 待主控讀審、待比較重放
+Personal UAT only; one question at a time; annotation local Gemma only; official Codex answers only.
+Existing ChatGPT runtime/owner attestation PASS; catalog exactgpt-5.6-luna/xhigh,not live inference/effort proof.
+Official provider/backend pin and returned-model mismatch rejection: RED10tests/6FAIL→10PASS; no alias/new provider/HOME change.
+AQ7190d034 retained:18focusedPASS/same12modules322tests34FAIL0ERROR,no new failures; guidance replay4unsent,user stopped.
+Earlier AQ attribution36894tokens/60581vs60564/residual−17 and reconstruction limits remain; projection4clarifications/15POST/2over180s.
+Serverhash replay2partial cited/2formatFAIL,6POST32k/allunder180s;IDs[]sourcefallback,not annotation use; source/guards/budgets unchanged.
+AS report `/tmp/herdr-bus/codex-to-claude-workorder-20261027as.md`; no inference/deploy/commit,authority blocked,worker actual unverified.
 ## 2026-10-27 AQ / local Gemma4 integration、待主控讀審
 Existing owner/native `/api/chat`; logical journal/guards/budgets preserved, no
 external provider/credentials/fallback. Request num_ctx32768 approved; token counts
