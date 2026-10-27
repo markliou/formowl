@@ -16,6 +16,9 @@ The Gemma answer-model trial is stopped; its generic fixes/native option remain.
 Use the existing official Codex CLI/app-server with the user's isolated ChatGPT
 login and exact `gpt-5.6-luna`/`xhigh`. Official provider/backend settings are pinned;
 a different returned thread model is rejected before a turn, without fallback.
+Official0.164 server context uses `application`; user/source context stays
+`untrusted`. RPC errors retain numeric code and normalized safe labels, without
+echoing arbitrary server messages or private data.
 Four rules: only this user personally uses the UAT page; one question at a time;
 annotation always uses local Gemma, never OpenAI; answers use official Codex only,
 without codex-api/self-hosted gateways. Reuse the existing single-flight lock.

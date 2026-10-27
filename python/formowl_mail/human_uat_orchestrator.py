@@ -2863,7 +2863,25 @@ class CodexAppServerStdioTransport:
             if not isinstance(message, Mapping):
                 raise RuntimeError("Codex app-server stopped unexpectedly")
             if message.get("error") is not None:
-                raise RuntimeError("Codex app-server rejected a request")
+                error = message["error"]
+                code = error.get("code") if isinstance(error, Mapping) else None
+                code = code if type(code) is int else None
+                # Normalized protocol labels, never arbitrary server message/data.
+                safe_message = {
+                    -32700: "parse_error", -32600: "invalid_request",
+                    -32601: "method_not_found", -32602: "invalid_params",
+                    -32603: "internal_error",
+                }.get(code, "request_rejected")
+                diagnostic = _provider_diagnostic(
+                    reason_code="provider_incomplete", http_status=None, response=None,
+                )
+                diagnostic.update(rpc_error_code=code, rpc_error_message=safe_message)
+                if code == -32602:
+                    diagnostic["provider_error_message_class"] = "invalid_parameter"
+                raise _CodexAppServerProviderFailure(
+                    "provider_incomplete", f"Codex app-server rejected request: {safe_message}",
+                    provider_diagnostic=diagnostic,
+                )
             result = message.get("result")
             if not isinstance(result, Mapping):
                 raise RuntimeError("Codex app-server returned an invalid response")
@@ -3285,7 +3303,7 @@ class CodexAppServerConversationModel:
 
                 additional_context: dict[str, Mapping[str, str]] = {}
                 additional_context["formowl_runtime_clock"] = {
-                    "kind": "trusted",
+                    "kind": "application",
                     "value": _runtime_clock_context(
                         clock=self._clock,
                         local_timezone=self._timezone,
@@ -3293,7 +3311,7 @@ class CodexAppServerConversationModel:
                 }
                 if authorized_capability_summary is not None:
                     additional_context["formowl_authorized_capabilities"] = {
-                        "kind": "trusted",
+                        "kind": "application",
                         "value": (
                             "Server-authoritative capabilities for this request. "
                             "They constrain source and field planning and are not "
@@ -3308,7 +3326,7 @@ class CodexAppServerConversationModel:
                 request_contract_context = request_contract_binder.trusted_context()
                 if request_contract_context is not None:
                     additional_context["formowl_turn_request_contract"] = {
-                        "kind": "trusted",
+                        "kind": "application",
                         "value": (
                             "Server-authoritative immutable boundary for this user "
                             "turn. The server supplies original_query_hash; do not submit it. Copy query_class and "

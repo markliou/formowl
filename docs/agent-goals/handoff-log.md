@@ -1,13 +1,16 @@
 # Agent Handoff Log
 
-## 2026-10-27 AS official Codex / 待主控讀審、待比較重放
+## 2026-10-27 AS official Codex / context修補待讀審、重放未通過
 Personal UAT only; one question at a time; annotation local Gemma only; official Codex answers only.
 Existing ChatGPT runtime/owner attestation PASS; catalog exactgpt-5.6-luna/xhigh,not live inference/effort proof.
 Official provider/backend pin and returned-model mismatch rejection: RED10tests/6FAIL→10PASS; no alias/new provider/HOME change.
+AS5ed40c1 matches frozen838files;325tests/34FAIL/0ERROR,same AQ failures. Shared Unixsocket/owner attestation PASS.
+T1 turn/start rejected2.207s/MCP0;3unsent,upstream requests/tokens/errorcode unknown. CLI0.164 trusted-kind mismatch found offline.
+Three server kinds→application/source stays untrusted;RPC numeric code+normalized safe labels. RED2tests/3FAIL;14focusedPASS plus selected1inheritedFAIL;review/compare/replay pending.
 AQ7190d034 retained:18focusedPASS/same12modules322tests34FAIL0ERROR,no new failures; guidance replay4unsent,user stopped.
 Earlier AQ attribution36894tokens/60581vs60564/residual−17 and reconstruction limits remain; projection4clarifications/15POST/2over180s.
 Serverhash replay2partial cited/2formatFAIL,6POST32k/allunder180s;IDs[]sourcefallback,not annotation use; source/guards/budgets unchanged.
-AS report `/tmp/herdr-bus/codex-to-claude-workorder-20261027as.md`; no inference/deploy/commit,authority blocked,worker actual unverified.
+AS report `/tmp/herdr-bus/codex-to-claude-workorder-20261027as.md`; first attempt retained,no deploy,authority blocked,worker actual unverified.
 ## 2026-10-27 AQ / local Gemma4 integration、待主控讀審
 Existing owner/native `/api/chat`; logical journal/guards/budgets preserved, no
 external provider/credentials/fallback. Request num_ctx32768 approved; token counts

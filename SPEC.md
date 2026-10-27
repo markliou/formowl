@@ -391,6 +391,10 @@ requested `gpt-5.6-luna`/`xhigh`. A different returned thread model stops before
 turn, without alias/upgrade fallback; thread deletion is best effort, not a proved
 remote cleanup. Runtime seal/attestation rejects nonofficial endpoint/provider
 overrides. Existing custom-provider support is retained but unused in this mode.
+For official CLI0.164, server-generated runtime clock, capability and request
+contract context uses `kind=application`; user/source context stays `untrusted`.
+JSON-RPC rejection diagnostics retain numeric code and a normalized fixed safe
+message, not the original server message/data; public projection stays filtered.
 The page is for this user personally and UAT only, one question at a time through
 the existing nonblocking service lock. Annotation always uses local Gemma, never
 OpenAI; only official Codex is used for answers, with no self-hosted gateway.

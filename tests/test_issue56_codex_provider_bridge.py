@@ -417,6 +417,105 @@ class _RecordingTransport:
 
 
 class Issue56CodexProviderBridgeTests(unittest.TestCase):
+    def test_app_server_context_kinds_match_official_0164_wire_enum(self) -> None:
+        wire = object.__new__(CodexAppServerStdioTransport)
+        wire._state_lock = threading.RLock()
+        wire._thread_locks = {}
+        wire._active_turns = {}
+        wire._timeout_seconds = 1.0
+        wire._fatal_error = False
+        wire._closed = False
+        requests = []
+
+        def request(method, params):
+            self.assertEqual(method, "turn/start")
+            requests.append(params)
+            wire._deliver_turn_completion({
+                "threadId": params["threadId"],
+                "turn": {
+                    "id": "turn-context-enum", "status": "completed",
+                    "items": [{"type": "agentMessage", "text": _decision()}],
+                },
+            })
+            return {"turn": {"id": "turn-context-enum"}}
+
+        wire._request = request
+        transport = _RecordingTransport(calls=(), final_message="unused")
+        transport.run_turn = wire.run_turn
+        with tempfile.TemporaryDirectory() as workspace:
+            provider = CodexAppServerConversationModel(transport, workspace_dir=workspace)
+            provider.respond(
+                history=(orchestrator.UatConversationMessage("user", "fixture history"),),
+                user_text="Find launch documents.",
+                latest_evidence={"status": "partial", "citations": ["fixture-citation"]},
+                safety_identifier="context-enum", evidence_tool=mock.Mock(),
+                authorized_capability_summary={"source_families": ["document"]},
+            )
+
+        self.assertEqual(len(requests), 1)
+        context = requests[0]["additionalContext"]
+        self.assertEqual(set(context), {
+            "formowl_runtime_clock", "formowl_authorized_capabilities",
+            "formowl_turn_request_contract", "formowl_latest_evidence",
+            "formowl_recovery_history",
+        })
+        # Official 0.164 generated AdditionalContextKind enum; no schema vendoring.
+        for name, entry in context.items():
+            self.assertIn(entry["kind"], {"untrusted", "application"})
+            self.assertEqual(entry["kind"], (
+                "untrusted" if name in {"formowl_latest_evidence", "formowl_recovery_history"}
+                else "application"
+            ))
+            self.assertIsInstance(entry["value"], str)
+
+    def test_stdio_rpc_rejection_retains_only_numeric_code_and_fixed_message(self) -> None:
+        private = "fixture-query-secret /fixture/private/source sk-fixture-not-a-key"
+        for code, message in ((-32602, "invalid_params"), (-32011, "request_rejected")):
+            with self.subTest(code=code):
+                transport = object.__new__(CodexAppServerStdioTransport)
+                transport._state_lock = threading.RLock()
+                transport._pending = {}
+                transport._next_request_id = 1
+                transport._timeout_seconds = 1.0
+                transport._fatal_error = False
+                transport._closed = False
+
+                def send(request):
+                    pending = transport._pending[request["id"]]
+                    pending.message = {"error": {
+                        "code": code, "message": private, "data": {"query": private},
+                    }}
+                    pending.event.set()
+
+                transport._send = send
+                with self.assertRaises(RuntimeError) as raised:
+                    transport._request("turn/start", {})
+                failure = raised.exception
+                self.assertIsInstance(failure, _CodexAppServerProviderFailure)
+                diagnostic = failure.provider_diagnostic
+                self.assertEqual(diagnostic["rpc_error_code"], code)
+                self.assertEqual(diagnostic["rpc_error_message"], message)
+                self.assertNotIn(private, str(failure) + json.dumps(diagnostic))
+                self.assertNotIn(private, json.dumps(runtime_project(diagnostic)))
+                self.assertEqual(transport._pending, {})
+                recording = _RecordingTransport(
+                    calls=(), final_message="unused", run_error=failure,
+                )
+                with tempfile.TemporaryDirectory() as workspace:
+                    provider = CodexAppServerConversationModel(
+                        recording, workspace_dir=workspace,
+                    )
+                    outcome = provider.respond(
+                        history=(), user_text="synthetic request", latest_evidence=None,
+                        safety_identifier="rpc-rejected", evidence_tool=mock.Mock(),
+                    )
+                self.assertEqual(outcome.provider_diagnostic["rpc_error_code"], code)
+                self.assertEqual(outcome.provider_diagnostic["rpc_error_message"], message)
+                self.assertNotIn(private, repr(outcome))
+                self.assertNotIn(private, json.dumps(_browser_projection(
+                    outcome, (), latest_evidence=None,
+                )))
+
     def test_binding_latest_attempt_controls_top_metadata_in_both_projections(self) -> None:
         from formowl_mail.human_uat_http import _safe_provider_diagnostic as http_project
 
