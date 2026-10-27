@@ -180,5 +180,214 @@ class LocalReaderContractTests(unittest.TestCase):
                                                schema_name="x")
 
 
+class AtomValidationTests(unittest.TestCase):
+    def read(self, text, records, *, relations=None, observations=None, mutate=None, focus_ids=None):
+        root = _paths.fresh_test_dir("atom-validation-ap")
+        items = observations or [_observation("obs_body", text)]
+        sources = _sources(*items)
+        data = Adapter(sources).convert({"read_status": "complete", "records": records,
+                                         "relations": relations or []})
+        if mutate:
+            mutate(data)
+        self.stores = dict(semantic_metadata_store=SemanticMetadataStore(root),
+                          candidate_atom_store=CandidateAtomStore(root),
+                          candidate_relation_store=CandidateRelationStore(root))
+        return read_and_store_source_unit(
+            source_unit_id="su_ap_test", observations=items,
+            expected_observation_hashes={k: sha256_json(v) for k, v in sources.items()},
+            source_revision_fingerprint=sha256_json("ap-source"),
+            permission_scope_fingerprint=sha256_json(items[0].to_dict()["permission_scope"]),
+            source_complete=True, extractor_run_id="semrun_ap_test", ontology_revision_id="ontology_ap",
+            model_name="local-model", reasoning_effort="none",
+            focus_observation_ids=focus_ids,
+            reader=lambda **_: {"data": data, "requested_model": "local-model", "observed_model": None,
+                                 "reasoning_effort": "none", "request_fingerprint": sha256_json("original-call")},
+            **self.stores)
+
+    @staticmethod
+    def record(quote, **kwargs):
+        return _record(evidence=[{"observation_id": "obs_body", "quote": quote}], **kwargs)
+
+    def test_repeated_short_quote_uses_the_unique_same_atom_anchor(self):
+        result = self.read("Clienta qty 2; OrgB qty 2", [self.record("2", subject="Clienta",
+            subject_quote={"observation_id": "obs_body", "quote": "Clienta qty 2"})])
+        span = result.candidate_atoms[0].properties["evidence_spans"][0]
+        self.assertEqual((span["start"], span["end"]), (12, 13))
+        self.assertEqual(result.read_ledger.value["annotation_status"], "annotated")
+
+    def test_unique_physical_line_keeps_precedence_over_new_anchors(self):
+        text = "Clienta 2\n2\nOrgB 2"
+        record = self.record("2")
+        record["evidence"] += [{"observation_id": "obs_body", "quote": q}
+                               for q in ("Clienta 2", "OrgB 2")]
+        result = self.read(text, [record])
+        self.assertEqual(result.read_ledger.value["annotation_status"], "annotated")
+        span = result.candidate_atoms[0].properties["evidence_spans"][0]
+        self.assertEqual((span["start"], span["end"]), (10, 11))
+
+    def test_discontinuous_lines_keep_each_original_position(self):
+        text = "Model\nQty\nPO\nClienta\n500\nAX123"
+        result = self.read(text, [self.record("Qty\n500")])
+        spans = result.candidate_atoms[0].properties["evidence_spans"]
+        self.assertEqual([s["quote"] for s in spans], ["Qty", "500"])
+        self.assertEqual([(s["start"], s["end"]) for s in spans], [(6, 9), (21, 24)])
+        self.assertTrue(all(text[s["start"]:s["end"]] == s["quote"] for s in spans))
+
+    def test_segmented_repeated_piece_keeps_its_original_occurrence_index(self):
+        result = self.read("2 outside\nQty\nx\n2", [self.record("Qty\n2")])
+        spans = result.candidate_atoms[0].properties["evidence_spans"]
+        self.assertEqual(spans[1]["occurrence_index"], 1)
+        self.assertEqual(spans[1]["start"], 16)
+
+    def test_partial_keeps_valid_atom_and_rejects_dependent_relation(self):
+        result = self.read("Clienta confirmed", [self.record("Clienta confirmed"), self.record("absent")],
+            relations=[{"source_record": 0, "target_record": 1, "relation_type": "updates",
+                        "evidence": [{"observation_id": "obs_body", "quote": "Clienta confirmed"}],
+                        "confidence": 0.9}])
+        value = result.read_ledger.value
+        self.assertEqual((value["annotation_status"], value["validation_status"]), ("pending", "partial"))
+        self.assertEqual((value["rejected_atom_count"], value["rejected_relation_count"]), (1, 1))
+        self.assertEqual(value["rejected_reasons"], {"exact_span_mismatch": 1, "dependent_atom_rejected": 1})
+        self.assertEqual(len(result.candidate_atoms), 1)
+        self.assertEqual(result.candidate_relations, [])
+        self.assertEqual(len(value["candidate_hashes"]), 1)
+        self.assertEqual(result.candidate_atoms[0].status, "pending_review")
+
+    def test_missing_single_quote_is_not_an_annotated_zero(self):
+        value = self.read("Clienta", [self.record("absent")]).read_ledger.value
+        self.assertEqual((value["annotation_status"], value["validation_status"]), ("failed", "rejected_all"))
+        self.assertEqual(value["candidate_count"], 0)
+        self.assertEqual(value["rejected_atom_count"], 1)
+
+    def test_true_zero_is_annotated_and_policy_is_server_pinned(self):
+        value = self.read("Clienta", []).read_ledger.value
+        self.assertEqual((value["annotation_status"], value["validation_status"]), ("annotated", "complete"))
+        self.assertTrue(value["pins"]["validation_policy_id"])
+        self.assertEqual(value["rejected_atom_count"], 0)
+
+    def test_ambiguous_tied_conflicting_or_far_anchors_do_not_choose_an_occurrence(self):
+        cases = [
+            ("2 aa 2", ["aa"]),
+            ("Clienta 2 / OrgB 2", ["Clienta 2", "OrgB 2"]),
+            ("Clienta" + "x" * 129 + "2 / 2", ["Clienta"]),
+            ("2 / 2", []),
+        ]
+        for text, anchors in cases:
+            with self.subTest(text=text[:30]):
+                record = self.record("2")
+                record["evidence"] += [{"observation_id": "obs_body", "quote": q} for q in anchors]
+                value = self.read(text, [record]).read_ledger.value
+                self.assertEqual(value["validation_status"], "rejected_all")
+
+    def test_multiline_missing_segment_span_gap_and_order_limits_remain_strict(self):
+        cases = [("Qty\n" + "x" * 129 + "\n500", "Qty\n500"),
+                 ("Qty\n" + "x" * 123 + "\n500\n" + "y" * 123 + "\nPO", "Qty\n500\nPO"),
+                 ("Qty\n500", "Qty\nmissing"), ("500\nQty", "Qty\n500"),
+                 ("\n".join("ABCDEFGHI"), "\n".join("ABCDEFGHI"))]
+        for text, quote in cases:
+            with self.subTest(quote=quote):
+                # A contiguous nine-line quote remains valid; force nine separated segments.
+                if quote.count("\n") == 8:
+                    text = text.replace("\n", "\nx\n")
+                value = self.read(text, [self.record(quote)]).read_ledger.value
+                self.assertEqual(value["validation_status"], "rejected_all")
+
+    def test_same_observation_other_scalar_cannot_anchor(self):
+        item = _observation("obs_body", "2 / 2", {"anchor": "Clienta"})
+        result = self.read("", [self.record("2", subject="Clienta",
+            subject_quote={"observation_id": "obs_body", "quote": "Clienta"})], observations=[item])
+        self.assertEqual(result.read_ledger.value["validation_status"], "rejected_all")
+
+    def test_identity_and_time_mismatch_reject_only_the_affected_atom(self):
+        for failure in ("identity", "time"):
+            with self.subTest(failure=failure):
+                def mutate(data):
+                    if failure == "identity":
+                        data["atoms"][1]["assertion"]["target"] = "OrgB"
+                    else:
+                        data["atoms"][1]["times"] = [{"role": "due", "raw": "tomorrow",
+                            "normalized": None, "precision": None, "property": "交期",
+                            "evidence": data["atoms"][1]["evidence"]}]
+                result = self.read("Clienta confirmed", [self.record("Clienta confirmed"),
+                    self.record("Clienta confirmed", subject="Clienta", subject_quote={
+                        "observation_id": "obs_body", "quote": "Clienta confirmed"})], mutate=mutate)
+                self.assertEqual(result.read_ledger.value["validation_status"], "partial")
+                self.assertEqual(len(result.candidate_atoms), 1)
+
+    def test_secondary_identity_surface_rejects_atom_but_binding_structure_stays_fatal(self):
+        for failure in ("surface", "duplicate", "primary"):
+            with self.subTest(failure=failure):
+                def mutate(data):
+                    atom = data["atoms"][1]
+                    data["identities"].append({"local_id": "i_parent", "display_label": "OrgB",
+                        "type_surface": None, "value_surface": "OrgB", "evidence": atom["evidence"]})
+                    refs = atom["identity_refs"]
+                    refs.append({"scope_role": "parent", "identity_id": "i_parent"})
+                    if failure == "duplicate":
+                        refs.append(dict(refs[-1]))
+                    elif failure == "primary":
+                        refs.append({"scope_role": "primary", "identity_id": "i_parent"})
+                    if failure != "surface":
+                        atom["evidence"] = [{**atom["evidence"][0], "quote": "absent"}]
+                records = [self.record("Clienta confirmed"), self.record("Clienta confirmed",
+                    subject="Clienta", subject_quote={"observation_id": "obs_body", "quote": "Clienta confirmed"})]
+                if failure == "surface":
+                    result = self.read("Clienta confirmed", records, mutate=mutate)
+                    self.assertEqual(result.read_ledger.value["validation_status"], "partial")
+                    self.assertEqual(result.read_ledger.value["rejected_reasons"], {"identity_surface_mismatch": 1})
+                    self.assertEqual(len(result.candidate_atoms), 1)
+                else:
+                    with self.assertRaises(ContractValidationError):
+                        self.read("Clienta confirmed", records, mutate=mutate)
+                    self.assertEqual(self.stores["candidate_atom_store"].list(), [])
+
+    def test_global_schema_inventory_and_unknown_failures_are_not_salvaged(self):
+        for mutate in (lambda d: d.update(read_observation_ids=[]),
+                       lambda d: d["atoms"][0].update(extra="untrusted"),
+                       lambda d: d["atoms"][0]["evidence"][0].update(observation_id="outside")):
+            with self.subTest(mutate=mutate):
+                with self.assertRaises(ContractValidationError):
+                    self.read("Clienta", [self.record("Clienta")], mutate=mutate)
+                self.assertEqual(list(self.stores["candidate_atom_store"].list()), [])
+
+    def test_bad_quote_does_not_hide_schema_or_source_errors_on_that_atom(self):
+        for mutate in (lambda d: d["atoms"][1].update(confidence="high"),
+                       lambda d: d["atoms"][1].update(times=[{"extra": True}]),
+                       lambda d: d["atoms"][1]["evidence"].append({
+                           "observation_id": "outside", "field_path": ["text"],
+                           "quote": "Clienta", "occurrence_index": None})):
+            with self.subTest(mutate=mutate), self.assertRaises(ContractValidationError):
+                self.read("Clienta", [self.record("Clienta"), self.record("missing")], mutate=mutate)
+            self.assertEqual(list(self.stores["candidate_atom_store"].list()), [])
+
+    def test_persistence_failure_with_a_valid_subset_still_fails_the_unit(self):
+        with mock.patch.object(CandidateAtomStore, "create", side_effect=OSError("synthetic failure")):
+            with self.assertRaises(ContractValidationError):
+                self.read("Clienta", [self.record("Clienta"), self.record("missing")])
+        ledger = list(self.stores["semantic_metadata_store"].list())[0]
+        self.assertEqual(ledger.value["annotation_status"], "failed")
+        self.assertEqual(ledger.value["failure_phase"], "persistence")
+
+    def test_bad_quote_cannot_hide_identity_cap_atom_focus_or_dependent_relation_focus(self):
+        for kind in ("identity_cap", "atom_focus", "relation_focus"):
+            with self.subTest(kind=kind):
+                records = [self.record("Clienta"), self.record("missing", subject="Clienta",
+                    subject_quote={"observation_id": "obs_body", "quote": "Clienta"})]
+                relations = [{"source_record": 0, "target_record": 1, "relation_type": "updates",
+                    "evidence": [{"observation_id": "obs_body", "quote": "missing"}], "confidence": 0.9}]
+                def mutate(data):
+                    if kind == "identity_cap":
+                        data["identities"][0]["evidence"] *= 129
+                    else:
+                        data["atoms"][0]["evidence"][0]["observation_id"] = "obs_focus"
+                        if kind == "relation_focus":
+                            data["atoms"][1]["evidence"][0]["observation_id"] = "obs_focus"
+                with self.assertRaises(ContractValidationError):
+                    self.read("", records, relations=relations, mutate=mutate,
+                        observations=[_observation("obs_body", "Clienta"), _observation("obs_focus", "Clienta")],
+                        focus_ids=None if kind == "identity_cap" else ["obs_focus"])
+                self.assertEqual(list(self.stores["candidate_atom_store"].list()), [])
+
+
 if __name__ == "__main__":
     unittest.main()

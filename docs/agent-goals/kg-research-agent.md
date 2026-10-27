@@ -1,5 +1,12 @@
 # Knowledge Graph Research Agent Goal
 
+## 2026-10-27 AP / bounded validation、待Claude審查
+Existing owners retain partial as pending; rejected-only failed, review/serving unchanged.
+Canonical focused77PASS; offline AL5 complete old52/90, new155/220 (parents46/90).
+AG2 dedup complete7556/9543 (+242), pending/partial1837; final regressions0; r2 retained.
+No model/deploy/commit; authority blocked, actual tier unverified. Private report:
+`/tmp/herdr-bus/codex-to-claude-workorder-20261027ap.md`.
+
 ## 2026-10-27 AM phase1 / partial latest evidence、待審查
 Prior full-token SQL has proved recall regression; its latest acceptance is withdrawn.
 Per-term antichains retain guarded original matching and500ms/caps. Two no-model

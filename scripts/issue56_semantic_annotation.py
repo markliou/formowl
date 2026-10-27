@@ -538,6 +538,8 @@ def run_command(args, feedback: dict[str, list[str]] | None = None) -> int:
                        reason=value.get("failure_reason") or value.get("stop_reason"),
                        atoms=len(result.candidate_atoms), relations=len(result.candidate_relations),
                        ledger=result.read_ledger.semantic_metadata_id)
+            row.update({key: value[key] for key in ("validation_status", "rejected_atom_count",
+                "rejected_relation_count", "rejected_reasons") if key in value})
         except OSError:
             raise
         except Exception as exc:
@@ -587,6 +589,10 @@ def report_command(args) -> int:
             reasons[row.get("reason") or "unknown"] += 1
     coverage = {unit_id: [best[unit_id]["run"], best[unit_id].get("ledger")] for unit_id in units
                 if best.get(unit_id, {}).get("status") == "annotated"}
+    partial = [best[u] for u in units if best.get(u, {}).get("validation_status") == "partial"]
+    rejected_reasons = collections.Counter()
+    for unit_id in units:
+        rejected_reasons.update(best.get(unit_id, {}).get("rejected_reasons", {}))
     report = {"artifact_id": "formowl_semantic_annotation_scope_report_v1",
               "units_sha256": "sha256:" + hashlib.sha256(Path(args.units).read_bytes()).hexdigest(),
               "run_ids": runs, "unit_count": len(units), "status_counts": dict(status),
@@ -596,6 +602,11 @@ def report_command(args) -> int:
                   for oid in unit.get("oversize_observation_ids", [])}),
               "gap_reasons": dict(reasons.most_common()),
               "candidate_atoms": sum(best[u].get("atoms") or 0 for u in coverage),
+              "partial_units": len(partial),
+              "partial_candidate_atoms": sum(row.get("atoms") or 0 for row in partial),
+              "rejected_atom_count": sum(best.get(u, {}).get("rejected_atom_count", 0) for u in units),
+              "rejected_relation_count": sum(best.get(u, {}).get("rejected_relation_count", 0) for u in units),
+              "rejected_reasons": dict(rejected_reasons),
               "annotated_coverage_fingerprint": sha256_json(coverage),
               "scope_complete": status["annotated"] == len(units)}
     print(json.dumps(report, ensure_ascii=False, indent=1))

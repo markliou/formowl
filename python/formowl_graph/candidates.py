@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import math
 import re
+from itertools import islice
 from typing import Any, Callable, Mapping, Sequence
 
 from formowl_contract import (
@@ -250,6 +251,20 @@ def _validate_no_raw_reference(value: str, field_name: str) -> None:
 
 
 _SEMANTIC_READ_PROFILE = "offline_complete_source_unit_semantics_v8"
+SEMANTIC_VALIDATION_POLICY_ID = "atom_subset_exact_anchors_segments_v1"
+SEMANTIC_ANCHOR_MAX_DISTANCE = 128
+SEMANTIC_SEGMENT_MAX_COUNT = 8
+SEMANTIC_SEGMENT_MAX_SPAN = 256
+SEMANTIC_SEGMENT_MAX_GAP = 128
+SEMANTIC_SEGMENT_MAX_OCCURRENCES = 256
+SEMANTIC_SEGMENT_MAX_SEARCH_STEPS = 4096
+_ATOM_REJECTION_MESSAGES = frozenset({
+    "semantic evidence span does not match source",
+    "semantic identity surface does not match evidence",
+    "semantic target differs from original identity",
+    "semantic time property binding is invalid",
+    "semantic time surface does not match evidence",
+})
 _SEMANTIC_ASSERTION_FIELDS = (
     "target", "item_or_row", "property", "value", "unit", "event_type", "state", "actor",
 )
@@ -473,46 +488,187 @@ def _expand_semantic_identities(data: Mapping[str, Any], *, max_candidates: int)
     return expanded
 
 
+def _semantic_span_text(span: Any, sources: Mapping[str, dict[str, Any]]) -> tuple[dict, str]:
+    """Validate the source address before any occurrence recovery. Bad addresses stay fatal."""
+    _semantic_shape(span, ("observation_id", "field_path", "quote", "occurrence_index"))
+    observation_id = span["observation_id"]
+    if not isinstance(observation_id, str) or observation_id not in sources:
+        raise ContractValidationError("semantic evidence Observation is outside the unit")
+    source, path = sources[observation_id], span["field_path"]
+    if (not isinstance(path, list) or not 1 <= len(path) <= 16
+            or path[0] not in ("text", "caption", "extracted_value", "payload")):
+        raise ContractValidationError("semantic evidence field is invalid")
+    value: Any = source
+    for key in path:
+        if isinstance(value, dict) and isinstance(key, str) and key in value:
+            value = value[key]
+        elif isinstance(value, list) and type(key) is int and 0 <= key < len(value):
+            value = value[key]
+        else:
+            raise ContractValidationError("semantic evidence field is unavailable")
+    if not isinstance(value, (str, int, float, bool, type(None))):
+        raise ContractValidationError("semantic evidence must address a scalar field")
+    quote, occurrence = span["quote"], span["occurrence_index"]
+    if (not isinstance(quote, str) or not quote
+            or occurrence is not None and (type(occurrence) is not int or occurrence < 0)):
+        raise ContractValidationError("semantic evidence quote/occurrence is invalid")
+    return source, value if isinstance(value, str) else json.dumps(value, allow_nan=False)
+
+
+def _semantic_anchors(raw: Mapping[str, Any], sources: Mapping[str, dict[str, Any]]) -> list[dict]:
+    """Only independently unique literal quotes from this atom, never inferred/resolved anchors."""
+    evidence = list(raw["evidence"]) if isinstance(raw["evidence"], list) else []
+    for value in [raw["target_identity"], *raw["identity_bindings"], *raw["times"]]:
+        if isinstance(value, dict) and isinstance(value.get("evidence"), list):
+            evidence.extend(value["evidence"])
+    anchors = []
+    for span in evidence:
+        _, text = _semantic_span_text(span, sources)
+        matches = list(re.finditer(re.escape(span["quote"]), text))
+        if len(matches) == 1 and span["occurrence_index"] in (None, 0):
+            anchors.append({**span, "start": matches[0].start(), "end": matches[0].end()})
+    return anchors
+
+
+def _semantic_atom_shape(raw: Mapping[str, Any], focus_ids: Sequence[str]) -> None:
+    """Check the entire atom's structure before a local quote rejection can short-circuit it."""
+    assertion = _semantic_shape(raw["assertion"], _SEMANTIC_ASSERTION_FIELDS)
+    if (any(value is not None and (not isinstance(value, str) or not value.strip())
+            for value in assertion.values())
+            or any(not isinstance(raw[key], str) or not raw[key].strip() for key in ("atom_type", "label"))):
+        raise ContractValidationError("semantic assertion fields must be strings or null")
+    _semantic_confidence(raw["confidence"])
+    identity = _semantic_shape(raw["target_identity"], ("display_label", "type_surface", "value_surface", "evidence"))
+    if (not isinstance(identity["evidence"], list) or len(identity["evidence"]) > 128
+            or any(identity[key] is not None and (not isinstance(identity[key], str) or not identity[key].strip())
+                   for key in ("display_label", "type_surface", "value_surface"))):
+        raise ContractValidationError("semantic target identity is invalid")
+    if not isinstance(raw["identity_bindings"], list) or len(raw["identity_bindings"]) > 16:
+        raise ContractValidationError("semantic scope identity binding is invalid")
+    seen_bindings, primaries = set(), []
+    for binding in raw["identity_bindings"]:
+        _semantic_shape(binding, ("scope_role", "type_surface", "value_surface", "evidence"))
+        if (binding["scope_role"] not in {"primary", "parent", "group", "item"}
+                or not isinstance(binding["value_surface"], str) or not binding["value_surface"].strip()
+                or binding["type_surface"] is not None and (
+                    not isinstance(binding["type_surface"], str) or not binding["type_surface"].strip())):
+            raise ContractValidationError("semantic scope identity binding is invalid")
+        key = (binding["scope_role"], binding["type_surface"], binding["value_surface"])
+        if key in seen_bindings:
+            raise ContractValidationError("semantic scope identity binding is invalid")
+        seen_bindings.add(key)
+        if binding["scope_role"] == "primary":
+            primaries.append(binding)
+    if ((identity["value_surface"] is None and raw["identity_bindings"])
+            or identity["value_surface"] is not None and (len(primaries) != 1 or any(
+                primaries[0][key] != identity[key] for key in ("type_surface", "value_surface")))):
+        raise ContractValidationError("semantic scope identity binding is invalid")
+    if not isinstance(raw["times"], list) or len(raw["times"]) > 32:
+        raise ContractValidationError("semantic time frames are invalid")
+    for temporal in raw["times"]:
+        _semantic_shape(temporal, ("role", "raw", "normalized", "precision", "property", "evidence"))
+        if (temporal["role"] not in _SEMANTIC_TIME_ROLES
+                or not isinstance(temporal["raw"], str) or not temporal["raw"].strip()
+                or any(temporal[key] is not None and not isinstance(temporal[key], str)
+                       for key in ("normalized", "precision", "property"))):
+            raise ContractValidationError("semantic time frame is invalid")
+    for value in [raw, *raw["identity_bindings"], *raw["times"]]:
+        if not isinstance(value["evidence"], list) or not 1 <= len(value["evidence"]) <= 128:
+            raise ContractValidationError("semantic evidence spans are required and bounded")
+    if not any(isinstance(span, dict) and span.get("observation_id") in focus_ids for span in raw["evidence"]):
+        raise ContractValidationError("semantic candidate evidence is outside focus")
+
+
+def _anchored_match(matches: list, anchors: list[dict]) -> Any:
+    """Every usable anchor must have one nearest hit within 128 code points and agree."""
+    selected = set()
+    for anchor in anchors:
+        distances = [max(anchor["start"] - m.end(), m.start() - anchor["end"], 0) for m in matches]
+        nearest = min(distances)
+        if nearest > SEMANTIC_ANCHOR_MAX_DISTANCE or distances.count(nearest) != 1:
+            return None
+        selected.add(distances.index(nearest))
+    return matches[selected.pop()] if len(selected) == 1 else None
+
+
+def _segmented_matches(quote: str, text: str) -> list:
+    """A unique bounded ordered chain; return exact pieces, never a fabricated contiguous quote."""
+    pieces = [part.strip(" \t") for part in re.split(r"\r\n|\r|\n", quote)]
+    if not 2 <= len(pieces) <= SEMANTIC_SEGMENT_MAX_COUNT or any(not part for part in pieces):
+        return []
+    choices = [list(islice(re.finditer(re.escape(part), text), SEMANTIC_SEGMENT_MAX_OCCURRENCES + 1))
+               for part in pieces]
+    if any(not matches or len(matches) > SEMANTIC_SEGMENT_MAX_OCCURRENCES for matches in choices):
+        return []
+    chains, visited = [], 0
+
+    def visit(chain: list) -> None:
+        nonlocal visited
+        if len(chains) > 1 or visited >= SEMANTIC_SEGMENT_MAX_SEARCH_STEPS:
+            return
+        if len(chain) == len(choices):
+            chains.append(chain)
+            return
+        for match in choices[len(chain)]:
+            visited += 1
+            if visited >= SEMANTIC_SEGMENT_MAX_SEARCH_STEPS:
+                return
+            if chain and (match.start() < chain[-1].end()
+                          or match.start() - chain[-1].end() > SEMANTIC_SEGMENT_MAX_GAP
+                          or match.end() - chain[0].start() > SEMANTIC_SEGMENT_MAX_SPAN):
+                continue
+            visit([*chain, match])
+            if len(chains) > 1 or visited >= SEMANTIC_SEGMENT_MAX_SEARCH_STEPS:
+                return
+
+    visit([])
+    return chains[0] if len(chains) == 1 and visited < SEMANTIC_SEGMENT_MAX_SEARCH_STEPS else []
+
+
 def _semantic_spans(
-    spans: Any, sources: Mapping[str, dict[str, Any]],
+    spans: Any, sources: Mapping[str, dict[str, Any]], *, anchors: list[dict] | None = None,
 ) -> list[dict[str, Any]]:
     if not isinstance(spans, list) or not 1 <= len(spans) <= 128:
         raise ContractValidationError("semantic evidence spans are required and bounded")
     result = []
     for span in spans:
-        _semantic_shape(span, ("observation_id", "field_path", "quote", "occurrence_index"))
-        observation_id = span["observation_id"]
-        if not isinstance(observation_id, str) or observation_id not in sources:
-            raise ContractValidationError("semantic evidence Observation is outside the unit")
-        source = sources[observation_id]
-        path = span["field_path"]
-        if (not isinstance(path, list) or not 1 <= len(path) <= 16
-                or path[0] not in ("text", "caption", "extracted_value", "payload")):
-            raise ContractValidationError("semantic evidence field is invalid")
-        value: Any = source
-        for key in path:
-            if isinstance(value, dict) and isinstance(key, str) and key in value:
-                value = value[key]
-            elif isinstance(value, list) and type(key) is int and 0 <= key < len(value):
-                value = value[key]
-            else:
-                raise ContractValidationError("semantic evidence field is unavailable")
-        if not isinstance(value, (str, int, float, bool, type(None))):
-            raise ContractValidationError("semantic evidence must address a scalar field")
-        text = value if isinstance(value, str) else json.dumps(value, allow_nan=False)
+        source, text = _semantic_span_text(span, sources)
         quote, occurrence = span["quote"], span["occurrence_index"]
-        if (not isinstance(quote, str) or not quote
-                or occurrence is not None and (type(occurrence) is not int or occurrence < 0)):
-            raise ContractValidationError("semantic evidence quote/occurrence is invalid")
         matches = list(re.finditer(re.escape(quote), text))
         group = 0
-        if (occurrence is None and len(matches) > 1 and isinstance(value, str)
+        same_field = [a for a in (anchors or []) if a["observation_id"] == span["observation_id"]
+                      and a["field_path"] == span["field_path"]]
+        line_matches = None
+        if (occurrence is None and len(matches) > 1
                 and quote == quote.strip() and "\r" not in quote and "\n" not in quote):
-            # Select only a unique physical line, retaining the exact source
-            # substring/coordinates. Only surrounding ASCII space/tab is padding.
-            matches = list(re.finditer(
+            # Preserve the existing unique physical-line locator before trying
+            # new contextual anchors. Padding never changes source coordinates.
+            line_matches = list(re.finditer(
                 r"(?:\A|(?<=[\r\n]))[ \t]*(" + re.escape(quote) + r")[ \t]*(?=[\r\n]|\Z)", text))
-            group = 1
+            if len(line_matches) == 1:
+                matches, group = line_matches, 1
+        if occurrence is None and len(matches) > 1 and same_field:
+            chosen = _anchored_match(matches, same_field)
+            if chosen is None:
+                raise ContractValidationError("semantic evidence span does not match source")
+            # Store the actual original occurrence, not the narrowed match-list index.
+            occurrence = matches.index(chosen)
+            span = {**span, "occurrence_index": occurrence, "match_kind": "anchored_exact"}
+        if occurrence is None and len(matches) > 1 and line_matches is not None:
+            matches, group = line_matches, 1
+        if not matches and occurrence is None and ("\n" in quote or "\r" in quote):
+            segments = _segmented_matches(quote, text)
+            if segments:
+                for index, match in enumerate(segments):
+                    occurrence_index = sum(m.start() < match.start() for m in
+                                           re.finditer(re.escape(match.group()), text))
+                    result.append({**span, "quote": match.group(), "occurrence_index": occurrence_index,
+                        "start": match.start(), "end": match.end(), "match_kind": "segmented_exact",
+                        "segment_index": index, "segment_count": len(segments),
+                        "segmented_quote_fingerprint": sha256_json(quote),
+                        "observation_hash": sha256_json(source), "native_locator": deepcopy(source["location"]),
+                        "source_extractor_run_id": source["extractor_run_id"]})
+                continue
         if (not matches or occurrence is None and len(matches) != 1
                 or occurrence is not None and occurrence >= len(matches)):
             raise ContractValidationError("semantic evidence span does not match source")
@@ -521,6 +677,8 @@ def _semantic_spans(
                        "observation_hash": sha256_json(source),
                        "native_locator": deepcopy(source["location"]),
                        "source_extractor_run_id": source["extractor_run_id"]})
+    if len(result) > 128:
+        raise ContractValidationError("semantic evidence spans are required and bounded")
     return result
 
 
@@ -692,7 +850,8 @@ def read_and_store_source_unit(
     source_bytes = len(json.dumps(source_unit, ensure_ascii=False, sort_keys=True,
                                  separators=(",", ":"), allow_nan=False).encode("utf-8"))
     pins = {
-        "profile_id": _SEMANTIC_READ_PROFILE, "source_unit_id": source_unit_id,
+        "profile_id": _SEMANTIC_READ_PROFILE, "validation_policy_id": SEMANTIC_VALIDATION_POLICY_ID,
+        "source_unit_id": source_unit_id,
         "source_revision_fingerprint": source_revision_fingerprint,
         "observation_hashes": dict(expected_observation_hashes),
         "focus_observation_ids": focus_ids, "context_observation_ids": context_ids,
@@ -806,6 +965,8 @@ def read_and_store_source_unit(
         atoms_by_local_id: dict[str, CandidateAtom] = {}
         relations: list[CandidateRelation] = []
         local_ids: set[str] = set()
+        rejected_atoms: dict[str, str] = {}
+        rejections: list[dict[str, str]] = []
         common = {"semantic_read_ledger_id": ledger_id, "read_pins_fingerprint": sha256_json(pins),
                   "execution_fingerprint": execution_fingerprint,
                   "permission_scope": deepcopy(next(iter(sources.values()))["permission_scope"])}
@@ -816,95 +977,120 @@ def read_and_store_source_unit(
             if local_id in local_ids:
                 raise ContractValidationError("semantic local IDs must be unique")
             local_ids.add(local_id)
-            assertion = _semantic_shape(raw["assertion"], _SEMANTIC_ASSERTION_FIELDS)
-            if any(value is not None and (not isinstance(value, str) or not value.strip())
-                   for value in assertion.values()):
-                raise ContractValidationError("semantic assertion fields must be strings or null")
-            if raw["atom_type"] != "entity" and assertion["property"] is None:
-                raise ContractValidationError("semantic atomic property is missing")
-            spans = _semantic_spans(raw["evidence"], sources)
-            if not any(span["observation_id"] in focus_ids for span in spans):
-                raise ContractValidationError("semantic candidate evidence is outside focus")
-            identity = _semantic_shape(raw["target_identity"], ("display_label", "type_surface", "value_surface", "evidence"))
-            if (not isinstance(identity["evidence"], list)
-                    or any(identity[key] is not None and (not isinstance(identity[key], str) or not identity[key].strip())
-                           for key in ("display_label", "type_surface", "value_surface"))):
-                raise ContractValidationError("semantic target identity is invalid")
-            identity_spans = _semantic_spans(identity["evidence"], sources) if identity["evidence"] else []
-            for surface in (identity["type_surface"], identity["value_surface"]):
-                if surface is not None and not any(surface in span["quote"] for span in identity_spans):
-                    raise ContractValidationError("semantic identity surface does not match evidence")
-            if assertion["target"] != identity["value_surface"]:
-                raise ContractValidationError("semantic target differs from original identity")
-            bindings, binding_spans, seen_bindings = [], [], set()
-            if not isinstance(raw["identity_bindings"], list) or len(raw["identity_bindings"]) > 16:
-                raise ContractValidationError("semantic scope identity binding is invalid")
-            for binding in raw["identity_bindings"]:
-                _semantic_shape(binding, ("scope_role", "type_surface", "value_surface", "evidence"))
-                if (binding["scope_role"] not in {"primary", "parent", "group", "item"}
-                        or not isinstance(binding["value_surface"], str) or not binding["value_surface"].strip()
-                        or binding["type_surface"] is not None and (
-                            not isinstance(binding["type_surface"], str) or not binding["type_surface"].strip())):
+            _semantic_atom_shape(raw, focus_ids)
+            try:
+                assertion = _semantic_shape(raw["assertion"], _SEMANTIC_ASSERTION_FIELDS)
+                if any(value is not None and (not isinstance(value, str) or not value.strip())
+                       for value in assertion.values()):
+                    raise ContractValidationError("semantic assertion fields must be strings or null")
+                if raw["atom_type"] != "entity" and assertion["property"] is None:
+                    raise ContractValidationError("semantic atomic property is missing")
+                anchors = _semantic_anchors(raw, sources)
+                spans = _semantic_spans(raw["evidence"], sources, anchors=anchors)
+                if not any(span["observation_id"] in focus_ids for span in spans):
+                    raise ContractValidationError("semantic candidate evidence is outside focus")
+                identity = _semantic_shape(raw["target_identity"], ("display_label", "type_surface", "value_surface", "evidence"))
+                if (not isinstance(identity["evidence"], list)
+                        or any(identity[key] is not None and (not isinstance(identity[key], str) or not identity[key].strip())
+                               for key in ("display_label", "type_surface", "value_surface"))):
+                    raise ContractValidationError("semantic target identity is invalid")
+                identity_spans = _semantic_spans(identity["evidence"], sources, anchors=anchors) if identity["evidence"] else []
+                for surface in (identity["type_surface"], identity["value_surface"]):
+                    if surface is not None and not any(surface in span["quote"] for span in identity_spans):
+                        raise ContractValidationError("semantic identity surface does not match evidence")
+                if assertion["target"] != identity["value_surface"]:
+                    raise ContractValidationError("semantic target differs from original identity")
+                bindings, binding_spans, seen_bindings = [], [], set()
+                if not isinstance(raw["identity_bindings"], list) or len(raw["identity_bindings"]) > 16:
                     raise ContractValidationError("semantic scope identity binding is invalid")
-                key = (binding["scope_role"], binding["type_surface"], binding["value_surface"])
-                spans_for_binding = _semantic_spans(binding["evidence"], sources)
-                if (key in seen_bindings or any(surface is not None and not any(
-                        surface in span["quote"] for span in spans_for_binding)
-                        for surface in key[1:])):
+                for binding in raw["identity_bindings"]:
+                    _semantic_shape(binding, ("scope_role", "type_surface", "value_surface", "evidence"))
+                    if (binding["scope_role"] not in {"primary", "parent", "group", "item"}
+                            or not isinstance(binding["value_surface"], str) or not binding["value_surface"].strip()
+                            or binding["type_surface"] is not None and (
+                                not isinstance(binding["type_surface"], str) or not binding["type_surface"].strip())):
+                        raise ContractValidationError("semantic scope identity binding is invalid")
+                    key = (binding["scope_role"], binding["type_surface"], binding["value_surface"])
+                    spans_for_binding = _semantic_spans(binding["evidence"], sources, anchors=anchors)
+                    if key in seen_bindings:
+                        raise ContractValidationError("semantic scope identity binding is invalid")
+                    if any(surface is not None and not any(
+                            surface in span["quote"] for span in spans_for_binding)
+                            for surface in key[1:]):
+                        raise ContractValidationError("semantic identity surface does not match evidence")
+                    seen_bindings.add(key)
+                    bindings.append({"scope_role": key[0], "type_surface": key[1], "value_surface": key[2],
+                                     "evidence_spans": spans_for_binding})
+                    binding_spans.extend(spans_for_binding)
+                primaries = [binding for binding in bindings if binding["scope_role"] == "primary"]
+                if ((identity["value_surface"] is None and bindings)
+                        or identity["value_surface"] is not None and (len(primaries) != 1 or any(
+                            primaries[0][key] != identity[key] for key in ("type_surface", "value_surface")))):
                     raise ContractValidationError("semantic scope identity binding is invalid")
-                seen_bindings.add(key)
-                bindings.append({"scope_role": key[0], "type_surface": key[1], "value_surface": key[2],
-                                 "evidence_spans": spans_for_binding})
-                binding_spans.extend(spans_for_binding)
-            primaries = [binding for binding in bindings if binding["scope_role"] == "primary"]
-            if ((identity["value_surface"] is None and bindings)
-                    or identity["value_surface"] is not None and (len(primaries) != 1 or any(
-                        primaries[0][key] != identity[key] for key in ("type_surface", "value_surface")))):
-                raise ContractValidationError("semantic scope identity binding is invalid")
-            if not isinstance(raw["times"], list) or len(raw["times"]) > 32:
-                raise ContractValidationError("semantic time frames are invalid")
-            times, support_spans = [], [*spans, *identity_spans, *binding_spans]
-            for temporal in raw["times"]:
-                _semantic_shape(temporal, ("role", "raw", "normalized", "precision", "property", "evidence"))
-                if (temporal["role"] not in _SEMANTIC_TIME_ROLES
-                        or not isinstance(temporal["raw"], str) or not temporal["raw"].strip()
-                        or any(temporal[key] is not None and not isinstance(temporal[key], str)
-                               for key in ("normalized", "precision"))):
-                    raise ContractValidationError("semantic time frame is invalid")
-                if ((temporal["role"] == "asserted" and temporal["property"] is not None)
-                        or (temporal["role"] != "asserted" and (
-                            temporal["property"] is None or temporal["property"] != assertion["property"]))):
-                    raise ContractValidationError("semantic time property binding is invalid")
-                time_spans = _semantic_spans(temporal["evidence"], sources)
-                if not any(temporal["raw"] in span["quote"] for span in time_spans):
-                    raise ContractValidationError("semantic time surface does not match evidence")
-                times.append({**{key: value for key, value in temporal.items() if key != "evidence"},
-                              "evidence_spans": time_spans})
-                support_spans.extend(time_spans)
-            properties = {**common, "local_id": local_id, "assertion": dict(assertion),
-                          "target_identity": {**{key: value for key, value in identity.items() if key != "evidence"},
-                                              "evidence_spans": identity_spans},
-                          "identity_bindings": bindings,
-                          "times": times, "evidence_spans": spans}
-            source_ids = sorted({span["observation_id"] for span in support_spans})
-            atom = CandidateAtom(
-                candidate_atom_id=stable_candidate_atom_id(
-                    source_observation_ids=source_ids, atom_type=raw["atom_type"],
-                    label=raw["label"], properties=properties, extractor_run_id=extractor_run_id),
-                source_observation_ids=source_ids, atom_type=raw["atom_type"], label=raw["label"],
-                properties=properties, confidence=_semantic_confidence(raw["confidence"]),
-                extractor_run_id=extractor_run_id, status="pending_review", requires_review=True,
-                source_semantic_metadata_ids=[ledger_id], created_at=ledger.created_at,
-            )
-            atoms_by_local_id[local_id] = CandidateAtom.from_dict(atom.to_dict())
+                if not isinstance(raw["times"], list) or len(raw["times"]) > 32:
+                    raise ContractValidationError("semantic time frames are invalid")
+                times, support_spans = [], [*spans, *identity_spans, *binding_spans]
+                for temporal in raw["times"]:
+                    _semantic_shape(temporal, ("role", "raw", "normalized", "precision", "property", "evidence"))
+                    if (temporal["role"] not in _SEMANTIC_TIME_ROLES
+                            or not isinstance(temporal["raw"], str) or not temporal["raw"].strip()
+                            or any(temporal[key] is not None and not isinstance(temporal[key], str)
+                                   for key in ("normalized", "precision"))):
+                        raise ContractValidationError("semantic time frame is invalid")
+                    if ((temporal["role"] == "asserted" and temporal["property"] is not None)
+                            or (temporal["role"] != "asserted" and (
+                                temporal["property"] is None or temporal["property"] != assertion["property"]))):
+                        raise ContractValidationError("semantic time property binding is invalid")
+                    time_spans = _semantic_spans(temporal["evidence"], sources, anchors=anchors)
+                    if not any(temporal["raw"] in span["quote"] for span in time_spans):
+                        raise ContractValidationError("semantic time surface does not match evidence")
+                    times.append({**{key: value for key, value in temporal.items() if key != "evidence"},
+                                  "evidence_spans": time_spans})
+                    support_spans.extend(time_spans)
+                properties = {**common, "local_id": local_id, "assertion": dict(assertion),
+                              "target_identity": {**{key: value for key, value in identity.items() if key != "evidence"},
+                                                  "evidence_spans": identity_spans},
+                              "identity_bindings": bindings,
+                              "times": times, "evidence_spans": spans}
+                source_ids = sorted({span["observation_id"] for span in support_spans})
+                atom = CandidateAtom(
+                    candidate_atom_id=stable_candidate_atom_id(
+                        source_observation_ids=source_ids, atom_type=raw["atom_type"],
+                        label=raw["label"], properties=properties, extractor_run_id=extractor_run_id),
+                    source_observation_ids=source_ids, atom_type=raw["atom_type"], label=raw["label"],
+                    properties=properties, confidence=_semantic_confidence(raw["confidence"]),
+                    extractor_run_id=extractor_run_id, status="pending_review", requires_review=True,
+                    source_semantic_metadata_ids=[ledger_id], created_at=ledger.created_at,
+                )
+                atoms_by_local_id[local_id] = CandidateAtom.from_dict(atom.to_dict())
+            except ContractValidationError as exc:
+                if str(exc) not in _ATOM_REJECTION_MESSAGES:
+                    raise
+                reason = _semantic_failure_diagnostic(exc, "validation")["failure_reason"]
+                rejected_atoms[local_id] = reason
+                rejections.append({"kind": "atom", "local_id": local_id, "reason": reason})
+        atom_local_ids = set(local_ids)
         for raw in data["relations"]:
             _semantic_shape(raw, ("local_id", "source", "target", "relation_type", "evidence", "confidence"))
             _validate_graph_reference_id(raw["local_id"], "semantic local_id")
             if (raw["local_id"] in local_ids or not isinstance(raw["source"], str)
                     or not isinstance(raw["target"], str)
-                    or raw["source"] not in atoms_by_local_id or raw["target"] not in atoms_by_local_id):
+                    or raw["source"] not in atom_local_ids or raw["target"] not in atom_local_ids):
                 raise ContractValidationError("semantic relation endpoints/local ID are invalid")
             local_ids.add(raw["local_id"])
+            if not isinstance(raw["relation_type"], str) or not raw["relation_type"].strip():
+                raise ContractValidationError("semantic relation type is invalid")
+            _semantic_confidence(raw["confidence"])
+            if not isinstance(raw["evidence"], list) or not 1 <= len(raw["evidence"]) <= 128:
+                raise ContractValidationError("semantic evidence spans are required and bounded")
+            for span in raw["evidence"]:
+                _semantic_span_text(span, sources)
+            if not any(span["observation_id"] in focus_ids for span in raw["evidence"]):
+                raise ContractValidationError("semantic candidate evidence is outside focus")
+            if raw["source"] in rejected_atoms or raw["target"] in rejected_atoms:
+                rejections.append({"kind": "relation", "local_id": raw["local_id"],
+                                   "reason": "dependent_atom_rejected"})
+                continue
             spans = _semantic_spans(raw["evidence"], sources)
             if not any(span["observation_id"] in focus_ids for span in spans):
                 raise ContractValidationError("semantic candidate evidence is outside focus")
@@ -941,7 +1127,17 @@ def read_and_store_source_unit(
             candidate_atom_store.create(atom)
         for relation in relations:
             candidate_relation_store.create(relation)
-        write_ledger(annotation_status="annotated", reader_invoked=True,
+        rejected_reasons: dict[str, int] = {}
+        for rejection in rejections:
+            reason = rejection["reason"]
+            rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
+        validation_status = "complete" if not rejections else "partial" if atoms else "rejected_all"
+        write_ledger(annotation_status=("annotated" if not rejections else "pending" if atoms else "failed"),
+                     validation_status=validation_status, rejected_atom_count=len(rejected_atoms),
+                     rejected_relation_count=len(rejections) - len(rejected_atoms),
+                     rejected_reasons=rejected_reasons, rejected_candidates=rejections,
+                     **({"stop_reason": "candidate_validation_" + validation_status} if rejections else {}),
+                     reader_invoked=True,
                      processed_observation_ids=focus_ids,
                      candidate_count=len(atoms) + len(relations), candidate_hashes={
                          **{atom.candidate_atom_id: sha256_json(atom.to_dict()) for atom in atoms},

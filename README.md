@@ -110,6 +110,14 @@ contract: actual webpage questions and visible source-correct answers across
 mail/attachments and independent non-mail sources, not index/MCP/log success.
 The new mode names are requirements, not existing deployed flags.
 
+Bounded semantic validation may retain valid atoms while recording rejected atoms
+and dependent relations. Such a subset remains `pending/partial`, excluded from
+annotated coverage and the existing review/serving path; an all-rejected result is
+`failed/rejected_all`, never annotated-zero. Repeated quotes need agreeing unique
+anchors in the same scalar; noncontiguous multiline quotes preserve each exact
+segment's source offsets within the conservative limits in [SPEC §3.1.1](SPEC.md#311-explicit-execution-modes-and-ontology-aware-uat-contract).
+These source-location checks do not establish table association or semantic correctness.
+
 ## Active KG Research Program
 
 GitHub issue #56 is the sole active KG methodology program:

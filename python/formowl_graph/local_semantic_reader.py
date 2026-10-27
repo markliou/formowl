@@ -29,8 +29,9 @@ import urllib.request
 from typing import Any, Mapping
 
 from formowl_contract import ContractValidationError, sha256_json
+from .candidates import SEMANTIC_SEGMENT_MAX_COUNT
 
-ADAPTER_ID = "local_flat_reader_v9"
+ADAPTER_ID = "local_flat_reader_v10"
 TIME_ROLES = ["asserted", "effective", "due", "planned", "forecast", "actual", "requested",
               "valid_from", "valid_to", "superseded", "unknown"]
 RECORD_TYPES = ["entity", "claim", "event", "state_transition"]
@@ -208,6 +209,13 @@ class Adapter:
             self.relocated += 1
         else:
             self.problem(f"「{quote[:40]}」在 {oid} 中找不到逐字相同的連續原文")
+            # Select only the scalar address here. The core validates the unique
+            # bounded ordered chain and records each segment's original offsets.
+            pieces = [part.strip(" \t") for part in re.split(r"\r\n|\r|\n", quote)]
+            if 2 <= len(pieces) <= SEMANTIC_SEGMENT_MAX_COUNT and all(pieces):
+                candidates = [path for path, text in fields if all(part in text for part in pieces)]
+                if candidates:
+                    out["field_path"] = candidates[0]
         return out
 
     def surface(self, value: Any, spans: list[dict[str, Any]], *, record: bool = True) -> Any:

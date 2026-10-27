@@ -160,6 +160,39 @@ UAT unavailable. Eligible baseline/source fallback remains bounded by §7.3.1,
 including the ALL-requested-fields rule; a missing ledger is not a new retry
 trigger. No inline rebuilding or extra request budget is authorized.
 
+**2026-10-27 bounded candidate validation — 待測.** The existing semantic reader
+may retain independently validated atoms when another atom fails exact quotation,
+identity-surface/target or temporal binding validation. The server records rejected
+local atom IDs and fixed reason counts, and rejects relations depending on those
+atoms. A retained subset uses `annotation_status=pending, validation_status=partial`;
+all proposed atoms rejected uses `failed/rejected_all`. Neither counts as annotated
+coverage or enters the existing annotated-only review/serving path. Only an explicit,
+complete, valid zero-candidate model result is `annotated` with count zero. Global
+schema, source/hash/permission, read-inventory, provider and persistence failures
+remain unit failures. Validation policy pins distinguish new attempts from old
+checkpoints; offline revalidation preserves original model execution receipts and
+records new validation lineage, never a new model execution.
+
+A repeated exact quote first preserves the existing unique-physical-line locator.
+If that does not uniquely locate it, it may use only an independently unique literal anchor supplied
+by the same atom in the same Observation and scalar field. Every applicable anchor
+must select the same uniquely nearest occurrence within 128 Unicode code points;
+ties, conflicting anchors or missing anchors cannot authorize a new selection.
+A noncontiguous multiline quote may
+split on LF/CRLF/CR, removing only surrounding ASCII space/tab padding per segment:
+2–8 nonempty exact segments, in order without overlap, in one scalar, total bounding
+span at most 256 code points and each intervening gap at most 128. Exactly one legal
+position chain is required; enumeration is bounded to 256 occurrences per segment
+and 4096 search steps, with exhaustion rejected. Persist each segment's original
+quote, start/end offsets, Observation hash/native locator and a shared quote
+fingerprint/index; never represent the concatenation as continuous source text.
+Location validation alone proves no header/value, row/item, identity, event-time
+or supersession association; existing semantic/source constraints remain necessary.
+The existing candidate owner names these bounds `SEMANTIC_ANCHOR_MAX_DISTANCE`,
+`SEMANTIC_SEGMENT_MAX_COUNT`, `SEMANTIC_SEGMENT_MAX_SPAN`,
+`SEMANTIC_SEGMENT_MAX_GAP`, `SEMANTIC_SEGMENT_MAX_OCCURRENCES` and
+`SEMANTIC_SEGMENT_MAX_SEARCH_STEPS`, respectively 128/8/256/128/256/4096.
+
 Ontology-aware query execution is therefore:
 
 ```text

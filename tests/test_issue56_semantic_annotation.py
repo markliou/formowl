@@ -249,6 +249,25 @@ class DocumentScopeTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
+    def test_partial_candidate_retention_never_counts_as_complete_coverage(self) -> None:
+        import contextlib
+        import io
+        root = _paths.fresh_test_dir("annotation-partial-report")
+        (root / "units.jsonl").write_text(json.dumps({"unit_id": "a"}) + "\n")
+        (root / "progress.jsonl").write_text(json.dumps({"run": "r", "unit": "a", "status": "pending",
+            "validation_status": "partial", "atoms": 2, "rejected_atom_count": 1,
+            "rejected_relation_count": 0, "rejected_reasons": {"exact_span_mismatch": 1},
+            "reason": "candidate_validation_partial", "ledger": "sem_partial"}) + "\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            annotation.main(["report", "--units", str(root / "units.jsonl"), "--output", str(root), "--run-id", "r"])
+        report = json.loads(out.getvalue())
+        self.assertFalse(report["scope_complete"])
+        self.assertEqual(report["original_units_annotated"], 0)
+        self.assertEqual(report["partial_units"], 1)
+        self.assertEqual(report["partial_candidate_atoms"], 2)
+        self.assertEqual(report["rejected_atom_count"], 1)
+
     def test_original_unit_needs_every_regrouped_child(self) -> None:
         import contextlib
         import io
