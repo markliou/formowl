@@ -240,7 +240,8 @@ _CODEX_DISABLED_FEATURES = (
     "auth_elicitation",
     "browser_use",
     "browser_use_external",
-    "code_mode_host",
+    # code_mode_host stays enabled: official 0.164 models are tool_mode
+    # code_mode_only and reach dynamic tools only through the exec host.
     "computer_use",
     "goals",
     "hooks",

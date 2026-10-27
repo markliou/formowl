@@ -6524,6 +6524,9 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
             command[index + 1] for index, value in enumerate(command[:-1]) if value == "--disable"
         }
         self.assertTrue(set(_CODEX_DISABLED_FEATURES).issubset(disabled))
+        # Official 0.164 models call dynamic tools only through code mode.
+        self.assertNotIn("code_mode_host", disabled)
+        self.assertTrue({"shell_tool", "unified_exec", "web_search", "plugins", "apps"}.issubset(disabled))
         self.assertIn('sandbox_mode="read-only"', command)
         self.assertIn('web_search="disabled"', command)
         self.assertIn("mcp_servers={}", command)

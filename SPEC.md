@@ -395,6 +395,10 @@ For official CLI0.164, server-generated runtime clock, capability and request
 contract context uses `kind=application`; user/source context stays `untrusted`.
 JSON-RPC rejection diagnostics retain numeric code and a normalized fixed safe
 message, not the original server message/data; public projection stays filtered.
+Official CLI0.164 models are `tool_mode=code_mode_only`: they call dynamic tools
+only from the `exec` code-mode host, so `code_mode_host` stays enabled (user
+approval 2026-10-27) while shell, unified exec, web search, plugins, apps and other
+features remain disabled under the read-only, network-restricted sandbox.
 The page is for this user personally and UAT only, one question at a time through
 the existing nonblocking service lock. Annotation always uses local Gemma, never
 OpenAI; only official Codex is used for answers, with no self-hosted gateway.
