@@ -4092,7 +4092,7 @@ def _build_source_start_semantic_handler(
         }
         coverage_payload["coverage_fingerprint"] = sha256_json(coverage_payload)
         query_agent = {
-            "status": recovery["status"],
+            "status": "replan_required" if replan_required else "pending_review",
             "stop_reason": (
                 "source_recovery_incomplete"
                 if replan_required else "retrieval_projection_unavailable"
@@ -4144,7 +4144,12 @@ def _build_source_start_semantic_handler(
         query_agent["context_bundle"]["bundle_fingerprint"] = sha256_json(
             query_agent["context_bundle"]
         )
-        status = recovery["status"] or ("ok" if evidence else "pending_review")
+        # recovery["status"] defaults to pending_review for the envelope, so the
+        # public status keeps the reader status and only adds the replan marker.
+        status = (
+            "replan_required" if replan_required
+            else double_check.status or ("ok" if evidence else "pending_review")
+        )
         # Normal return is required: reader/drain errors never reach this path.
         presentation_deferred = (
             tuple(presentation_cache)

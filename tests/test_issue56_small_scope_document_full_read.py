@@ -77,6 +77,10 @@ class SmallScopeDocumentFullReadTests(unittest.TestCase):
     def test_full_read_recovers_all_ordered_native_citations(self):
         result, fixture, _ = self.run_lookup("Completed the design.\n\nNext step is owner review.\n")
         self.assertTrue(result["citations"])
+        # Recovered evidence keeps the reader status; only a replan marker may
+        # replace it, and the query-agent envelope stays pending review.
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["query_agent"]["status"], "pending_review")
         recovery = self.recovery(result)
         self.assertEqual(recovery["mode"], "small_scope_full_read")
         self.assertTrue(recovery["scan_complete"])
