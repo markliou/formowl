@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import os
 from pathlib import Path
 import secrets
 import selectors
@@ -181,18 +182,26 @@ def main() -> int:
     args = parser.parse_args()
     websocket = _UnixWebSocket(args.socket)
     selector = selectors.DefaultSelector()
-    selector.register(sys.stdin.buffer, selectors.EVENT_READ, "stdin")
+    stdin_fd = sys.stdin.buffer.fileno()
+    stdin_buffer = bytearray()
+    selector.register(stdin_fd, selectors.EVENT_READ, "stdin")
     selector.register(websocket.socket, selectors.EVENT_READ, "websocket")
     try:
         while True:
             for key, _ in selector.select():
                 if key.data == "stdin":
-                    line = sys.stdin.buffer.readline()
-                    if not line:
+                    chunk = os.read(stdin_fd, 64 * 1024)
+                    if not chunk:
+                        if stdin_buffer:
+                            raise RuntimeError("Codex proxy stdin message is incomplete")
                         return 0
-                    if not line.endswith(b"\n"):
-                        raise RuntimeError("Codex proxy stdin message is incomplete")
-                    websocket.send_text(line[:-1].decode("utf-8"))
+                    stdin_buffer.extend(chunk)
+                    # A buffered readline can consume multiple lines from the fd,
+                    # leaving the selector unaware of the remaining messages.
+                    while (end := stdin_buffer.find(b"\n")) != -1:
+                        line = bytes(stdin_buffer[:end])
+                        del stdin_buffer[:end + 1]
+                        websocket.send_text(line.decode("utf-8"))
                     continue
                 message = websocket.recv_text()
                 if message is None:
