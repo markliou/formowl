@@ -2084,6 +2084,187 @@ def _server_annotation_hint_source_match(
     return False
 
 
+def _build_source_recovery_summary(
+    *,
+    query_text: str,
+    source_family_scope: Sequence[str],
+    required_terms: Sequence[str],
+    initial_status: str | None,
+    initial_warnings: Sequence[str],
+    initial_evidence_count: int,
+    result_status: str | None,
+    double_check: Any,
+    evidence: Sequence[Mapping[str, Any]],
+    required_term_observation_count: int,
+    required_term_hit_counts: Mapping[str, int],
+    joint_candidate_count: int,
+    source_authority_fingerprint: str,
+    source_session_binding_fingerprint: str,
+    warnings: Sequence[str],
+    recheck_variant: str | None,
+    hard_term_count: int = 0,
+    soft_term_count: int = 0,
+    initial_required_terms_fingerprint: str | None = None,
+    recheck_required_terms_fingerprint: str | None = None,
+    date_priority_phase: Mapping[str, Any] | None = None,
+    requested_source_family_scope: Sequence[str] | None = None,
+    material_recheck_attempted: bool = False,
+    preserve_citation_order: bool = False,
+) -> dict[str, Any]:
+    """Build the bounded source-recovery envelope shared by both paths.
+
+    The indexed and source-start handlers have different readers, but the
+    replan decision and public aggregate fields must remain identical.  Only
+    counts and sealed fingerprints cross this boundary; source text and raw
+    locators stay in the private evidence path.
+    """
+    scan = getattr(double_check, "scan", None)
+    scan_complete = bool(getattr(scan, "complete", False)) if scan is not None else False
+    scan_stop_reason = getattr(scan, "stop_reason", None) if scan is not None else None
+    evidence_items = [item for item in evidence if isinstance(item, Mapping)]
+    result_status = result_status or initial_status
+    initial_warnings = tuple(
+        warning for warning in initial_warnings if isinstance(warning, str)
+    )
+    recheck_variant = recheck_variant if scan is not None else None
+    replan_required = bool(
+        scan is not None
+        and scan_complete is False
+        and not evidence_items
+        and initial_evidence_count == 0
+        and "retrieval_projection_unavailable" in initial_warnings
+        and recheck_variant is None
+        and initial_status not in {"error", "failed", "permission_denied"}
+    )
+    replan_reason = (
+        "projection_unavailable_scan_incomplete_no_evidence"
+        if replan_required else None
+    )
+    if replan_required:
+        result_status = "replan_required"
+    term_status = (
+        "complete" if scan_complete
+        else "partial" if required_term_observation_count
+        else "unavailable"
+    )
+    safe_term_counts = [
+        {
+            "term": term,
+            "count": int(required_term_hit_counts.get(term, 0)),
+            "status": term_status,
+        }
+        for term in required_terms
+    ]
+    if scan is None:
+        joint_count_state = "unknown"
+    elif not scan_complete:
+        joint_count_state = "unknown"
+    elif joint_candidate_count == 0:
+        joint_count_state = "complete_zero"
+    else:
+        joint_count_state = "complete_positive"
+    if date_priority_phase is None:
+        date_priority = {
+            "attempted": False,
+            "candidate_count": "unavailable",
+            "status": "unavailable",
+            "stop_reason": "not_bound",
+        }
+    else:
+        date_priority = dict(date_priority_phase)
+    citation_hashes = (
+        list(dict.fromkeys(
+            item["citation_hash"] for item in evidence_items
+            if isinstance(item.get("citation_hash"), str)
+        ))
+        if preserve_citation_order
+        else sorted({
+            item["citation_hash"]
+            for item in evidence_items
+            if isinstance(item.get("citation_hash"), str)
+        })
+    )
+    source_recovery = {
+        "artifact_id": "formowl_bounded_source_recovery_v1",
+        "source_family": (
+            source_family_scope[0] if len(source_family_scope) == 1 else "source_neutral"
+        ),
+        "source_families": list(source_family_scope),
+        "source_family_scope": list(
+            source_family_scope
+            if requested_source_family_scope is None
+            else requested_source_family_scope
+        ),
+        "query_hash": sha256_json(query_text),
+        "initial_status": initial_status,
+        "status": result_status,
+        "attempted": scan is not None,
+        "required_term_count": len(required_terms),
+        "required_term_hit_counts": safe_term_counts,
+        "joint_candidate_count": joint_candidate_count,
+        "joint_candidate_count_complete": scan_complete,
+        "joint_candidate_count_state": joint_count_state,
+        "scan_complete": scan_complete,
+        "stop_reason": scan_stop_reason,
+        "lookup": {
+            "attempted": scan is not None,
+            "candidate_count": joint_candidate_count if scan is not None else "unavailable",
+            "status": (
+                "unavailable" if scan is None
+                else "ok" if joint_candidate_count
+                else "not_found" if scan_complete
+                else "incomplete"
+            ),
+            "stop_reason": scan_stop_reason,
+        },
+        "date_priority": date_priority,
+        # Only a material/identity recheck variant counts as a recheck; the
+        # first bounded scan alone must not be reported as one to the model.
+        "material_recheck": {
+            "attempted": material_recheck_attempted,
+            "candidate_count": (
+                joint_candidate_count if material_recheck_attempted else "unavailable"
+            ),
+            "status": result_status if material_recheck_attempted else "unavailable",
+            "stop_reason": (
+                scan_stop_reason if material_recheck_attempted else "no_recheck_plan"
+            ),
+        },
+        "replan_required": replan_required,
+        "replan_reason": replan_reason,
+        "scan": (
+            {
+                "scanned_observation_count": scan.scanned_observation_count,
+                "complete": scan.complete,
+                "stop_reason": scan.stop_reason,
+            }
+            if scan is not None else None
+        ),
+        "source_authority_fingerprint": source_authority_fingerprint,
+        "source_session_binding_fingerprint": source_session_binding_fingerprint,
+        "source_scope_fingerprints": sorted({
+            item["source_scope_fingerprint"]
+            for item in evidence_items
+            if isinstance(item.get("source_scope_fingerprint"), str)
+        }),
+        "citation_hashes": citation_hashes,
+        "lineage_fingerprints": sorted({
+            item["occurrence_lineage_fingerprint"]
+            for item in evidence_items
+            if isinstance(item.get("occurrence_lineage_fingerprint"), str)
+        }),
+        "evidence": evidence_items,
+        "warnings": sorted({warning for warning in warnings if isinstance(warning, str)}),
+        "recheck_variant": recheck_variant,
+        "hard_term_count": hard_term_count,
+        "soft_term_count": soft_term_count,
+        "initial_required_terms_fingerprint": initial_required_terms_fingerprint,
+        "recheck_required_terms_fingerprint": recheck_required_terms_fingerprint,
+    }
+    source_recovery["recovery_fingerprint"] = sha256_json(source_recovery)
+    return source_recovery
+
+
 _FOLLOWED_RELATIONS = frozenset({"updates", "supersedes", "contradicts"})
 _MAX_RELATION_EXPANSION = 32
 
@@ -2299,6 +2480,38 @@ def _build_source_start_semantic_handler(
             ))
             if len(set(required_terms)) != len(required_terms):
                 raise ContractValidationError("source-start required terms are invalid")
+        required_term_observation_count = 0
+        required_term_hit_counts = {term: 0 for term in required_terms}
+
+        def observe_required_terms(observation: Observation) -> None:
+            """Count terms only on observations actually passed to projection."""
+            nonlocal required_term_observation_count
+            required_term_observation_count += 1
+            values = [observation.text or observation.caption or ""]
+            if observation.modality == "mail":
+                payload = to_plain(observation.payload or {})
+                if isinstance(payload, Mapping):
+                    values.extend(
+                        value
+                        for value in (
+                            payload.get("subject"),
+                            payload.get("normalized_subject"),
+                            payload.get("sender"),
+                            payload.get("from"),
+                            payload.get("to"),
+                            payload.get("cc"),
+                            payload.get("header_name"),
+                            payload.get("header_value"),
+                            payload.get("body_excerpt"),
+                        )
+                        if isinstance(value, str)
+                    )
+            searchable = unicodedata.normalize(
+                "NFKC", " ".join(value for value in values if isinstance(value, str) and value)
+            ).casefold()
+            for term in required_terms:
+                if term in searchable:
+                    required_term_hit_counts[term] += 1
         # The runtime may use one identifier as the bounded mail anchor when
         # an occurrence is split across body segments.  Native table rows are
         # a separate, row-level surface: retain every protected identifier
@@ -2781,6 +2994,7 @@ def _build_source_start_semantic_handler(
         def project(observation: Observation, scope_id: str, deadline: float):
             nonlocal unresolved_parent_binding, last_anchor
             check_source_evidence_deadline(deadline)
+            observe_required_terms(observation)
             last_anchor = None
             semantic_hash = sha256_json(observation.to_dict()) if annotation_hashes else None
             semantic_match = not full_read_projection and semantic_hash in annotation_hashes
@@ -3680,7 +3894,13 @@ def _build_source_start_semantic_handler(
             initial_status="pending_review",
             query_class=query_class,
             result_query_class=query_class,
-            initial_warnings=("retrieval_projection_unavailable",),
+            # Source-start normally has no indexed projection warning in its
+            # existing bounded fallback contract.  The native date-priority
+            # path explicitly records the projection miss and is the route
+            # eligible for the one-shot replan marker (the real T2 path).
+            initial_warnings=(
+                ("retrieval_projection_unavailable",) if date_priority else ()
+            ),
             verified_evidence_count=0,
             evidence_limit=max(0, limit - source_budget["evidence"]),
             sealed_coverage_complete=coverage_complete,
@@ -3798,40 +4018,58 @@ def _build_source_start_semantic_handler(
             ),
         )
         missing = [field for field in requested_fields if field not in supported]
-        recovery = {
-            "artifact_id": "formowl_bounded_source_recovery_v1",
-            "source_family": (
-                request_contract["source_family_scope"][0]
-                if len(request_contract["source_family_scope"]) == 1
-                else "source_neutral"
+        date_priority_phase = None
+        if date_priority:
+            date_candidate_count = date_metadata.get("candidate_occurrence_count")
+            matching_count = date_metadata.get("matching_occurrence_count", 0)
+            sql_complete = date_metadata.get("sql_complete") is True
+            date_priority_phase = {
+                "attempted": True,
+                "candidate_count": date_candidate_count if date_candidate_count is not None else "unavailable",
+                "status": (
+                    "ok" if matching_count
+                    else "not_found" if sql_complete
+                    else "incomplete"
+                ),
+                "stop_reason": date_metadata.get("stop_reason"),
+                "sql_complete": date_metadata.get("sql_complete"),
+                "matching_occurrence_count": matching_count,
+                "selected_date": date_metadata.get("selected_date"),
+                "unknown_date_count": date_metadata.get("unknown_date_count"),
+                "unread_candidate_count": date_metadata.get("unread_candidate_count"),
+                "unread_known_date_candidate_count": date_metadata.get(
+                    "unread_known_date_candidate_count"
+                ),
+            }
+        joint_candidate_count = (
+            date_metadata.get("matching_occurrence_count", 0)
+            if date_priority
+            else len(evidence)
+        )
+        recovery = _build_source_recovery_summary(
+            query_text=query_text,
+            source_family_scope=request_contract["source_family_scope"],
+            required_terms=required_terms,
+            initial_status="pending_review",
+            initial_warnings=(
+                ("retrieval_projection_unavailable",) if date_priority else ()
             ),
-            "source_families": list(request_contract["source_family_scope"]),
-            "source_family_scope": list(request_contract["source_family_scope"]),
-            "query_hash": sha256_json(query_text),
-            "initial_status": "pending_review",
-            "status": double_check.status or "pending_review",
-            "attempted": double_check.scan is not None,
-            "scan": (
-                {
-                    "scanned_observation_count": double_check.scan.scanned_observation_count,
-                    "complete": double_check.scan.complete,
-                    "stop_reason": double_check.scan.stop_reason,
-                } if double_check.scan is not None else None
-            ),
-            "source_authority_fingerprint": revision.safe_binding["source_authority_fingerprint"],
-            "source_session_binding_fingerprint": revision.safe_binding[
+            initial_evidence_count=0,
+            result_status=double_check.status or "pending_review",
+            double_check=double_check,
+            evidence=evidence,
+            required_term_observation_count=required_term_observation_count,
+            required_term_hit_counts=required_term_hit_counts,
+            joint_candidate_count=joint_candidate_count,
+            source_authority_fingerprint=revision.safe_binding["source_authority_fingerprint"],
+            source_session_binding_fingerprint=revision.safe_binding[
                 "source_session_binding_fingerprint"
             ],
-            # Date-priority evidence is newest first; compaction groups follow
-            # citation order, so a hash sort could drop the newest group first.
-            "citation_hashes": (list(dict.fromkeys(item["citation_hash"] for item in evidence))
-                                if date_priority else sorted(item["citation_hash"] for item in evidence)),
-            "lineage_fingerprints": sorted(
-                item["occurrence_lineage_fingerprint"] for item in evidence
-            ),
-            "evidence": evidence,
-            "warnings": list(double_check.warnings),
-        }
+            warnings=double_check.warnings,
+            recheck_variant=None,
+            date_priority_phase=date_priority_phase,
+            preserve_citation_order=bool(date_priority),
+        )
         if full_read_metadata is not None:
             recovery.update(full_read_metadata)
         elif full_read_skip is not None:
@@ -3839,7 +4077,9 @@ def _build_source_start_semantic_handler(
         if date_priority:
             recovery["mode"] = "mail_date_priority"
             recovery["mail_date_priority"] = dict(date_metadata)
+        recovery.pop("recovery_fingerprint", None)
         recovery["recovery_fingerprint"] = sha256_json(recovery)
+        replan_required = recovery["replan_required"]
         missing_field_hashes = [sha256_json(field) for field in missing]
         coverage_payload = {
             "request_contract_fingerprint": sha256_json(request_contract),
@@ -3852,8 +4092,11 @@ def _build_source_start_semantic_handler(
         }
         coverage_payload["coverage_fingerprint"] = sha256_json(coverage_payload)
         query_agent = {
-            "status": "pending_review",
-            "stop_reason": "retrieval_projection_unavailable",
+            "status": recovery["status"],
+            "stop_reason": (
+                "source_recovery_incomplete"
+                if replan_required else "retrieval_projection_unavailable"
+            ),
             "original_query_hash": request_contract["original_query_hash"],
             "request_contract": request_contract,
             "subqueries": [{
@@ -3901,7 +4144,7 @@ def _build_source_start_semantic_handler(
         query_agent["context_bundle"]["bundle_fingerprint"] = sha256_json(
             query_agent["context_bundle"]
         )
-        status = double_check.status or ("ok" if evidence else "pending_review")
+        status = recovery["status"] or ("ok" if evidence else "pending_review")
         # Normal return is required: reader/drain errors never reach this path.
         presentation_deferred = (
             tuple(presentation_cache)
@@ -5489,57 +5732,6 @@ def build_issue56_production_semantic_retrieval_handler(
                     "identity_only_recheck", "topic_terms_ranked_only", "incomplete",
                 ))
                 result_status = "partial" if evidence else "pending_review"
-            recovery_scan = double_check.scan
-            replan_required = bool(
-                recovery_scan is not None
-                and recovery_scan.complete is False
-                and not evidence
-                and initial_evidence_count == 0
-                and "retrieval_projection_unavailable" in result_warnings
-                and recheck_variant is None
-                and result.status not in {"error", "failed", "permission_denied"}
-            )
-            replan_reason = (
-                "projection_unavailable_scan_incomplete_no_evidence"
-                if replan_required else None
-            )
-            if replan_required:
-                result_status = "replan_required"
-            scan_complete = (
-                recovery_scan.complete if recovery_scan is not None else False
-            )
-            scan_stop_reason = (
-                recovery_scan.stop_reason if recovery_scan is not None else None
-            )
-            term_hit_status = (
-                "complete" if scan_complete
-                else "partial" if required_term_observation_count
-                else "unavailable"
-            )
-            safe_required_term_hit_counts = [
-                {"term": term, "count": required_term_hit_counts[term],
-                 "status": term_hit_status}
-                for term in required_terms
-            ]
-            if recovery_scan is None:
-                joint_count_state = "unknown"
-            elif not scan_complete:
-                joint_count_state = "unknown"
-            elif joint_candidate_count == 0:
-                joint_count_state = "complete_zero"
-            else:
-                joint_count_state = "complete_positive"
-            lookup_phase = {
-                "attempted": recovery_scan is not None,
-                "candidate_count": joint_candidate_count if recovery_scan is not None else "unavailable",
-                "status": (
-                    "unavailable" if recovery_scan is None
-                    else "ok" if joint_candidate_count
-                    else "not_found" if scan_complete
-                    else "incomplete"
-                ),
-                "stop_reason": scan_stop_reason,
-            }
             if date_priority_binding is None:
                 date_priority_phase = {
                     "attempted": False, "candidate_count": "unavailable",
@@ -5554,82 +5746,37 @@ def build_issue56_production_semantic_retrieval_handler(
                     "attempted": False, "candidate_count": "unavailable",
                     "status": "unavailable", "stop_reason": "graph_view_path_not_bound",
                 }
-            material_recheck_phase = {
-                "attempted": recheck_ran,
-                "candidate_count": joint_candidate_count if recheck_ran else "unavailable",
-                "status": result_status if recheck_ran else "unavailable",
-                "stop_reason": scan_stop_reason if recheck_ran else "no_recheck_plan",
-            }
-            source_recovery = {
-                "artifact_id": "formowl_bounded_source_recovery_v1",
-                "source_family": (
-                    recovery_source_families[0]
-                    if len(recovery_source_families) == 1
-                    else "source_neutral"
-                ),
-                "source_families": recovery_source_families,
-                "source_family_scope": list(requested_source_families),
-                "query_hash": sha256_json(arguments["query_text"]),
-                "initial_status": result.status,
-                "status": result_status,
-                "attempted": double_check.scan is not None,
-                "required_term_count": len(required_terms),
-                "required_term_hit_counts": safe_required_term_hit_counts,
-                "joint_candidate_count": joint_candidate_count,
-                "joint_candidate_count_complete": scan_complete,
-                "joint_candidate_count_state": joint_count_state,
-                "scan_complete": scan_complete,
-                "stop_reason": scan_stop_reason,
-                "lookup": lookup_phase,
-                "date_priority": date_priority_phase,
-                "material_recheck": material_recheck_phase,
-                "replan_required": replan_required,
-                "replan_reason": replan_reason,
-                "scan": (
-                    {
-                        "scanned_observation_count": (
-                            double_check.scan.scanned_observation_count
-                        ),
-                        "complete": double_check.scan.complete,
-                        "stop_reason": double_check.scan.stop_reason,
-                    }
-                    if double_check.scan is not None
-                    else None
-                ),
-                "source_authority_fingerprint": (
-                    session.source_authority_fingerprint
-                ),
-                "source_session_binding_fingerprint": (
-                    session.source_session_binding_fingerprint
-                ),
-                "source_scope_fingerprints": sorted(
-                    {
-                        item["source_scope_fingerprint"]
-                        for item in recovered_evidence
-                    }
-                ),
-                "citation_hashes": sorted(
-                    item["citation_hash"] for item in recovered_evidence
-                ),
-                "lineage_fingerprints": sorted(
-                    item["occurrence_lineage_fingerprint"]
-                    for item in recovered_evidence
-                ),
-                "evidence": recovered_evidence,
-                "warnings": sorted(set(recheck_warnings)),
-                "recheck_variant": recheck_variant if recheck_ran else None,
-                "hard_term_count": len(recheck_hard_terms) if recheck_ran else 0,
-                "soft_term_count": len(recheck_soft_terms) if recheck_ran else 0,
-                "initial_required_terms_fingerprint": (
+            source_recovery = _build_source_recovery_summary(
+                query_text=arguments["query_text"],
+                source_family_scope=recovery_source_families,
+                requested_source_family_scope=list(requested_source_families),
+                material_recheck_attempted=recheck_ran,
+                required_terms=required_terms,
+                initial_status=result.status,
+                initial_warnings=result_warnings,
+                initial_evidence_count=initial_evidence_count,
+                result_status=result_status,
+                double_check=double_check,
+                evidence=recovered_evidence,
+                required_term_observation_count=required_term_observation_count,
+                required_term_hit_counts=required_term_hit_counts,
+                joint_candidate_count=joint_candidate_count,
+                source_authority_fingerprint=session.source_authority_fingerprint,
+                source_session_binding_fingerprint=session.source_session_binding_fingerprint,
+                warnings=recheck_warnings,
+                recheck_variant=recheck_variant if recheck_ran else None,
+                hard_term_count=len(recheck_hard_terms) if recheck_ran else 0,
+                soft_term_count=len(recheck_soft_terms) if recheck_ran else 0,
+                initial_required_terms_fingerprint=(
                     initial_required_terms_fingerprint if recheck_ran else None
                 ),
-                "recheck_required_terms_fingerprint": (
+                recheck_required_terms_fingerprint=(
                     recheck_required_terms_fingerprint if recheck_ran else None
                 ),
-            }
-            source_recovery["recovery_fingerprint"] = sha256_json(
-                source_recovery
+                date_priority_phase=date_priority_phase,
             )
+            replan_required = source_recovery["replan_required"]
+            result_status = source_recovery["status"]
             context_bundle = {
                 **query_agent_payload["context_bundle"],
                 "citation_hashes": sorted(

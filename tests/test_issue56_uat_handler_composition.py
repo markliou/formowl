@@ -552,6 +552,107 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
                     )
                     self.assertEqual(payload["status"], "replan_required")
 
+    def test_source_start_recovery_replan_marker_uses_shared_summary(self) -> None:
+        """Source-start misses expose the same guarded replan marker."""
+        root = _paths.fresh_test_dir("source-start-replan-marker")
+        asset, documents, authority = _completed_registered_text_revision_fixture(
+            root, owner_user_id=loader.APPROVER_ACTOR,
+        )
+        heading = next(item for item in documents if item.observation_type == "heading")
+        _, _, records, selector, _, _ = self._revision_owned_mail_fixture(
+            source_text=(
+                "Synthetic clienta review background. "
+                "No甲社專案 result is asserted by this fixture."
+            ),
+            subject="Synthetic source-start replan fixture",
+        )
+        support = records.observation
+        runtime = _contract_only_runtime()
+        seal = sha256_json({"asset_id": asset.asset_id, "job": authority.job_fingerprint})
+        with (
+            patch.object(issue56_sealed_source, "load_issue56_target_runtime_components",
+                         return_value=runtime),
+            patch.object(hybrid, "_load_pinned_issue56_runtime_components", return_value=runtime),
+        ):
+            revision = build_issue56_ingestion_revision(
+                observations=(support, *documents), bundles=(),
+                source_binding={
+                    "source_authority_fingerprint": seal,
+                    "extraction_coverage": {"source_completeness_certified": False},
+                },
+                requester_user_id=loader.APPROVER_ACTOR, workspace_id=loader.WORKSPACE_ID,
+                source_authority_fingerprint=seal,
+                retrieval_observation_ids=(heading.observation_id,),
+            )
+
+        query = "Find clienta 甲社專案 latest status"
+        request_contract = {
+            "original_query_hash": "sha256:" + hashlib.sha256(query.encode()).hexdigest(),
+            "query_class": "evidence_lookup",
+            "source_family_scope": ["mail"],
+            "requested_fields": ["status"],
+            "maximum_claim_strength": "cited_evidence",
+        }
+        arguments = {
+            "query_text": query,
+            "required_terms": ["clienta", "甲社專案"],
+            "requester_user_id": loader.APPROVER_ACTOR,
+            "workspace_id": loader.WORKSPACE_ID,
+            "session_id": "source-start-replan-marker",
+            "request_contract": request_contract,
+        }
+
+        class Sources:
+            authorized_mail_import_session_ids = (selector,)
+
+        current = replace(
+            revision,
+            session=None,
+            source_records=Sources(),
+            authorized_source=revision.session.authorized_source,
+            safe_binding={
+                **dict(revision.safe_binding),
+                "source_revision_sha256": "sha256:" + ("a" * 64),
+                "snapshot_sha256": "sha256:" + ("b" * 64),
+            },
+            job_authorities=(authority,),
+        )
+        handler = loader.build_issue56_production_semantic_retrieval_handler(
+            ingestion_revision=current,
+        )
+        scan = RevisionOwnedMailSourceScan((), 0, False, "indexed_token_scope")
+        with patch.object(
+            loader,
+            "source_evidence_double_check",
+            return_value=SimpleNamespace(
+                evidence=(), warnings=("retrieval_projection_unavailable",),
+                status=None, scan=scan,
+            ),
+        ):
+            public_arguments = {
+                key: value for key, value in arguments.items()
+                if key not in {"requester_user_id", "workspace_id", "session_id"}
+            }
+            date_binding = issue56_sealed_source.bind_mail_date_priority(
+                user_text=query,
+                arguments=public_arguments,
+                tool_name="query_effective_graph_view",
+            )
+            self.assertIsNotNone(date_binding)
+            with issue56_sealed_source.mail_date_priority_scope(date_binding):
+                payload = handler(arguments)
+
+        recovery = payload["query_agent"]["context_bundle"]["source_recovery"]
+        self.assertEqual(recovery["required_term_count"], 2)
+        self.assertEqual(recovery["joint_candidate_count_state"], "unknown")
+        self.assertEqual(recovery["scan"]["stop_reason"], "indexed_token_scope")
+        self.assertTrue(recovery["replan_required"])
+        self.assertEqual(
+            recovery["replan_reason"],
+            "projection_unavailable_scan_incomplete_no_evidence",
+        )
+        self.assertEqual(payload["status"], "replan_required")
+
     async def test_standalone_text_revision_recovers_via_connected_mcp_with_native_citation(
         self,
     ) -> None:
