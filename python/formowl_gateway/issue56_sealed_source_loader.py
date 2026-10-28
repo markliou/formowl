@@ -5031,6 +5031,8 @@ def build_issue56_production_semantic_retrieval_handler(
                 "scan_authorized_observations",
                 None,
             )
+            from formowl_mail.issue56_sealed_source import _MAIL_DATE_PRIORITY
+            date_priority_binding = _MAIL_DATE_PRIORITY.get()
             authorized_source = session.authorized_source
             authorized_scope_ids = tuple(authorized_source.source_scope_ids)
             tokenizer_profile = session.index._runtime_components.tokenizer_profile
@@ -5065,6 +5067,32 @@ def build_issue56_production_semantic_retrieval_handler(
                     raise ContractValidationError(
                         "production evidence required terms are invalid"
                     )
+            required_term_observation_count = 0
+            required_term_hit_counts = {term: 0 for term in required_terms}
+            joint_candidate_count = 0
+
+            def observe_required_terms(observation: Observation) -> None:
+                """Count only terms evaluated against an authorized observation."""
+                nonlocal required_term_observation_count
+                required_term_observation_count += 1
+                values = [observation.text or observation.caption or ""]
+                if observation.modality == "mail":
+                    payload = to_plain(observation.payload or {})
+                    if isinstance(payload, Mapping):
+                        values.extend(
+                            value for value in (
+                                payload.get("subject"), payload.get("normalized_subject"),
+                                payload.get("sender"), payload.get("from"), payload.get("to"),
+                                payload.get("cc"), payload.get("header_name"),
+                                payload.get("header_value"), payload.get("body_excerpt"),
+                            ) if isinstance(value, str)
+                        )
+                searchable = unicodedata.normalize("NFKC", " ".join(
+                    value for value in values if isinstance(value, str) and value
+                )).casefold()
+                for term in required_terms:
+                    if term in searchable:
+                        required_term_hit_counts[term] += 1
             query_identity_tokens = tuple(
                 span.exact_token
                 for span in tokenizer_profile.analyze(arguments["query_text"]).protected_identifiers
@@ -5153,6 +5181,7 @@ def build_issue56_production_semantic_retrieval_handler(
                     raise ContractValidationError(
                         "production document source scope binding is invalid"
                     )
+                observe_required_terms(observation)
                 observation_hash = sha256_json(observation.to_dict())
                 # The sealed reader checked the reference hash, completed job,
                 # asset, permission and revision before invoking this callback.
@@ -5185,6 +5214,8 @@ def build_issue56_production_semantic_retrieval_handler(
                         source_tokens = set(source_analysis.tokens)
                     if not protected_query_tokens.issubset(source_tokens):
                         return None
+                nonlocal joint_candidate_count
+                joint_candidate_count += 1
                 projected = project_observation_evidence(
                     observation,
                     citation_hash=observation_hash,
@@ -5219,12 +5250,13 @@ def build_issue56_production_semantic_retrieval_handler(
                     raise ContractValidationError(
                         "production mail source scope binding is invalid"
                     )
+                observe_required_terms(observation)
                 parent_key = (source_scope_id, observation.asset_id, observation.extractor_run_id,
                               observation.location.get("message_occurrence_id"))
                 if observation.observation_type == "email_message":
                     recovery_mail_parents[parent_key] = observation
-                if placement is None and (
-                    _source_mail_observation_match(
+                if placement is None:
+                    matched_terms = _source_mail_observation_match(
                         observation,
                         query_terms=query_terms,
                         required_terms=active_required_terms or None,
@@ -5232,9 +5264,10 @@ def build_issue56_production_semantic_retrieval_handler(
                         tokenizer_profile=tokenizer_profile,
                         deadline_monotonic=deadline,
                     )
-                    is None
-                ):
-                    return None
+                    if matched_terms is None:
+                        return None
+                    nonlocal joint_candidate_count
+                    joint_candidate_count += 1
                 observation_hash = sha256_json(observation.to_dict())
                 lineage = source_occurrence_lineage_from_observation(
                     observation,
@@ -5456,6 +5489,77 @@ def build_issue56_production_semantic_retrieval_handler(
                     "identity_only_recheck", "topic_terms_ranked_only", "incomplete",
                 ))
                 result_status = "partial" if evidence else "pending_review"
+            recovery_scan = double_check.scan
+            replan_required = bool(
+                recovery_scan is not None
+                and recovery_scan.complete is False
+                and not evidence
+                and initial_evidence_count == 0
+                and "retrieval_projection_unavailable" in result_warnings
+                and recheck_variant is None
+                and result.status not in {"error", "failed", "permission_denied"}
+            )
+            replan_reason = (
+                "projection_unavailable_scan_incomplete_no_evidence"
+                if replan_required else None
+            )
+            if replan_required:
+                result_status = "replan_required"
+            scan_complete = (
+                recovery_scan.complete if recovery_scan is not None else False
+            )
+            scan_stop_reason = (
+                recovery_scan.stop_reason if recovery_scan is not None else None
+            )
+            term_hit_status = (
+                "complete" if scan_complete
+                else "partial" if required_term_observation_count
+                else "unavailable"
+            )
+            safe_required_term_hit_counts = [
+                {"term": term, "count": required_term_hit_counts[term],
+                 "status": term_hit_status}
+                for term in required_terms
+            ]
+            if recovery_scan is None:
+                joint_count_state = "unknown"
+            elif not scan_complete:
+                joint_count_state = "unknown"
+            elif joint_candidate_count == 0:
+                joint_count_state = "complete_zero"
+            else:
+                joint_count_state = "complete_positive"
+            lookup_phase = {
+                "attempted": recovery_scan is not None,
+                "candidate_count": joint_candidate_count if recovery_scan is not None else "unavailable",
+                "status": (
+                    "unavailable" if recovery_scan is None
+                    else "ok" if joint_candidate_count
+                    else "not_found" if scan_complete
+                    else "incomplete"
+                ),
+                "stop_reason": scan_stop_reason,
+            }
+            if date_priority_binding is None:
+                date_priority_phase = {
+                    "attempted": False, "candidate_count": "unavailable",
+                    "status": "unavailable", "stop_reason": "not_bound",
+                }
+            else:
+                # The indexed graph_view path does not invoke the native
+                # date-ordered mail reader.  Preserve this as an explicit
+                # unavailable phase instead of implying a zero-candidate date
+                # lookup occurred.
+                date_priority_phase = {
+                    "attempted": False, "candidate_count": "unavailable",
+                    "status": "unavailable", "stop_reason": "graph_view_path_not_bound",
+                }
+            material_recheck_phase = {
+                "attempted": recheck_ran,
+                "candidate_count": joint_candidate_count if recheck_ran else "unavailable",
+                "status": result_status if recheck_ran else "unavailable",
+                "stop_reason": scan_stop_reason if recheck_ran else "no_recheck_plan",
+            }
             source_recovery = {
                 "artifact_id": "formowl_bounded_source_recovery_v1",
                 "source_family": (
@@ -5469,6 +5573,18 @@ def build_issue56_production_semantic_retrieval_handler(
                 "initial_status": result.status,
                 "status": result_status,
                 "attempted": double_check.scan is not None,
+                "required_term_count": len(required_terms),
+                "required_term_hit_counts": safe_required_term_hit_counts,
+                "joint_candidate_count": joint_candidate_count,
+                "joint_candidate_count_complete": scan_complete,
+                "joint_candidate_count_state": joint_count_state,
+                "scan_complete": scan_complete,
+                "stop_reason": scan_stop_reason,
+                "lookup": lookup_phase,
+                "date_priority": date_priority_phase,
+                "material_recheck": material_recheck_phase,
+                "replan_required": replan_required,
+                "replan_reason": replan_reason,
                 "scan": (
                     {
                         "scanned_observation_count": (
@@ -5545,6 +5661,13 @@ def build_issue56_production_semantic_retrieval_handler(
                 )
             query_agent_payload = {
                 **query_agent_payload,
+                **(
+                    {
+                        "status": "replan_required",
+                        "stop_reason": "source_recovery_incomplete",
+                    }
+                    if replan_required else {}
+                ),
                 "warnings": list(
                     dict.fromkeys(
                         (*query_agent_warnings, *recheck_warnings)

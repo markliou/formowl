@@ -489,6 +489,86 @@ class RequeryProgressTests(unittest.TestCase):
         self.assertNotIn("synthetic-private-content", json.dumps(safe))
         self.assertNotIn("secret", json.dumps(safe))
 
+    def test_private_trace_exposes_safe_recovery_aggregates_and_replan_reason(self):
+        trace = {
+            "response_stage": "payload_validated", "browser_request_sha256": sha256_json("turn"),
+            "query_hash": sha256_json("query"), "mcp_call_index": 1, "citation_count": 0,
+            "request_discriminator": {
+                "tool_name": "query_effective_graph_view", "query_text_char_count": 12,
+                "required_term_count": 2,
+                "selector_kind": "none", "selector_present": False, "selector_count": 0,
+            },
+        }
+        recovery = {
+            "artifact_id": "formowl_bounded_source_recovery_v1",
+            "initial_status": "pending_review", "status": "replan_required", "attempted": True,
+            "required_term_count": 2,
+            "required_term_hit_counts": [
+                {"term": "clienta", "count": 0, "status": "partial"},
+                {"term": "甲社專案", "count": 0, "status": "partial"},
+            ],
+            "joint_candidate_count": 0, "joint_candidate_count_complete": False,
+            "scan_complete": False, "stop_reason": "indexed_token_scope",
+            "lookup": {"attempted": True, "candidate_count": 0, "stop_reason": "indexed_token_scope"},
+            "date_priority": {"attempted": False, "status": "unavailable"},
+            "material_recheck": {"attempted": False, "status": "unavailable"},
+            "replan_required": True,
+            "replan_reason": "projection_unavailable_scan_incomplete_no_evidence",
+            "source_families": ["mail"],
+            "source_family_scope": ["mail"],
+            "warnings": ["used", "incomplete"],
+            "scan": {"scanned_observation_count": 0, "complete": False,
+                     "stop_reason": "indexed_token_scope"},
+        }
+        response = {
+            "status": "replan_required",
+            "query_agent": {"status": "replan_required", "stop_reason": "source_recovery_incomplete",
+                            "context_bundle": {"source_recovery": recovery}},
+        }
+        safe = _private_graph_recheck_trace(trace, response)
+        self.assertEqual(safe["recovery_status"], "replan_required")
+        self.assertEqual(safe["required_term_count"], 2)
+        self.assertEqual(safe["joint_candidate_count"], 0)
+        self.assertFalse(safe["joint_candidate_count_complete"])
+        self.assertEqual(safe["scan_stop_reason"], "indexed_token_scope")
+        self.assertEqual(safe["replan_reason"], "projection_unavailable_scan_incomplete_no_evidence")
+        self.assertEqual(safe["date_priority"], {"attempted": False, "status": "unavailable"})
+        self.assertEqual(safe["material_recheck"], {"attempted": False, "status": "unavailable"})
+        self.assertNotIn("source text", json.dumps(safe))
+
+    def test_compaction_preserves_replan_signal_and_safe_counts(self):
+        result = {
+            "status": "replan_required",
+            "query_agent": {
+                "status": "replan_required", "stop_reason": "source_recovery_incomplete",
+                "context_bundle": {
+                    "source_recovery": {
+                        "source_family": "mail", "source_families": ["mail"],
+                        "source_family_scope": ["mail"], "initial_status": "pending_review",
+                        "status": "replan_required", "attempted": True,
+                        "required_term_count": 2,
+                        "required_term_hit_counts": [
+                            {"term": "clienta", "count": 0, "status": "partial"},
+                        ],
+                        "joint_candidate_count": 0, "joint_candidate_count_complete": False,
+                        "scan_complete": False, "stop_reason": "indexed_token_scope",
+                        "lookup": {"attempted": True, "candidate_count": 0,
+                                   "stop_reason": "indexed_token_scope"},
+                        "replan_required": True,
+                        "replan_reason": "projection_unavailable_scan_incomplete_no_evidence",
+                        "warnings": ["used", "incomplete"],
+                    }
+                },
+            },
+            "citations": [], "evidence": [],
+        }
+        compact = orchestrator.compact_evidence_for_model(result)
+        recovery = compact["query_agent"]["context_bundle"]["source_recovery"]
+        self.assertTrue(recovery["replan_required"])
+        self.assertEqual(recovery["replan_reason"], "projection_unavailable_scan_incomplete_no_evidence")
+        self.assertEqual(recovery["joint_candidate_count"], 0)
+        self.assertEqual(recovery["required_term_hit_counts"][0]["status"], "partial")
+
     def test_ordinary_chat_still_offers_no_tools(self):
         provider = orchestrator.CodexResponsesConversationModel(
             base_url="https://provider.example.test/v1", api_key="synthetic-provider-key",

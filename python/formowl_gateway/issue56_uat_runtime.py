@@ -2234,15 +2234,15 @@ def _safe_mcp_request_discriminator(value: Any) -> dict[str, Any] | None:
             )
         )
         or (
-            (required_term_count is None) != (required_terms_fingerprint is None)
-        )
-        or (
             required_term_count is not None
             and (
                 type(required_term_count) is not int
                 or not 1 <= required_term_count <= 8
-                or not _is_browser_request_fingerprint(required_terms_fingerprint)
             )
+        )
+        or (
+            required_terms_fingerprint is not None
+            and not _is_browser_request_fingerprint(required_terms_fingerprint)
         )
     ):
         return None
@@ -3644,6 +3644,90 @@ def _private_graph_recheck_trace(
         safe["status"] = status
     if not isinstance(recovery, Mapping):
         return safe
+
+    # Source recovery may expose only bounded, source-neutral aggregates.  Keep
+    # the allowlists here deliberately closed: this trace is diagnostic and
+    # must never carry snippets, source identifiers, or provider internals.
+    safe_phase_statuses = {
+        "ok", "not_found", "no_answer", "partial", "incomplete",
+        "pending_review", "replan_required", "unavailable", "error",
+    }
+    safe_stop_reasons = {
+        "deadline", "observation_limit", "callback", "context_limit",
+        "source_reference_unavailable", "indexed_shortlist_miss",
+        "source_table_shortlist", "indexed_shortlist", "indexed_token_scope",
+        "indexed_query_terms_unavailable", "mail_date_policy_or_tokens_unavailable",
+        "source_parent_binding_unresolved", "no_recheck_plan", "not_bound",
+        "graph_view_path_not_bound", "source_recovery_incomplete", None,
+    }
+
+    def safe_phase(value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, Mapping):
+            return None
+        phase: dict[str, Any] = {}
+        attempted = value.get("attempted")
+        if type(attempted) is bool:
+            phase["attempted"] = attempted
+        status = value.get("status")
+        if isinstance(status, str) and status in safe_phase_statuses:
+            phase["status"] = status
+        candidate_count = value.get("candidate_count")
+        if type(candidate_count) is int and 0 <= candidate_count <= 8192:
+            phase["candidate_count"] = candidate_count
+        elif candidate_count == "unavailable":
+            phase["candidate_count"] = "unavailable"
+        reason = value.get("stop_reason")
+        if reason is not None and reason in safe_stop_reasons:
+            phase["stop_reason"] = reason
+        return phase or None
+
+    aggregate_count = recovery.get("required_term_count")
+    if type(aggregate_count) is int and 0 <= aggregate_count <= 8:
+        safe["required_term_count"] = aggregate_count
+    hit_counts = recovery.get("required_term_hit_counts")
+    if isinstance(hit_counts, (list, tuple)) and len(hit_counts) <= 8:
+        safe_hits: list[dict[str, Any]] = []
+        valid_hits = True
+        for item in hit_counts:
+            if not isinstance(item, Mapping):
+                valid_hits = False
+                break
+            term = item.get("term")
+            count = item.get("count")
+            item_status = item.get("status")
+            if (
+                not isinstance(term, str) or not term.strip() or len(term) > 80
+                or type(count) is not int or not 0 <= count <= 8192
+                or item_status not in {"complete", "partial", "unavailable"}
+            ):
+                valid_hits = False
+                break
+            safe_hits.append({"term": unicodedata.normalize("NFKC", term)[:80],
+                              "count": count, "status": item_status})
+        if valid_hits:
+            safe["required_term_hit_counts"] = safe_hits
+    joint_count = recovery.get("joint_candidate_count")
+    if type(joint_count) is int and 0 <= joint_count <= 8192:
+        safe["joint_candidate_count"] = joint_count
+    joint_complete = recovery.get("joint_candidate_count_complete")
+    if type(joint_complete) is bool:
+        safe["joint_candidate_count_complete"] = joint_complete
+    joint_state = recovery.get("joint_candidate_count_state")
+    if joint_state in {"unknown", "complete_zero", "complete_positive"}:
+        safe["joint_candidate_count_state"] = joint_state
+    replan_required = recovery.get("replan_required")
+    if type(replan_required) is bool:
+        safe["replan_required"] = replan_required
+    replan_reason = recovery.get("replan_reason")
+    if replan_reason in {
+        "projection_unavailable_scan_incomplete_no_evidence",
+        "incomplete_coverage_no_evidence",
+    }:
+        safe["replan_reason"] = replan_reason
+    for key in ("lookup", "date_priority", "material_recheck"):
+        phase = safe_phase(recovery.get(key))
+        if phase is not None:
+            safe[key] = phase
     for key in ("initial_status", "status"):
         value = recovery.get(key)
         if isinstance(value, str) and value in safe_statuses:
@@ -3699,11 +3783,7 @@ def _private_graph_recheck_trace(
             safe["scanned_observation_count"] = count
         if type(complete) is bool:
             safe["scan_complete"] = complete
-        if reason is None or (
-            isinstance(reason, str)
-            and reason in {"deadline", "observation_limit", "callback", "source_reference_unavailable",
-                           "indexed_shortlist_miss", "source_table_shortlist"}
-        ):
+        if reason is not None and reason in safe_stop_reasons:
             safe["scan_stop_reason"] = reason
     for key in ("recovery_fingerprint", "source_authority_fingerprint", "source_session_binding_fingerprint"):
         if _is_browser_request_fingerprint(recovery.get(key)):

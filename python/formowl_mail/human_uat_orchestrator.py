@@ -65,7 +65,9 @@ _DISPLAY_FORMATS = frozenset({"narrative", "table", "list", "timeline"})
 _TOOL_NAME = "query_effective_graph_view"
 _MAIL_EVIDENCE_TOOL_NAME = "query_mail_evidence"
 _EVIDENCE_TOOL_NAMES = frozenset({_TOOL_NAME, _MAIL_EVIDENCE_TOOL_NAME})
-_MAIL_SOURCE_FALLBACK_TERMINAL_STATUSES = frozenset({"not_found", "pending_review"})
+_MAIL_SOURCE_FALLBACK_TERMINAL_STATUSES = frozenset({
+    "not_found", "pending_review", "replan_required",
+})
 _MAIL_SOURCE_FALLBACK_USED_WARNING = "mail_evidence_source_fallback_used"
 _PUBLIC_TERM_TOOL_NAME = "clarify_public_terminology"
 _MAX_HISTORY_MESSAGES = 16
@@ -10857,8 +10859,15 @@ def _source_fallback_exhausted(
     bound_contract = agent.get("request_contract")
     context = agent.get("context_bundle")
     recovery = context.get("source_recovery") if isinstance(context, Mapping) else None
+    # An outer planner replan is not a source-recovery exhaustion signal.  Only
+    # the loader's explicit bounded marker may arm the one same-scope split.
+    if result.get("status") == "replan_required" and (
+        not isinstance(recovery, Mapping) or recovery.get("replan_required") is not True
+    ):
+        return False
     eligible_miss_statuses = {
         "ok", "not_found", "no_answer", "incomplete", "partial", "pending_review",
+        "replan_required",
     }
     if (
         not isinstance(bound_contract, Mapping)
@@ -10901,12 +10910,18 @@ def _source_fallback_exhausted(
         or not isinstance(warnings, (list, tuple)) or "used" not in warnings
     ):
         return False
+    incomplete_stop_reasons = {
+        "deadline", "observation_limit", "callback", "source_reference_unavailable",
+        "indexed_shortlist_miss", "source_table_shortlist",
+    }
+    if result.get("status") == "replan_required" and recovery.get("replan_required") is True:
+        incomplete_stop_reasons.update({
+            "indexed_token_scope", "indexed_query_terms_unavailable",
+            "mail_date_policy_or_tokens_unavailable", "context_limit",
+        })
     return (
         not scan["complete"] and "incomplete" in warnings
-        and scan.get("stop_reason") in {
-            "deadline", "observation_limit", "callback", "source_reference_unavailable",
-            "indexed_shortlist_miss", "source_table_shortlist",
-        }
+        and scan.get("stop_reason") in incomplete_stop_reasons
     ) or (
         scan["complete"] and scan.get("stop_reason") is None
         and (
@@ -11131,6 +11146,12 @@ def compact_evidence_for_model(
                             name: recovery[name] for name in (
                                 "source_family", "source_families", "source_family_scope",
                                 "initial_status", "status", "attempted", "scan", "warnings",
+                                "required_term_count", "required_term_hit_counts",
+                                "joint_candidate_count", "joint_candidate_count_complete",
+                                "joint_candidate_count_state",
+                                "scan_complete", "stop_reason", "lookup", "date_priority",
+                                "material_recheck", "replan_required", "replan_reason",
+                                "recheck_variant",
                             ) if name in recovery
                         }
                 truncated = truncated or summary != value
