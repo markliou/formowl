@@ -406,6 +406,152 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
             handler({**arguments, "requester_user_id": "another_actor"})
         self.assertEqual(calls, [])
 
+    def test_graph_source_recovery_replan_marker_requires_incomplete_projection_scan(
+        self,
+    ) -> None:
+        """Loader emits one replan marker only for an incomplete empty scan."""
+        root = _paths.fresh_test_dir("graph-source-replan-marker")
+        asset, documents, authority = _completed_registered_text_revision_fixture(
+            root, owner_user_id=loader.APPROVER_ACTOR,
+        )
+        heading = next(item for item in documents if item.observation_type == "heading")
+        _, _, records, selector, _, _ = self._revision_owned_mail_fixture(
+            source_text=(
+                "Synthetic clienta review background. "
+                "No甲社專案 result is asserted by this fixture."
+            ),
+            subject="Synthetic replan fixture",
+        )
+        support = records.observation
+        runtime = _contract_only_runtime()
+        seal = sha256_json({"asset_id": asset.asset_id, "job": authority.job_fingerprint})
+        with (
+            patch.object(issue56_sealed_source, "load_issue56_target_runtime_components",
+                         return_value=runtime),
+            patch.object(hybrid, "_load_pinned_issue56_runtime_components", return_value=runtime),
+        ):
+            revision = build_issue56_ingestion_revision(
+                observations=(support, *documents), bundles=(),
+                source_binding={
+                    "source_authority_fingerprint": seal,
+                    "extraction_coverage": {"source_completeness_certified": False},
+                },
+                requester_user_id=loader.APPROVER_ACTOR, workspace_id=loader.WORKSPACE_ID,
+                source_authority_fingerprint=seal,
+                retrieval_observation_ids=(heading.observation_id,),
+            )
+
+        query = "Find synthetic clienta status"
+        request_contract = {
+            "original_query_hash": sha256_json(query),
+            "query_class": "evidence_lookup",
+            "source_family_scope": ["mail"],
+            "requested_fields": ["status"],
+            "maximum_claim_strength": "cited_evidence",
+        }
+        arguments = {
+            "query_text": query,
+            "required_terms": ["clienta", "甲社專案"],
+            "requester_user_id": loader.APPROVER_ACTOR,
+            "workspace_id": loader.WORKSPACE_ID,
+            "session_id": "graph-source-replan-marker",
+            "request_contract": request_contract,
+        }
+        plan_fingerprint = sha256_json({"plan": "synthetic-replan"})
+
+        class Sources:
+            authorized_mail_import_session_ids = (selector,)
+
+            def __init__(self, complete: bool) -> None:
+                self.complete = complete
+
+            def scan_authorized_observations(self, **kwargs):
+                return RevisionOwnedMailSourceScan(
+                    (),
+                    kwargs["max_observations"] if self.complete else 0,
+                    self.complete,
+                    None if self.complete else "observation_limit",
+                )
+
+        def execute_result(*, complete: bool):
+            result = SimpleNamespace(
+                status="pending_review", query_class="evidence_lookup",
+                claim_strength="cited_evidence", answer_citation_hashes=(),
+                exact_result=None, query_hash=sha256_json(query),
+                plan_fingerprint=plan_fingerprint,
+                result_fingerprint=sha256_json({"result": complete}),
+                index_fingerprint=None, materialized_candidate_count=0,
+                graph_path_count=0, scores=(), graph_paths=(), warnings=(
+                    "retrieval_projection_unavailable",
+                ),
+            )
+            trace = {
+                "status": "pending_review",
+                "stop_reason": "retrieval_projection_unavailable",
+                "original_query_hash": request_contract["original_query_hash"],
+                "request_contract": {
+                    "request_contract_fingerprint": sha256_json(request_contract),
+                    "query_class": request_contract["query_class"],
+                    "source_family_scope": request_contract["source_family_scope"],
+                },
+                "warnings": ["retrieval_projection_unavailable"],
+                "subqueries": [{
+                    "status": "pending_review",
+                    "validation_status": "validated_existing_scope_schema_permission",
+                    "query_hash": result.query_hash,
+                    "plan_fingerprint": plan_fingerprint,
+                    "request_contract_fingerprint": sha256_json(request_contract),
+                }],
+                "context_bundle": {
+                    "citation_hashes": [], "lineage_fingerprints": [],
+                    "missing_field_hashes": [sha256_json("status")],
+                    "successful_subqueries": [],
+                },
+            }
+            return result, (result,), trace
+
+        for complete in (False, True):
+            with self.subTest(scan_complete=complete):
+                current = replace(
+                    revision, source_records=Sources(complete),
+                    job_authorities=(authority,),
+                )
+                handler = loader.build_issue56_production_semantic_retrieval_handler(
+                    ingestion_revision=current,
+                )
+                with (
+                    patch.object(
+                        loader, "execute_bounded_adaptive_query",
+                        return_value=execute_result(complete=complete),
+                    ),
+                    patch.object(
+                        loader,
+                        "render_governed_evidence_answer",
+                        return_value=SimpleNamespace(
+                            status="pending_review",
+                            answer_text="",
+                            answer_hash=sha256_json("synthetic-answer"),
+                            citation_hashes=(),
+                        ),
+                    ),
+                ):
+                    payload = handler(arguments)
+                recovery = payload["query_agent"]["context_bundle"]["source_recovery"]
+                self.assertEqual(recovery["scan"]["complete"], complete)
+                self.assertEqual(
+                    recovery["replan_required"],
+                    not complete,
+                )
+                if complete:
+                    self.assertIsNone(recovery["replan_reason"])
+                    self.assertEqual(recovery["joint_candidate_count_state"], "complete_zero")
+                else:
+                    self.assertEqual(
+                        recovery["replan_reason"],
+                        "projection_unavailable_scan_incomplete_no_evidence",
+                    )
+                    self.assertEqual(payload["status"], "replan_required")
+
     async def test_standalone_text_revision_recovers_via_connected_mcp_with_native_citation(
         self,
     ) -> None:
