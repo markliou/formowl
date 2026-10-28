@@ -3910,6 +3910,21 @@ def _emit_private_uat_failure_trace(
         "exception_owner": _safe_exception_owner_from_exception(exception),
         "rejected_fields": rejected_fields,
     }
+    provider_diagnostic = getattr(exception, "provider_diagnostic", None)
+    if isinstance(provider_diagnostic, Mapping):
+        reason_code = provider_diagnostic.get("reason_code")
+        if reason_code in {
+            "turn_not_ready",
+            "turn_mismatch",
+            "duplicate_call",
+            "tool_handler_failure",
+            "invalid_tool_result",
+        }:
+            payload["reason_code"] = reason_code
+            exception_class = provider_diagnostic.get("exception_class")
+            if (isinstance(exception_class, str) and 0 < len(exception_class) <= 64
+                    and all(char.isalnum() or char == "_" for char in exception_class)):
+                payload["tool_exception_class"] = exception_class
     assert_no_public_raw_references(payload, "issue56_private_uat_failure_trace")
     print(json.dumps(payload, sort_keys=True), file=sys.stderr, flush=True)
 

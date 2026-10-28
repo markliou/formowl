@@ -42,7 +42,9 @@ from formowl_mail.human_uat_orchestrator import (
     CodexAppServerThread,
     CodexAppServerTurn,
     CodexDynamicToolInvocation,
+    _ActiveTurn,
     _CodexAppServerProviderFailure,
+    _CodexAppServerContractFailure,
     CodexResponsesConversationModel,
     UatConversationOutcome,
     UatEvidenceToolRequest,
@@ -1380,7 +1382,13 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                         self.assertEqual(outcome.citation_ids, ())
                         self.assertIn("尚未查詢來源", outcome.answer_text or "")
                 evidence_tool.assert_not_called()
-                self.assertEqual(transport.tool_outputs, [])
+                if case_name == "missing":
+                    self.assertEqual(len(transport.tool_outputs), 1)
+                    self.assertEqual(transport.tool_outputs[0]["data"]["status"], "rejected")
+                    self.assertEqual(transport.tool_outputs[0]["data"]["citations"], [])
+                    self.assertEqual(outcome.provider_diagnostic["reason_code"], "invalid_arguments")
+                else:
+                    self.assertEqual(transport.tool_outputs, [])
 
     def test_app_server_rebinds_selected_descriptor_when_conversation_tool_changes(
         self,
@@ -6130,17 +6138,20 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                 transport,
                 workspace_dir=workspace,
             )
-            with self.assertRaisesRegex(RuntimeError, "too many UAT tools"):
-                provider.respond(
-                    history=(),
-                    user_text="request",
-                    latest_evidence=None,
-                    safety_identifier="session-too-many-tools",
-                    evidence_tool=lambda request: {
-                        "status": "partial",
-                        "citations": ["citation"],
-                    },
-                )
+            outcome = provider.respond(
+                history=(),
+                user_text="request",
+                latest_evidence=None,
+                safety_identifier="session-too-many-tools",
+                evidence_tool=lambda request: {
+                    "status": "partial",
+                    "citations": ["citation"],
+                },
+            )
+            self.assertEqual(outcome.response_kind, "clarification")
+            self.assertEqual(outcome.provider_diagnostic["reason_code"], "budget_exhausted")
+            self.assertEqual(len(outcome.tool_results), 3)
+            self.assertEqual(transport.tool_outputs[3]["data"]["reason_code"], "budget_exhausted")
             self.assertEqual(transport.deleted_threads, ["thread-1"])
 
         for final_message in (
@@ -6411,6 +6422,162 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                         },
                     )
                 self.assertEqual(transport.deleted_threads, ["thread-1"])
+
+    def test_stdio_tool_handler_failure_has_safe_private_diagnostic(self) -> None:
+        transport = object.__new__(CodexAppServerStdioTransport)
+        transport._state_lock = threading.RLock()
+        transport._active_turns = {}
+        transport._timeout_seconds = 1.0
+        transport._send = mock.Mock()
+        context = _ActiveTurn(
+            thread_id="thread-diagnostic",
+            tool_handler=lambda _name, _arguments: (_ for _ in ()).throw(
+                ValueError("private handler detail")
+            ),
+        )
+        context.turn_id = "turn-diagnostic"
+        context.turn_ready.set()
+        transport._active_turns[context.thread_id] = context
+        transport._handle_server_request({
+            "id": "request-1",
+            "method": "item/tool/call",
+            "params": {
+                "threadId": context.thread_id,
+                "turnId": context.turn_id,
+                "callId": "call-1",
+                "tool": "query_effective_graph_view",
+                "arguments": {},
+            },
+        })
+        self.assertEqual(
+            context.tool_error_diagnostic,
+            {"reason_code": "tool_handler_failure", "exception_class": "ValueError"},
+        )
+        self.assertNotIn(
+            "private handler detail",
+            json.dumps(context.tool_error_diagnostic, ensure_ascii=False),
+        )
+        with self.assertRaises(_CodexAppServerContractFailure) as raised:
+            raise _CodexAppServerContractFailure(
+                context.tool_error or "failure",
+                provider_diagnostic=context.tool_error_diagnostic,
+            )
+        self.assertEqual(
+            raised.exception.provider_diagnostic,
+            {"reason_code": "tool_handler_failure", "exception_class": "ValueError"},
+        )
+        diagnostic_output = io.StringIO()
+        with redirect_stderr(diagnostic_output):
+            uat_runtime._emit_private_uat_failure_trace(
+                exception=raised.exception, phase="provider_model", result=None,
+            )
+        diagnostic = json.loads(diagnostic_output.getvalue())
+        self.assertEqual(diagnostic["reason_code"], "tool_handler_failure")
+        self.assertEqual(diagnostic["tool_exception_class"], "ValueError")
+        self.assertNotIn("private handler detail", diagnostic_output.getvalue())
+
+    def test_app_server_rejected_calls_consume_budget_and_stop_safely(self) -> None:
+        transport = _RecordingTransport(
+            calls=tuple({"query_text": ""} for _ in range(4)),
+            final_message=_decision(answer_text="must not become an answer"),
+        )
+        evidence_tool = mock.Mock()
+        with tempfile.TemporaryDirectory() as workspace:
+            provider = CodexAppServerConversationModel(transport, workspace_dir=workspace)
+            outcome = provider.respond(
+                history=(), user_text="Find clienta evidence", latest_evidence=None,
+                safety_identifier="rejected-call-budget", evidence_tool=evidence_tool,
+            )
+        evidence_tool.assert_not_called()
+        self.assertEqual(outcome.response_kind, "clarification")
+        self.assertEqual(outcome.tool_results, ())
+        self.assertEqual(outcome.provider_diagnostic["reason_code"], "budget_exhausted")
+        self.assertEqual(
+            [item["execution_control"]["remaining_mcp_calls"] for item in transport.tool_outputs],
+            [2, 1, 0, 0],
+        )
+        self.assertTrue(all(item["data"]["status"] == "rejected" for item in transport.tool_outputs))
+
+    def test_app_server_changed_terms_are_a_structured_rejection(self) -> None:
+        transport = _RecordingTransport(
+            calls=(
+                {
+                    "query_text": "clienta 甲社專案 progress",
+                    "required_terms": ["clienta", "甲社專案"],
+                },
+                {
+                    "query_text": "clienta progress",
+                    "required_terms": ["clienta"],
+                },
+            ),
+            final_message=_decision(response_kind="clarification", coverage_status="incomplete",
+                                    coverage_note="The rejected retry was not evidence."),
+        )
+        results = iter((
+            {
+                "status": "replan_required",
+                "query_agent": {"context_bundle": {"source_recovery": {
+                    "attempted": True,
+                    "status": "replan_required",
+                    "scan": {"complete": False, "scanned_observation_count": 0},
+                }}},
+                "citations": [],
+            },
+        ))
+        with tempfile.TemporaryDirectory() as workspace:
+            provider = CodexAppServerConversationModel(transport, workspace_dir=workspace)
+            outcome = provider.respond(
+                history=(),
+                user_text="Find clienta 甲社專案 progress evidence",
+                latest_evidence=None,
+                safety_identifier="session-changed-terms-red",
+                evidence_tool=lambda _request: next(results),
+            )
+        self.assertEqual(outcome.response_kind, "clarification")
+        self.assertEqual(len(outcome.tool_results), 1)
+        self.assertEqual(transport.tool_outputs[1]["data"]["status"], "rejected")
+        self.assertEqual(
+            transport.tool_outputs[1]["data"]["query_agent"]["external_replan"][
+                "validation_reason_code"
+            ],
+            "frozen_terms_changed",
+        )
+
+    def test_app_server_replan_arms_existing_split_refinement(self) -> None:
+        transport = _RecordingTransport(
+            calls=(
+                {
+                    "query_text": "clienta 甲社專案 progress",
+                    "required_terms": ["clienta", "甲社專案"],
+                },
+                {
+                    "query_text": "clienta 甲社 專案 progress",
+                    "required_terms": ["clienta", "甲社", "專案"],
+                },
+            ),
+            final_message=_decision(response_kind="clarification", coverage_status="incomplete",
+                                    coverage_note="The bounded source scan remains incomplete."),
+        )
+        requests = []
+
+        def evidence_tool(request):
+            requests.append(request)
+            return _exhausted_graph_recovery(request, family="document_text")
+
+        with tempfile.TemporaryDirectory() as workspace:
+            provider = CodexAppServerConversationModel(transport, workspace_dir=workspace)
+            outcome = provider.respond(
+                history=(),
+                user_text="Find clienta 甲社專案 progress evidence",
+                latest_evidence=None,
+                safety_identifier="session-split-arm",
+                evidence_tool=evidence_tool,
+                authorized_capability_summary={"source_families": ["document_text"]},
+            )
+        self.assertEqual(outcome.response_kind, "clarification")
+        self.assertEqual(len(requests), 2)
+        self.assertTrue(transport.tool_outputs[0]["data"]["execution_control"]["split_only_refinement"])
+        self.assertEqual(len(outcome.tool_results), 2)
 
     def test_mail_top_k_status_ok_remains_incomplete_without_exact_contract(self) -> None:
         citation = "citation-mail-top-k"

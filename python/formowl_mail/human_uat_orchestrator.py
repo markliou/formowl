@@ -2129,7 +2129,49 @@ class _CodexAppServerProviderFailure(RuntimeError):
 
 
 class _CodexAppServerContractFailure(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider_diagnostic: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.provider_diagnostic = (
+            dict(provider_diagnostic) if provider_diagnostic is not None else None
+        )
+
+
+def _safe_app_server_exception_class(exception: BaseException) -> str:
+    """Return an allowlisted shape for private app-server failure traces."""
+
+    name = type(exception).__name__
+    if (
+        isinstance(name, str)
+        and 0 < len(name) <= 64
+        and all(character.isalnum() or character == "_" for character in name)
+    ):
+        return name
+    return "Exception"
+
+
+def _app_server_tool_failure_diagnostic(
+    exception: BaseException,
+    *,
+    reason_code: str,
+) -> dict[str, str]:
+    """Keep only fixed reason and exception class; never retain exception text."""
+
+    allowed_reasons = {
+        "turn_not_ready",
+        "turn_mismatch",
+        "duplicate_call",
+        "tool_handler_failure",
+        "invalid_tool_result",
+    }
+    return {
+        "reason_code": reason_code if reason_code in allowed_reasons else "tool_handler_failure",
+        "exception_class": _safe_app_server_exception_class(exception),
+    }
 
 
 class CodexAppServerTransport(Protocol):
@@ -2180,6 +2222,7 @@ class _ActiveTurn:
     call_ids: set[str] = field(default_factory=set)
     tool_error: str | None = None
     tool_error_kind: str | None = None
+    tool_error_diagnostic: dict[str, str] | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -2674,7 +2717,10 @@ class CodexAppServerStdioTransport:
                     )
                 if context.tool_error is not None:
                     if context.tool_error_kind == "contract":
-                        raise _CodexAppServerContractFailure(context.tool_error)
+                        raise _CodexAppServerContractFailure(
+                            context.tool_error,
+                            provider_diagnostic=context.tool_error_diagnostic,
+                        )
                     raise _CodexAppServerProviderFailure(
                         "provider_unavailable",
                         context.tool_error,
@@ -3051,16 +3097,25 @@ class CodexAppServerStdioTransport:
             with context.lock:
                 context.tool_error = "Codex dynamic tool request arrived before turn start"
                 context.tool_error_kind = "contract"
+                context.tool_error_diagnostic = _app_server_tool_failure_diagnostic(
+                    RuntimeError("turn not ready"), reason_code="turn_not_ready",
+                )
             self._send_tool_result(request_id, success=False, payload={"error": "rejected"})
             return
         with context.lock:
             if context.turn_id != turn_id:
                 context.tool_error = "Codex dynamic tool request does not match active turn"
                 context.tool_error_kind = "contract"
+                context.tool_error_diagnostic = _app_server_tool_failure_diagnostic(
+                    RuntimeError("turn mismatch"), reason_code="turn_mismatch",
+                )
                 protocol_error = True
             elif call_id in context.call_ids:
                 context.tool_error = "Codex dynamic tool request was duplicated"
                 context.tool_error_kind = "contract"
+                context.tool_error_diagnostic = _app_server_tool_failure_diagnostic(
+                    RuntimeError("duplicate call"), reason_code="duplicate_call",
+                )
                 protocol_error = True
             else:
                 context.call_ids.add(call_id)
@@ -3083,10 +3138,13 @@ class CodexAppServerStdioTransport:
             with context.lock:
                 context.tool_invocations.append(invocation)
             self._send_tool_result(request_id, success=True, payload=result)
-        except Exception:
+        except Exception as exc:
             with context.lock:
                 context.tool_error = "Codex FormOwl tool call failed"
                 context.tool_error_kind = "contract"
+                context.tool_error_diagnostic = _app_server_tool_failure_diagnostic(
+                    exc, reason_code="tool_handler_failure",
+                )
             self._send_tool_result(request_id, success=False, payload={"error": "rejected"})
 
     def _send_tool_result(
@@ -3281,27 +3339,122 @@ class CodexAppServerConversationModel:
                     self._transport.delete_thread(expired_thread.thread_id)
                 evidence_records: list[tuple[UatEvidenceToolRequest, dict[str, Any]]] = []
                 evidence_lock = threading.Lock()
+                tool_attempt_count = 0
+                rejected_tool_attempt_count = 0
+                last_rejection_code: str | None = None
+                tool_budget_exhausted = False
+                source_tool_attempted = False
+
+                def rejected_tool_result(
+                    error: Exception,
+                    arguments: Mapping[str, Any],
+                    *,
+                    validation_stage: str,
+                ) -> Mapping[str, Any]:
+                    nonlocal rejected_tool_attempt_count, last_rejection_code
+                    rejected_tool_attempt_count += 1
+                    rejection = _private_planner_rejection(
+                        error,
+                        arguments,
+                        validation_stage=validation_stage,
+                        provider_attempt=1,
+                        tool_attempt=tool_attempt_count,
+                    )
+                    last_rejection_code = rejection["rejection_code"]
+                    _record_private_citation_stage(rejection)
+                    envelope = _execution_control_envelope(
+                        reason="invalid_arguments",
+                        remaining_mcp_calls=_MAX_TOOL_CALLS_PER_TURN - tool_attempt_count,
+                        validation_code=rejection["rejection_code"],
+                    )
+                    data = envelope["data"]
+                    data["status"] = "rejected"
+                    data["reason_code"] = "invalid_arguments"
+                    query_agent = data.get("query_agent")
+                    if isinstance(query_agent, Mapping):
+                        query_agent = dict(query_agent)
+                        query_agent["status"] = "rejected"
+                        external_replan = query_agent.get("external_replan")
+                        if isinstance(external_replan, Mapping):
+                            external_replan = dict(external_replan)
+                            external_replan["allowed_modifications"] = [
+                                "same_authorized_scope",
+                                "same_request_contract",
+                                "grounded_required_terms_or_existing_split_refinement",
+                            ]
+                            query_agent["external_replan"] = external_replan
+                        data["query_agent"] = query_agent
+                    envelope["trust"] = "untrusted_tool_rejection"
+                    envelope["evidence_disposition"] = "rejected_request"
+                    return envelope
 
                 def handle_tool(
                     tool_name: str,
                     arguments: Mapping[str, Any],
                 ) -> Mapping[str, Any]:
+                    nonlocal tool_attempt_count, tool_budget_exhausted, source_tool_attempted
                     if tool_name != formowl_tool_name:
                         raise RuntimeError("Codex requested an unknown UAT tool")
-                    request = _parse_tool_request(
-                        arguments,
-                        tool_descriptor=formowl_tool,
-                        request_contract_binder=request_contract_binder,
-                    )
                     with evidence_lock:
-                        if len(evidence_records) >= _MAX_TOOL_CALLS_PER_TURN:
-                            raise RuntimeError("Codex requested too many UAT tools")
+                        if tool_attempt_count >= _MAX_TOOL_CALLS_PER_TURN:
+                            tool_budget_exhausted = True
+                            envelope = _execution_control_envelope(
+                                reason="budget_exhausted", remaining_mcp_calls=0,
+                            )
+                            envelope["trust"] = "untrusted_tool_rejection"
+                            envelope["data"]["status"] = "rejected"
+                            envelope["data"]["reason_code"] = "budget_exhausted"
+                            envelope["data"]["query_agent"]["external_replan"]["status"] = "stopped"
+                            return envelope
+                        tool_attempt_count += 1
+                    validation_stage = {"stage": "argument_schema"}
+                    try:
+                        request = _parse_tool_request(
+                            arguments,
+                            tool_descriptor=formowl_tool,
+                            request_contract_binder=request_contract_binder,
+                            _validation_stage=validation_stage,
+                        )
+                    except (ContractValidationError, RuntimeError) as exc:
+                        return rejected_tool_result(
+                            exc, arguments, validation_stage=validation_stage["stage"],
+                        )
+                    try:
+                        source_tool_attempted = True
                         result = dict(evidence_tool(request))
+                    except ContractValidationError as exc:
+                        return rejected_tool_result(
+                            exc, arguments, validation_stage="evidence_tool",
+                        )
+                    with evidence_lock:
                         evidence_records.append((request, result))
                         request_contract_binder.record_comparison_result(request, result)
+                    comparison_pending = request_contract_binder.comparison_pending
+                    model_result = compact_evidence_for_model(result)
+                    if _source_fallback_exhausted(request, result) and not comparison_pending:
+                        split_offer = (
+                            len(evidence_records) == 1
+                            and not any(
+                                evidence_citation_ids(item) for _, item in evidence_records
+                            )
+                            and request_contract_binder.arm_split_refinement(
+                                request,
+                                result,
+                                remaining_calls=_MAX_TOOL_CALLS_PER_TURN - tool_attempt_count,
+                            )
+                        )
+                        if split_offer:
+                            model_result["execution_control"] = {
+                                "material_progress": False,
+                                "remaining_mcp_calls": (
+                                    _MAX_TOOL_CALLS_PER_TURN - tool_attempt_count
+                                ),
+                                "stop_reason": None,
+                                "split_only_refinement": True,
+                            }
                     return {
                         "trust": "untrusted_evidence",
-                        "data": compact_evidence_for_model(result),
+                        "data": model_result,
                     }
 
                 additional_context: dict[str, Mapping[str, str]] = {}
@@ -3423,7 +3576,12 @@ class CodexAppServerConversationModel:
                     self._discard_thread(safety_identifier, thread.thread_id)
                     raise
                 try:
-                    if len(turn.tool_invocations) != len(evidence_records) or any(
+                    accepted_invocation_count = sum(
+                        invocation.result.get("trust") == "untrusted_evidence"
+                        for invocation in turn.tool_invocations
+                        if isinstance(invocation.result, Mapping)
+                    )
+                    if accepted_invocation_count != len(evidence_records) or any(
                         invocation.thread_id != turn.thread_id
                         or invocation.turn_id != turn.turn_id
                         or invocation.tool_name != formowl_tool_name
@@ -3431,6 +3589,42 @@ class CodexAppServerConversationModel:
                     ):
                         raise _CodexAppServerContractFailure(
                             "Codex tool execution record is inconsistent"
+                        )
+                    if tool_budget_exhausted or rejected_tool_attempt_count >= _MAX_TOOL_CALLS_PER_TURN:
+                        self._discard_thread(safety_identifier, thread.thread_id)
+                        return _safe_stop_outcome(
+                            reason="budget_exhausted",
+                            model_name=f"codex:{thread.model_name}",
+                            evidence_records=evidence_records,
+                            provider_diagnostic={"reason_code": "budget_exhausted"},
+                        )
+                    if rejected_tool_attempt_count and not evidence_records:
+                        rejection_diagnostic = {
+                            "reason_code": "invalid_arguments",
+                            "rejection_only": True,
+                            "rejected_tool_attempts": rejected_tool_attempt_count,
+                        }
+                        if last_rejection_code is not None:
+                            rejection_diagnostic["validation_code"] = last_rejection_code
+                        self._discard_thread(safety_identifier, thread.thread_id)
+                        safe_outcome = _safe_stop_outcome(
+                            reason="invalid_arguments",
+                            model_name=f"codex:{thread.model_name}",
+                            evidence_records=evidence_records,
+                            provider_diagnostic=rejection_diagnostic,
+                        )
+                        if source_tool_attempted:
+                            return safe_outcome
+                        return replace(
+                            safe_outcome,
+                            answer_text=(
+                                "這次查詢參數未通過 FormOwl 驗證，尚未查詢來源；"
+                                "請補充真正缺少的對象或範圍。這不代表資料不存在。"
+                            ),
+                            coverage_note=(
+                                "這次查詢參數未通過 FormOwl 驗證，尚未查詢來源；"
+                                "這不代表資料不存在。"
+                            ),
                         )
                     decision = _parse_decision(turn.final_message)
                     decision = request_contract_binder.validate_comparison_decision(decision, evidence_records)
