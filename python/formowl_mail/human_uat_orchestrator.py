@@ -3344,6 +3344,18 @@ class CodexAppServerConversationModel:
                 last_rejection_code: str | None = None
                 tool_budget_exhausted = False
                 source_tool_attempted = False
+                mcp_citation_stages: list[dict[str, Any]] = []
+                finalization_validation: list[dict[str, Any]] = []
+
+                def attach_citation_diagnostics(
+                    diagnostic: Mapping[str, Any] | None = None,
+                ) -> Mapping[str, Any] | None:
+                    merged = dict(diagnostic or {})
+                    if mcp_citation_stages:
+                        merged["mcp_citation_stages"] = list(mcp_citation_stages)
+                    if finalization_validation:
+                        merged["finalization_validation"] = list(finalization_validation)
+                    return merged or None
 
                 def rejected_tool_result(
                     error: Exception,
@@ -3407,6 +3419,7 @@ class CodexAppServerConversationModel:
                             envelope["data"]["query_agent"]["external_replan"]["status"] = "stopped"
                             return envelope
                         tool_attempt_count += 1
+                        call_index = tool_attempt_count
                     validation_stage = {"stage": "argument_schema"}
                     try:
                         request = _parse_tool_request(
@@ -3419,6 +3432,7 @@ class CodexAppServerConversationModel:
                         return rejected_tool_result(
                             exc, arguments, validation_stage=validation_stage["stage"],
                         )
+                    mcp_started = time.monotonic()
                     try:
                         source_tool_attempted = True
                         result = dict(evidence_tool(request))
@@ -3430,7 +3444,22 @@ class CodexAppServerConversationModel:
                         evidence_records.append((request, result))
                         request_contract_binder.record_comparison_result(request, result)
                     comparison_pending = request_contract_binder.comparison_pending
-                    model_result = compact_evidence_for_model(result)
+                    compaction_diagnostic: dict[str, Any] = {}
+                    model_result = compact_evidence_for_model(result, diagnostic=compaction_diagnostic)
+                    with evidence_lock:
+                        mcp_citation_stages.append(
+                            _mcp_citation_stage_diagnostic(
+                                call_index=call_index,
+                                elapsed_ms=(time.monotonic() - mcp_started) * 1000,
+                                raw_result=result,
+                                presented_result=model_result,
+                                projection_result=_citation_projection_result(
+                                    evidence_citation_ids(result), evidence_citation_ids(model_result),
+                                ),
+                                compaction_diagnostic=compaction_diagnostic,
+                            ),
+                        )
+                        del mcp_citation_stages[:-_MAX_MCP_CITATION_STAGE_DIAGNOSTICS]
                     if _source_fallback_exhausted(request, result) and not comparison_pending:
                         split_offer = (
                             len(evidence_records) == 1
@@ -3558,7 +3587,7 @@ class CodexAppServerConversationModel:
                         reason=exc.reason,
                         model_name=f"codex:{thread.model_name}",
                         evidence_records=evidence_records,
-                        provider_diagnostic=provider_diagnostic,
+                        provider_diagnostic=attach_citation_diagnostics(provider_diagnostic),
                     )
                 except (TimeoutError, socket.timeout):
                     self._discard_thread(safety_identifier, thread.thread_id)
@@ -3568,6 +3597,7 @@ class CodexAppServerConversationModel:
                         reason="provider_timeout",
                         model_name=f"codex:{thread.model_name}",
                         evidence_records=evidence_records,
+                        provider_diagnostic=attach_citation_diagnostics(),
                     )
                 except (_CodexAppServerContractFailure, ContractValidationError):
                     self._discard_thread(safety_identifier, thread.thread_id)
@@ -3575,6 +3605,9 @@ class CodexAppServerConversationModel:
                 except Exception:
                     self._discard_thread(safety_identifier, thread.thread_id)
                     raise
+                decision = None
+                finalization_started = False
+                available_citation_ids: tuple[str, ...] = ()
                 try:
                     accepted_invocation_count = sum(
                         invocation.result.get("trust") == "untrusted_evidence"
@@ -3596,7 +3629,7 @@ class CodexAppServerConversationModel:
                             reason="budget_exhausted",
                             model_name=f"codex:{thread.model_name}",
                             evidence_records=evidence_records,
-                            provider_diagnostic={"reason_code": "budget_exhausted"},
+                            provider_diagnostic=attach_citation_diagnostics({"reason_code": "budget_exhausted"}),
                         )
                     if rejected_tool_attempt_count and not evidence_records:
                         rejection_diagnostic = {
@@ -3611,7 +3644,7 @@ class CodexAppServerConversationModel:
                             reason="invalid_arguments",
                             model_name=f"codex:{thread.model_name}",
                             evidence_records=evidence_records,
-                            provider_diagnostic=rejection_diagnostic,
+                            provider_diagnostic=attach_citation_diagnostics(rejection_diagnostic),
                         )
                         if source_tool_attempted:
                             return safe_outcome
@@ -3626,11 +3659,13 @@ class CodexAppServerConversationModel:
                                 "這不代表資料不存在。"
                             ),
                         )
-                    decision = _parse_decision(turn.final_message)
-                    decision = request_contract_binder.validate_comparison_decision(decision, evidence_records)
                     evidence_results = tuple(
                         compact_evidence_for_model(result) for _, result in evidence_records
                     )
+                    available_citation_ids = evidence_citation_ids(evidence_results)
+                    finalization_started = True
+                    decision = _parse_decision(turn.final_message)
+                    decision = request_contract_binder.validate_comparison_decision(decision, evidence_records)
                     _validate_evidence_bound_decision(
                         decision,
                         evidence_results=evidence_results,
@@ -3640,6 +3675,20 @@ class CodexAppServerConversationModel:
                     raise
                 except Exception as exc:
                     self._discard_thread(safety_identifier, thread.thread_id)
+                    if finalization_started:
+                        stop_reason = _finalization_stop_reason(exc)
+                        finalization_validation.append(_finalization_validation_diagnostic(
+                            final_citation_ids=decision["citation_ids"] if decision is not None else (),
+                            available_citation_ids=available_citation_ids,
+                            validation_result=(
+                                "coverage_rejected" if stop_reason == "coverage_validation_failed"
+                                else "citation_rejected" if stop_reason == "citation_validation_failed"
+                                else "parse_rejected"
+                            ),
+                            # App-server runs one turn; it has no final-answer repair loop.
+                            repair_attempted=False,
+                            reason_code=_finalization_validation_reason(exc),
+                        ))
                     if not evidence_records:
                         raise
                     return _safe_stop_outcome(
@@ -3647,12 +3696,20 @@ class CodexAppServerConversationModel:
                         model_name=f"codex:{thread.model_name}",
                         evidence_records=evidence_records,
                         suppress_evidence_citations=request_contract_binder._native_page is not None,
+                        provider_diagnostic=attach_citation_diagnostics(),
                     )
+                finalization_validation.append(_finalization_validation_diagnostic(
+                    final_citation_ids=decision["citation_ids"],
+                    available_citation_ids=available_citation_ids,
+                    validation_result="passed",
+                    repair_attempted=False,
+                ))
                 return UatConversationOutcome(
                     **decision,
                     model_name=f"codex:{thread.model_name}",
                     tool_requests=tuple(request for request, _ in evidence_records),
                     tool_results=evidence_results,
+                    provider_diagnostic=attach_citation_diagnostics(),
                 )
             finally:
                 with self._lock:
@@ -9805,6 +9862,12 @@ _FINALIZATION_EXCEPTION_REASONS = {
     "UAT citation identifiers are invalid": "citation_ids_invalid",
     "UAT citation identifiers must be unique": "citation_ids_duplicate",
     "UAT citation identifier limit exceeded": "citation_ids_limit",
+    "Codex source-backed answer cited unavailable evidence": "citation_unavailable",
+    "Codex source-backed answer omitted citations": "citations_missing",
+    "Codex prior-answer response omitted required citations": "prior_citations_missing",
+    "Codex prior-evidence response has no citeable evidence": "prior_evidence_unavailable",
+    "Codex source-backed answer hid incomplete coverage": "incomplete_coverage_hidden",
+    "Codex source-backed answer omitted coverage status": "coverage_status_missing",
 }
 _FINALIZATION_REASON_RULES = {
     "no_text": "Return a nonempty structured JSON decision.",

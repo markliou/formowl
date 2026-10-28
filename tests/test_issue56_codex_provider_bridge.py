@@ -6185,6 +6185,161 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                 self.assertEqual(outcome.tool_results[0]["citations"], ["citation"])
                 self.assertEqual(transport.deleted_threads, ["thread-1"])
 
+    def test_app_server_finalization_records_safe_citation_stages(self) -> None:
+        citations = tuple(f"synthetic-clienta-{i}" for i in range(4))
+        result = {
+            "status": "partial",
+            "citations": list(citations),
+            "evidence": [
+                {"citation_hash": citation, "snippet": "private synthetic source body"}
+                for citation in citations
+            ],
+            "query_agent": {"context_bundle": {"source_recovery": {
+                "status": "partial", "scan_complete": False, "scan_stop_reason": "context_limit",
+            }}},
+        }
+        original = copy.deepcopy(result)
+        transport = _RecordingTransport(
+            calls=({"query_text": "Clienta project status"},),
+            final_message=_decision(
+                citations=citations[:2], coverage_status="incomplete",
+                coverage_note="Bounded source coverage.", answer_text="private synthetic draft",
+            ),
+        )
+        transport_run_turn = transport.run_turn
+
+        def run_turn_in_worker(**kwargs):
+            # The real stdio transport invokes the tool handler on another thread.
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                return executor.submit(transport_run_turn, **kwargs).result()
+
+        with tempfile.TemporaryDirectory() as workspace, mock.patch.object(
+            transport, "run_turn", side_effect=run_turn_in_worker,
+        ) as run_turn:
+            outcome = CodexAppServerConversationModel(transport, workspace_dir=workspace).respond(
+                history=(), user_text="request", latest_evidence=None,
+                safety_identifier="app-server-citation-stages", evidence_tool=lambda _: result,
+            )
+        run_turn.assert_called_once()
+        self.assertEqual(result, original)
+        self.assertEqual(outcome.citation_ids, citations[:2])
+        self.assertEqual(transport.tool_outputs[0]["data"], compact_evidence_for_model(result))
+        diagnostic = outcome.provider_diagnostic or {}
+        self.assertIn("finalization_validation", diagnostic)
+        stage, = diagnostic["mcp_citation_stages"]
+        final, = diagnostic["finalization_validation"]
+        self.assertEqual(stage["projection_result"], "preserved")
+        self.assertEqual(stage["raw_governed"]["citation_count"], 4)
+        self.assertEqual(stage["raw_governed"], stage["compacted_presented"])
+        self.assertEqual(final["available_governed"], stage["compacted_presented"])
+        self.assertEqual(final["final_model"]["citation_count"], 2)
+        self.assertEqual(final["validation_result"], "passed")
+        self.assertFalse(final["repair_attempted"])
+        self.assertEqual(runtime_project(diagnostic)["finalization_validation"], [final])
+        self.assertEqual(runtime_project(diagnostic)["mcp_citation_stages"], [stage])
+        with tempfile.TemporaryDirectory() as directory, redirect_stderr(io.StringIO()) as stderr:
+            uat_runtime._emit_private_uat_terminal_trace(
+                "provider", started_at=time.perf_counter(), outcome=outcome, mcp_call_count=1,
+            )
+            path = Path(directory) / "behavior.jsonl"
+            uat_runtime._append_behavior_log(
+                path, prompt="synthetic request", result=None, request_count=1,
+                statuses=("partial",), call_traces=(), failure_sha256=None,
+                provider_diagnostic=runtime_project(diagnostic), elapsed_ms=1,
+                request_id=sha256_json("synthetic request"), citation_stages=(),
+            )
+            logged = json.loads(path.read_text())["provider_diagnostic"]
+            self.assertEqual(logged["finalization_validation"], [final])
+            self.assertEqual(logged["mcp_citation_stages"], [stage])
+            self.assertIn('"finalization_validation"', stderr.getvalue())
+            for private in (*citations, "private synthetic draft", "private synthetic source body"):
+                self.assertNotIn(private, path.read_text())
+                self.assertNotIn(private, stderr.getvalue())
+        rendered = json.dumps(diagnostic)
+        for secret in (*citations, "private synthetic source body", "private synthetic draft"):
+            self.assertNotIn(secret, rendered)
+        for snapshot in (stage["raw_governed"], stage["compacted_presented"], final["final_model"]):
+            self.assertRegex(snapshot["citation_fingerprint"], r"^sha256:[0-9a-f]{64}$")
+
+    def test_app_server_finalization_rejections_are_diagnosed_without_repair(self) -> None:
+        def decision(citations, coverage="incomplete"):
+            return _decision(
+                citations=citations, coverage_status=coverage,
+                coverage_note="Bounded source coverage.", answer_text="private rejected draft",
+            )
+
+        malformed_ids = json.loads(decision(("synthetic-available",)))
+        malformed_ids["citation_ids"] = "private malformed identifier"
+        cases = (
+            (decision(("synthetic-foreign",)), "citation_rejected", "citation_unavailable", 1),
+            (decision(()), "citation_rejected", "citations_missing", 0),
+            (decision(("synthetic-available",) * 2), "citation_rejected", "citation_ids_duplicate", 0),
+            (json.dumps(malformed_ids), "parse_rejected", "citation_ids_not_array", 0),
+            ("private malformed JSON", "parse_rejected", "invalid_json", 0),
+            (decision(("synthetic-available",), "complete"), "coverage_rejected", "incomplete_coverage_hidden", 1),
+        )
+        for final_message, validation_result, reason_code, parsed_count in cases:
+            with self.subTest(reason_code=reason_code), tempfile.TemporaryDirectory() as workspace:
+                transport = _RecordingTransport(
+                    calls=({"query_text": "Clienta source lookup"},), final_message=final_message,
+                )
+                with mock.patch.object(transport, "run_turn", wraps=transport.run_turn) as run_turn:
+                    outcome = CodexAppServerConversationModel(transport, workspace_dir=workspace).respond(
+                        history=(), user_text="request", latest_evidence=None,
+                        safety_identifier="app-server-final-rejection",
+                        evidence_tool=lambda _: {"status": "partial", "citations": ["synthetic-available"]},
+                    )
+                run_turn.assert_called_once()
+                self.assertEqual(outcome.response_kind, "clarification")
+                self.assertEqual(outcome.citation_ids, ("synthetic-available",))
+                self.assertEqual(transport.deleted_threads, ["thread-1"])
+                diagnostic = outcome.provider_diagnostic or {}
+                self.assertIn("finalization_validation", diagnostic)
+                final, = diagnostic["finalization_validation"]
+                self.assertEqual(final["validation_result"], validation_result)
+                self.assertEqual(final["reason_code"], reason_code)
+                self.assertFalse(final["repair_attempted"])
+                self.assertEqual(final["final_model"]["citation_count"], parsed_count)
+                self.assertEqual(final["available_governed"]["citation_count"], 1)
+                self.assertEqual(runtime_project(diagnostic)["finalization_validation"], [final])
+                rendered = json.dumps(diagnostic)
+                self.assertNotIn("synthetic-available", rendered)
+                self.assertNotIn("synthetic-foreign", rendered)
+                self.assertNotIn("private", rendered)
+
+    def test_app_server_finalization_uses_compacted_citation_pool(self) -> None:
+        result = {
+            "status": "partial", "citations": ["synthetic-small", "synthetic-overflow"],
+            "evidence": [
+                {"citation_hash": "synthetic-small", "snippet": "bounded source"},
+                {"citation_hash": "synthetic-overflow", "snippet": "x" * 20000},
+            ],
+        }
+        transport = _RecordingTransport(
+            calls=({"query_text": "Clienta source lookup"},),
+            final_message=_decision(
+                citations=("synthetic-overflow",), coverage_status="incomplete",
+                coverage_note="Bounded source coverage.",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            outcome = CodexAppServerConversationModel(transport, workspace_dir=workspace).respond(
+                history=(), user_text="request", latest_evidence=None,
+                safety_identifier="app-server-compaction", evidence_tool=lambda _: result,
+            )
+        self.assertEqual(evidence_citation_ids(transport.tool_outputs[0]["data"]), ("synthetic-small",))
+        diagnostic = outcome.provider_diagnostic or {}
+        self.assertIn("finalization_validation", diagnostic)
+        stage, = diagnostic["mcp_citation_stages"]
+        final, = diagnostic["finalization_validation"]
+        self.assertEqual(stage["projection_result"], "reduced")
+        self.assertEqual(stage["raw_governed"]["citation_count"], 2)
+        self.assertEqual(stage["compacted_presented"]["citation_count"], 1)
+        self.assertEqual(final["available_governed"], stage["compacted_presented"])
+        self.assertEqual(final["validation_result"], "citation_rejected")
+        self.assertEqual(final["reason_code"], "citation_unavailable")
+        self.assertFalse(final["repair_attempted"])
+
     def test_app_server_failure_without_diagnostic_stays_error(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:
             transport = _RecordingTransport(
