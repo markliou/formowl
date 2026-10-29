@@ -1620,7 +1620,10 @@ def _admit_source_model_envelope(payload, *, staged_items, limit, deadline, defe
         compact = compact_evidence_for_model(value, diagnostic=diagnostic)
         if len(records) > limit or not required.issubset(citations):
             return False
-        return (set(evidence_citation_ids(compact)) == citations
+        # Native rows carry independently cited cells. Compare the complete
+        # canonical evidence closure, while dependencies still require actual
+        # top-level records above (a cell cannot stand in for a mail header).
+        return (set(evidence_citation_ids(compact)) == set(evidence_citation_ids(records))
                 and (content_key != "evidence" or
                      Counter(json.dumps(item, sort_keys=True) for item in compact.get("evidence", ()))
                      == Counter(json.dumps(item, sort_keys=True) for item in records)))
@@ -3600,6 +3603,7 @@ def _build_source_start_semantic_handler(
                 reserved_native_slots = min(len(pending_native), reservation_limit)
 
             incomplete_reason: str | None = None
+            native_context_limit_reached = False
             for family_index, engine in enumerate(engines):
                 family = engine[0]
                 if native_locator is not None and family != "mail":
@@ -3669,12 +3673,10 @@ def _build_source_start_semantic_handler(
                         if incomplete_reason == "callback" or time.monotonic() >= kwargs["deadline_monotonic"]:
                             finish_annotation_identity_reads()
                             return RevisionOwnedMailSourceScan((), scanned, False, incomplete_reason)
-                        if incomplete_reason == "context_limit":
-                            # A native row exhausted its reader-local context,
-                            # not the shared ordinary-item capacity. Stop all
-                            # further reads, retaining incomplete, and let the
-                            # original callback govern cached-only backfill.
-                            break
+                        native_context_limit_reached |= incomplete_reason == "context_limit"
+                        # A native reader-local context limit leaves this
+                        # engine incomplete. Later families still use the
+                        # remaining shared read, deadline and admission budgets.
                     continue
                 family_start_scanned = scanned
                 for selector_index, family_selector in enumerate(selectors):
@@ -3745,7 +3747,7 @@ def _build_source_start_semantic_handler(
                 context_limit_reached = True
             active_family = None
             active_selector = selector
-            if context_limit_reached and incomplete_reason not in {"deadline", "observation_limit", "callback"}:
+            if (context_limit_reached or native_context_limit_reached) and incomplete_reason not in {"deadline", "observation_limit", "callback"}:
                 incomplete_reason = "context_limit"
             if incomplete_reason is None and unresolved_parent_binding:
                 incomplete_reason = "source_parent_binding_unresolved"

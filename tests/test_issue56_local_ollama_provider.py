@@ -263,18 +263,31 @@ class LocalOllamaProviderTests(unittest.TestCase):
                     elif protocol == "responses":
                         model = owner.CodexResponsesConversationModel(
                             base_url="https://synthetic.example.test/v1", api_key="synthetic")
-                        model._request_response = mock.Mock(side_effect=[
-                            {"status": "completed", "output": [{"type": "function_call", "name": descriptor["name"],
-                                "call_id": "synthetic-call", "arguments": json.dumps(arguments)}]},
-                            {"status": "completed", "output_text": decision(["synthetic-citation"])}])
+                        calls = []
+                        def reply(payload):
+                            calls.append(payload)
+                            if len(calls) == 1:
+                                return {"status": "completed", "output": [{"type": "function_call", "name": descriptor["name"],
+                                    "call_id": "synthetic-call", "arguments": json.dumps(arguments)}]}
+                            self.assertEqual(len(calls), 2, "A valid display citation must not require repair")
+                            wire = json.loads(next(item["output"] for item in payload["input"]
+                                                   if item.get("type") == "function_call_output"))["data"]
+                            handle, = wire["citations"]
+                            self.assertRegex(handle, r"^C[a-km-np-z2-9]{4}\.1$")
+                            self.assertNotIn("synthetic-citation", json.dumps(wire))
+                            return {"status": "completed", "output_text": decision([handle])}
+                        model._request_response = mock.Mock(side_effect=reply)
                     else:
                         transport = mock.Mock()
                         transport.start_thread.return_value = owner.CodexAppServerThread(
                             thread_id="synthetic-hash", model_name="synthetic")
                         def run_turn(**kwargs):
                             result = kwargs["tool_handler"](descriptor["name"], arguments)
+                            handle, = result["data"]["citations"]
+                            self.assertRegex(handle, r"^C[a-km-np-z2-9]{4}\.1$")
+                            self.assertNotIn("synthetic-citation", json.dumps(result["data"]))
                             return owner.CodexAppServerTurn(thread_id="synthetic-hash", turn_id="synthetic-turn",
-                                final_message=decision(["synthetic-citation"]), tool_invocations=(
+                                final_message=decision([handle]), tool_invocations=(
                                     owner.CodexDynamicToolInvocation(thread_id="synthetic-hash", turn_id="synthetic-turn",
                                         call_id="synthetic-call", tool_name=descriptor["name"], arguments=arguments, result=result),))
                         transport.run_turn.side_effect = run_turn
@@ -286,6 +299,17 @@ class LocalOllamaProviderTests(unittest.TestCase):
                     backend.assert_called_once()
                     self.assertEqual(backend.call_args.args[0].request_contract["original_query_hash"], expected_hash)
                     self.assertEqual(outcome.citation_ids, ("synthetic-citation",))
+                    if protocol != "native":
+                        self.assertEqual(outcome.response_kind, "answer")
+                        self.assertEqual(outcome.answer_text, "Synthetic source status is ready.")
+                        finalizations = outcome.provider_diagnostic["finalization_validation"]
+                        self.assertEqual(len(finalizations), 1)
+                        self.assertEqual(finalizations[0]["validation_result"], "passed")
+                        self.assertFalse(finalizations[0]["repair_attempted"])
+                        if protocol == "responses":
+                            self.assertEqual(model._request_response.call_count, 2)
+                        else:
+                            transport.run_turn.assert_called_once()
                     if protocol == "app_server":
                         schema = transport.start_thread.call_args.kwargs["dynamic_tools"][0]["inputSchema"]
                     elif protocol == "native":

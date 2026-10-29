@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+import time
 import unittest
+from unittest.mock import patch
 
 import _paths  # noqa: F401
+from formowl_contract import sha256_json
+from formowl_gateway import issue56_sealed_source_loader as loader
+from formowl_mail import human_uat_orchestrator as orchestrator
 from formowl_mail.human_uat_orchestrator import (
     _MAX_MODEL_EVIDENCE_BYTES,
     _evidence_is_incomplete,
@@ -31,6 +37,80 @@ def _decision(
 
 
 class EvidencePresentationBudgetTests(unittest.TestCase):
+    def _native_envelope_fixture(self, *, oversized=False, orphan=False):
+        row_id, header_id = (sha256_json(label) for label in ("synthetic-row", "synthetic-header"))
+        header = {
+            "citation_hash": header_id, "snippet": "Synthetic outer message.",
+            "occurrence_lineage_fingerprint": sha256_json("header-lineage"),
+            "source_context": {"relationship": "outer_message_header", "anchor_citation_hash": row_id},
+        }
+        row = {
+            "citation_hash": row_id, "snippet": "x" * 17000 if oversized else "Verified synthetic row.",
+            "occurrence_lineage_fingerprint": sha256_json("row-lineage"),
+            "table_row": {"cells": [
+                {"citation_hash": sha256_json("synthetic-code-cell"), "field": "Code", "value": "ZX-742"},
+                {"citation_hash": sha256_json("synthetic-state-cell"), "field": "State", "value": "ready"},
+            ]},
+            "_mail_parent_header": header,
+        }
+        if orphan:
+            row.pop("_mail_parent_header")
+            row["mail_header_citation_hash"] = header_id
+        large = {"citation_hash": sha256_json("oversized-source"), "snippet": "x" * 17000,
+                 "occurrence_lineage_fingerprint": sha256_json("oversized-lineage")}
+        # Both complete source groups have already been validated by the caller.
+        records, _ = loader._bounded_mail_header_groups([large, row], limit=10, byte_limit=100000)
+        payload = {"status": "partial", "coverage": {"status": "incomplete"},
+                   "evidence": records, "citations": [item["citation_hash"] for item in records]}
+        return payload, (large, row), row_id, header_id
+
+    def test_native_envelope_reselection_preserves_row_cell_and_header_citations(self):
+        payload, staged, row_id, header_id = self._native_envelope_fixture()
+        original = deepcopy(payload)
+        diagnostic = {}
+        compact_evidence_for_model(payload, diagnostic=diagnostic)
+        self.assertGreater(diagnostic["reason_counts"]["group_byte_budget"], 0)
+        result = loader._admit_source_model_envelope(
+            payload, staged_items=staged, limit=10, deadline=time.monotonic() + 2,
+        )
+        expected, _ = loader._bounded_mail_header_groups([staged[1]], limit=10)
+        self.assertEqual(result["evidence"], expected)
+        self.assertEqual(set(orchestrator.evidence_citation_ids(result)), {
+            row_id, header_id, sha256_json("synthetic-code-cell"), sha256_json("synthetic-state-cell"),
+        })
+        self.assertEqual(payload, original)
+        self.assertTrue(result["presentation_truncated"])
+        self.assertLessEqual(_size(compact_evidence_for_model(result)), _MAX_MODEL_EVIDENCE_BYTES)
+
+    def test_native_envelope_reselection_rejects_missing_or_unknown_citations(self):
+        for damage in ("missing_cell", "unknown_citation"):
+            with self.subTest(damage=damage):
+                payload, staged, _, _ = self._native_envelope_fixture()
+                def corrupt(value, **kwargs):
+                    compact = deepcopy(compact_evidence_for_model(value, **kwargs))
+                    if compact.get("evidence"):
+                        if damage == "unknown_citation":
+                            compact["citations"].append(sha256_json("unknown-source"))
+                        else:
+                            next(item for item in compact["evidence"] if "table_row" in item)["table_row"]["cells"][0].pop("citation_hash")
+                    return compact
+                with patch.object(orchestrator, "compact_evidence_for_model", side_effect=corrupt):
+                    result = loader._admit_source_model_envelope(
+                        payload, staged_items=staged, limit=10, deadline=time.monotonic() + 2,
+                    )
+                self.assertEqual(result["evidence"], [])
+                self.assertEqual(result["citations"], [])
+
+    def test_native_envelope_reselection_keeps_capacity_and_dependency_guards(self):
+        for invalid in ("oversized", "orphan"):
+            with self.subTest(invalid=invalid):
+                payload, staged, _, _ = self._native_envelope_fixture(**{invalid: True})
+                result = loader._admit_source_model_envelope(
+                    payload, staged_items=staged, limit=10, deadline=time.monotonic() + 2,
+                )
+                self.assertEqual(result["evidence"], [])
+                self.assertEqual(result["citations"], [])
+
     def test_graph_hash_links_survive_shuffled_evidence_and_lineages(self) -> None:
         citations = [f"sha256:{index:064x}" for index in range(10)]
         evidence = [

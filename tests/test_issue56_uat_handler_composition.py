@@ -5462,6 +5462,101 @@ class ProjectionIndependentSourceMcpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(scan["stop_reason"], "context_limit")
             self.assertEqual(set(result["citations"]), {item["citation_hash"] for item in result["evidence"]})
 
+    def _oversized_native_and_mail_lookup(self, root):
+        columns = ["Code", *(f"Field{index}" for index in range(24))]
+        values = ["Acceptance", *("syntheticvalue" * 80 for _ in range(24))]
+        return self._table_lookup(
+            root, terms=("Acceptance",), scope=("attachment_table", "mail"),
+            attachment_csv=",".join(columns) + "\n" + ",".join(values) + "\n",
+        )
+
+    def test_native_local_context_cap_continues_guarded_mail_with_remaining_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, revision, handler, arguments = self._oversized_native_and_mail_lookup(Path(directory))
+            original_native = loader._IngestionExactCellLookup.scan_source_rows
+            native_calls = []
+            def native(lookup, **kwargs):
+                scan = original_native(lookup, **kwargs)
+                native_calls.append((kwargs, scan))
+                return scan
+            with (patch.object(loader._IngestionExactCellLookup, "scan_source_rows", autospec=True, side_effect=native),
+                  patch.object(revision.source_records, "scan_authorized_observations",
+                               wraps=revision.source_records.scan_authorized_observations) as mail_scan):
+                result = handler(arguments)
+            self.assertEqual(len(native_calls), 1)
+            native_args, native_scan = native_calls[0]
+            self.assertEqual(native_scan.stop_reason, "context_limit")
+            self.assertFalse(native_scan.complete)
+            mail_scan.assert_called_once()
+            self.assertLessEqual(mail_scan.call_args.kwargs["max_observations"],
+                                 native_args["max_observations"] - native_scan.scanned_observation_count)
+            self.assertGreater(mail_scan.call_args.kwargs["deadline_monotonic"],
+                               native_args["deadline_monotonic"])
+            body = next(item for item in fixture.observations if item.observation_type == "email_body_segment")
+            self.assertIn(sha256_json(body.to_dict()), result["citations"])
+            self.assertTrue(all("table_row" not in item for item in result["evidence"]))
+            scan = result["query_agent"]["context_bundle"]["source_recovery"]["scan"]
+            self.assertFalse(scan["complete"])
+            self.assertEqual(scan["stop_reason"], "context_limit")
+            self.assertEqual(result["coverage"]["status"], "incomplete")
+            self.assertEqual(result["status"], "ok")  # Cited partial scope, not source completeness.
+            validate_public_gateway_payload(result)
+
+    def test_native_local_context_cap_does_not_reset_total_read_or_time_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, revision, handler, arguments = self._oversized_native_and_mail_lookup(Path(directory))
+            with (patch("formowl_retrieval.gateway.SOURCE_EVIDENCE_OBSERVATION_LIMIT", 3),
+                  # Model a local overflow that has also spent every remaining
+                  # read. A partial row may otherwise reserve zero reads.
+                  patch.object(loader._IngestionExactCellLookup, "scan_source_rows", autospec=True,
+                               side_effect=lambda lookup, **kwargs: RevisionOwnedMailSourceScan(
+                                   (), kwargs["max_observations"], False, "context_limit")),
+                  patch.object(revision.source_records, "scan_authorized_observations",
+                               wraps=revision.source_records.scan_authorized_observations) as mail_scan):
+                capped = handler(arguments)
+            mail_scan.assert_not_called()
+            scan = capped["query_agent"]["context_bundle"]["source_recovery"]["scan"]
+            self.assertLessEqual(scan["scanned_observation_count"], 3)
+            self.assertFalse(scan["complete"])
+            self.assertIn(scan["stop_reason"], {"context_limit", "observation_limit"})
+            self.assertFalse(capped["evidence"])
+            original_native = loader._IngestionExactCellLookup.scan_source_rows
+            clock = loader.time.monotonic()
+            expired = [False]
+            def native(lookup, **kwargs):
+                scan = original_native(lookup, **kwargs)
+                self.assertEqual(scan.stop_reason, "context_limit")
+                expired[0] = True
+                return scan
+            with (patch.object(loader._IngestionExactCellLookup, "scan_source_rows", autospec=True, side_effect=native),
+                  patch.object(loader.time, "monotonic", side_effect=lambda: clock + 10 if expired[0] else clock),
+                  patch.object(revision.source_records, "scan_authorized_observations",
+                               wraps=revision.source_records.scan_authorized_observations) as mail_scan):
+                timed_out = handler(arguments)
+            mail_scan.assert_not_called()
+            self.assertFalse(timed_out["evidence"])
+            self.assertFalse(timed_out["query_agent"]["context_bundle"]["source_recovery"]["scan"]["complete"])
+
+    def test_native_local_context_cap_does_not_hide_later_source_or_permission_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, revision, handler, arguments = self._oversized_native_and_mail_lookup(Path(directory))
+            body = next(item for item in fixture.observations if item.observation_type == "email_body_segment")
+            path = revision.job_authorities[0].observation_store._store._record_path(body.observation_id)
+            original = path.read_bytes()
+            for damage in ("source_hash", "permission"):
+                with self.subTest(damage=damage):
+                    data = json.loads(original)
+                    if damage == "source_hash":
+                        data["text"] += " Synthetic tampering."
+                    else:
+                        data["permission_scope"]["scope_id"] = "synthetic-denied-scope"
+                    path.write_text(json.dumps(data))
+                    try:
+                        with self.assertRaises(ContractValidationError):
+                            handler(arguments)
+                    finally:
+                        path.write_bytes(original)
+
     def test_anchor_last_row_is_atomic_at_page_and_callback_exhaustion(self):
         with tempfile.TemporaryDirectory() as directory:
             fixture, revision, handler, arguments = self._table_lookup(

@@ -256,21 +256,35 @@ class SmallScopeDocumentFullReadTests(unittest.TestCase):
         self.addCleanup(model.close)
         model.configure_conversation_tools(safety_identifier="scope-finalization", tool_descriptors=[descriptor])
         citation = result["citations"][0]
+        cited_snippet = next(item["snippet"] for item in result["evidence"]
+                             if item["citation_hash"] == citation)
         decision = {"response_kind": "answer", "answer_text": "Design completed.",
-                    "display_format": "narrative", "citation_ids": [citation],
+                    "display_format": "narrative",
                     "coverage_status": "incomplete", "coverage_note": "", "field_limitations": []}
-        responses = [
-            {"status": "completed", "output": [{"type": "function_call", "call_id": "full-documents",
-                "name": "query_effective_graph_view", "arguments": json.dumps(public_arguments)}]},
-            {"status": "completed", "output_text": json.dumps(decision)},
-        ]
-        with patch.object(model, "_request_response", side_effect=responses) as provider:
+        calls = []
+        def reply(payload):
+            calls.append(payload)
+            if len(calls) == 1:
+                return {"status": "completed", "output": [{"type": "function_call", "call_id": "full-documents",
+                    "name": "query_effective_graph_view", "arguments": json.dumps(public_arguments)}]}
+            self.assertEqual(len(calls), 2, "The valid display citation must not require repair")
+            wire = json.loads(next(item["output"] for item in payload["input"]
+                                   if item.get("type") == "function_call_output"))["data"]
+            presented, = [item for item in wire["evidence"] if item["snippet"] == cited_snippet]
+            handle = presented["citation_hash"]
+            self.assertRegex(handle, r"^C[a-km-np-z2-9]{4}\.\d+$")
+            self.assertNotIn(citation, json.dumps(wire))
+            return {"status": "completed", "output_text": json.dumps({**decision, "citation_ids": [handle]})}
+        with patch.object(model, "_request_response", side_effect=reply) as provider:
             outcome = model.respond(
                 history=(), user_text="請根據專案文件整理目前的工作狀態、已完成事項與下一步。",
                 latest_evidence=None, safety_identifier="scope-finalization", evidence_tool=lambda request: result,
                 formowl_tool_descriptor=descriptor, authorized_capability_summary={"source_families": ["document_text"]},
             )
         self.assertEqual(provider.call_count, 2)
+        finalizations = outcome.provider_diagnostic["finalization_validation"]
+        self.assertEqual(len(finalizations), 1)
+        self.assertFalse(finalizations[0]["repair_attempted"])
         self.assertEqual(outcome.response_kind, "answer")
         self.assertIn(
             "檢索涵蓋範圍：已完整讀取指定文件範圍（1 份文件、2 段）；不代表整個工作區。",
