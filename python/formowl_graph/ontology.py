@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
+import unicodedata
 from typing import Any, Mapping
 
 from formowl_contract import (
@@ -11,7 +13,78 @@ from formowl_contract import (
     TypeAlignmentCandidate,
     TypeDefinition,
     stable_type_alignment_candidate_id,
+    sha256_json,
 )
+
+
+def fold_property_label(label: str) -> str:
+    """Lexical folding only; no synonyms, substrings or domain-specific rules."""
+    return "".join(c for c in unicodedata.normalize("NFKC", label).casefold()
+                   if not c.isspace() and not unicodedata.category(c).startswith("P"))
+
+
+@dataclass(frozen=True)
+class CandidatePropertyMapping:
+    """Replaceable, unactivated governance data for offline candidate projections.
+
+    Each alias explicitly names its property and any qualifiers. Conflicting
+    aliases stay ambiguous. This format grants no canonical write or access.
+    """
+
+    data: dict[str, Any]
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "CandidatePropertyMapping":
+        def invalid() -> None:
+            raise ContractValidationError("invalid candidate property mapping")
+
+        if (data.get("artifact_id") != "formowl_candidate_property_mapping_v1"
+                or data.get("review_status") != "pending_review"
+                or not isinstance(data.get("mapping_id"), str) or not data["mapping_id"].strip()):
+            invalid()
+        props = data.get("properties")
+        if (not isinstance(props, list) or not props
+                or any(not isinstance(p, str) or not p.strip() for p in props)
+                or len(set(props)) != len(props)):
+            invalid()
+        document_props = data.get("document_level_properties", [])
+        if (not isinstance(document_props, list) or any(p not in props for p in document_props)
+                or len(set(document_props)) != len(document_props)):
+            invalid()
+        aliases, groups = data.get("aliases"), data.get("identity_groups", [])
+        if not isinstance(aliases, list) or not isinstance(groups, list):
+            invalid()
+        for alias in aliases:
+            if (not isinstance(alias, dict) or set(alias) != {"label", "property_id", "qualifiers"}
+                    or not isinstance(alias["label"], str) or not fold_property_label(alias["label"])
+                    or alias["property_id"] not in props or not isinstance(alias["qualifiers"], dict)
+                    or any(not isinstance(k, str) or not isinstance(v, str) or not k or not v
+                           for k, v in alias["qualifiers"].items())):
+                invalid()
+        names = set()
+        for group in groups:
+            if (not isinstance(group, dict) or set(group) != {"name", "properties"}
+                    or not isinstance(group["name"], str) or not group["name"] or group["name"] in names
+                    or not isinstance(group["properties"], list) or not group["properties"]
+                    or any(p not in props for p in group["properties"])
+                    or len(set(group["properties"])) != len(group["properties"])):
+                invalid()
+            names.add(group["name"])
+        return cls(deepcopy(dict(data)))
+
+    @property
+    def fingerprint(self) -> str:
+        return sha256_json(self.data)
+
+    def match(self, label: str | None) -> dict[str, Any]:
+        folded = fold_property_label(label) if isinstance(label, str) else ""
+        choices = {sha256_json([a["property_id"], a["qualifiers"]]): a for a in self.data["aliases"]
+                   if folded and fold_property_label(a["label"]) == folded}
+        if len(choices) != 1:
+            return {"status": "ambiguous" if choices else "unmapped"}
+        alias = next(iter(choices.values()))
+        return {"status": "candidate", "property_id": alias["property_id"],
+                "qualifiers": deepcopy(alias["qualifiers"])}
 
 _CORE_SUPERTYPE_PARENTS = {
     "Document": "Artifact",

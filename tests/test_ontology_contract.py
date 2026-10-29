@@ -16,6 +16,34 @@ from formowl_contract import (
 )
 from formowl_graph import core_supertypes_compatible, propose_type_alignment_candidate
 from formowl_graph import soft_core_supertypes_compatible
+from formowl_graph import ontology
+
+
+class CandidatePropertyMappingTests(unittest.TestCase):
+    @staticmethod
+    def mapping():
+        return {"artifact_id": "formowl_candidate_property_mapping_v1", "mapping_id": "clienta_v1",
+                "review_status": "pending_review", "properties": ["asset_code", "target_date"],
+                "aliases": [{"label": "Asset Code", "property_id": "asset_code", "qualifiers": {}},
+                            {"label": "Expected Date", "property_id": "target_date", "qualifiers": {"kind": "expected"}}],
+                "identity_groups": [{"name": "asset", "properties": ["asset_code"]}]}
+
+    def test_fold_matches_only_declared_aliases_and_preserves_qualifiers(self):
+        mapping = ontology.CandidatePropertyMapping.from_dict(self.mapping())
+        result = mapping.match(" Ａsset.\nCode ")
+        self.assertEqual(result["property_id"], "asset_code")
+        self.assertEqual(result["status"], "candidate")
+        self.assertEqual(mapping.match("expected_date")["qualifiers"], {"kind": "expected"})
+        self.assertEqual(mapping.match("unseen synonym")["status"], "unmapped")
+        self.assertEqual(ontology.fold_property_label("A-B / C"), "abc")
+
+    def test_colliding_aliases_stay_ambiguous_and_unknown_properties_fail(self):
+        data = self.mapping()
+        data["aliases"].append({"label": "asset_code", "property_id": "target_date", "qualifiers": {}})
+        self.assertEqual(ontology.CandidatePropertyMapping.from_dict(data).match("Asset Code")["status"], "ambiguous")
+        data["aliases"][-1]["property_id"] = "not_declared"
+        with self.assertRaises(ContractValidationError):
+            ontology.CandidatePropertyMapping.from_dict(data)
 
 
 class OntologyContractTests(unittest.TestCase):

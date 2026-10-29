@@ -708,6 +708,129 @@ def reconcile_command(args) -> int:
     return 0
 
 
+def project_command(args) -> int:
+    """Private offline rows from retained atoms; no provider or canonical writes.
+
+    Snapshot the complete progress prefix first. The manifest is published last;
+    an interrupted or invalid export has no manifest and must not be consumed.
+    Complete and partial unit coverage remain separate, even when both retain
+    individually validated candidates. Property and identity names are data.
+    """
+    from functools import lru_cache
+    from formowl_contract import ContractValidationError, sha256_json
+    from formowl_graph.ontology import CandidatePropertyMapping
+    from formowl_graph.reconciliation import project_candidate_fact_rows
+    from formowl_graph.storage import CandidateAtomStore, CandidateRelationStore, SemanticMetadataStore
+    from formowl_ingestion.storage.records import ObservationStore
+
+    ann, dest = Path(args.annotation_output), Path(args.output)
+    mapping = CandidatePropertyMapping.from_dict(json.loads(Path(args.mapping).read_text()))
+    scope_bytes = Path(args.units).read_bytes()
+    units = {u["unit_id"]: u for u in map(json.loads, scope_bytes.splitlines())}
+    config = json.loads((ann / f"run-{args.run_id}.configuration.json").read_text())
+    scope_hash = "sha256:" + hashlib.sha256(scope_bytes).hexdigest()
+    if config["units_sha256"] != scope_hash:
+        raise ContractValidationError("candidate projection scope changed")
+    with (ann / "progress.jsonl").open("rb") as handle:
+        observed = handle.read(os.fstat(handle.fileno()).st_size)
+    boundary = observed.rfind(b"\n") + 1
+    prefix = observed[:boundary]
+    progress = {}
+    for row in map(json.loads, prefix.splitlines()):
+        if row["run"] == args.run_id:
+            if row["unit"] not in units or row["unit"] in progress:
+                raise ContractValidationError("candidate projection progress unit is invalid")
+            progress[row["unit"]] = row
+    dest.mkdir(mode=0o700, parents=True, exist_ok=False)
+
+    def write(name, data):
+        with (dest / name).open("xb") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(data)
+
+    def encode(data):
+        return (json.dumps(data, ensure_ascii=False, sort_keys=True) + "\n").encode()
+
+    write("progress.snapshot.jsonl", prefix)
+    write("scope.snapshot.jsonl", scope_bytes)
+    write("configuration.snapshot.json", encode(config))
+    write("mapping.snapshot.json", encode(mapping.data))
+    atoms, relations, ledgers = CandidateAtomStore(ann), CandidateRelationStore(ann), SemanticMetadataStore(ann)
+    stores = {u["store"]: ObservationStore(u["store"], create_directory=False) for u in units.values()}
+
+    @lru_cache(maxsize=1024)
+    def source(store, oid):
+        observation = stores[store].get(oid)
+        if observation is None:
+            raise ContractValidationError("candidate projection source missing")
+        return observation.to_dict()
+
+    statuses, validations, retained, row_coverage = (collections.Counter() for _ in range(4))
+    labels, row_count, row_hash = {}, 0, hashlib.sha256()
+    with (dest / "rows.partial.jsonl").open("xb") as output:
+        os.fchmod(output.fileno(), 0o600)
+        for unit_id, unit in sorted(units.items()):
+            progress_row = progress.get(unit_id, {})
+            statuses[progress_row.get("status", "not_attempted")] += 1
+            state = progress_row.get("validation_status")
+            if (progress_row.get("status"), state) not in {("annotated", "complete"), ("pending", "partial")}:
+                continue
+            ledger_record = ledgers.get(progress_row["ledger"])
+            if ledger_record is None:
+                raise ContractValidationError("candidate projection ledger missing")
+            ledger = ledger_record.to_dict()
+            value, pins = ledger["value"], ledger["value"]["pins"]
+            if (ledger["extractor_run_id"] != args.run_id
+                    or value["validation_status"] != state or value["annotation_status"] != progress_row["status"]
+                    or pins["source_revision_fingerprint"] != config["source_revision"]
+                    or set(pins["observation_hashes"]) != set(unit["observation_ids"])
+                    or set(pins["focus_observation_ids"]) != set(unit["focus_observation_ids"])):
+                raise ContractValidationError("candidate projection ledger scope changed")
+            sources = {oid: source(unit["store"], oid) for oid in unit["observation_ids"]}
+            if any(sha256_json(o) != pins["observation_hashes"][oid] for oid, o in sources.items()):
+                raise ContractValidationError("candidate projection source changed")
+            members = []
+            for cid, expected in sorted(value["candidate_hashes"].items()):
+                atom = atoms.get(cid)
+                candidate = atom if atom is not None else relations.get(cid)
+                if candidate is None or sha256_json(candidate.to_dict()) != expected:
+                    raise ContractValidationError("candidate projection candidate changed")
+                if atom is None:
+                    continue  # retained relation, not a field assertion
+                data = atom.to_dict()
+                members.append({"atom": data, "ledger": ledger, "unit_id": unit_id, "observations": sources})
+                assertion = data["properties"].get("assertion", {})
+                label = assertion.get("property")
+                key = sha256_json(label)
+                tally = labels.setdefault(key, {"label": label, **mapping.match(label),
+                    "atoms": 0, "null_item_or_row": 0, "by_validation": {}})
+                tally["atoms"] += 1
+                tally["null_item_or_row"] += assertion.get("item_or_row") is None
+                tally["by_validation"][state] = tally["by_validation"].get(state, 0) + 1
+            projected = project_candidate_fact_rows(members, mapping=mapping)
+            validations[state] += 1
+            retained[state] += len(members)
+            row_coverage[state] += len(projected)
+            for row in projected:
+                line = encode(row)
+                output.write(line)
+                row_hash.update(line)
+                row_count += 1
+    (dest / "rows.partial.jsonl").rename(dest / "rows.jsonl")
+    write("labels.jsonl", b"".join(encode(labels[k]) for k in sorted(labels)))
+    manifest = {"artifact_id": "formowl_candidate_fact_export_v1", "review_status": "pending_review",
+        "semantic_correctness_verified": False, "run_id": args.run_id,
+        "source_revision": config["source_revision"], "scope_sha256": scope_hash,
+        "mapping_fingerprint": mapping.fingerprint, "progress_sha256": "sha256:" + hashlib.sha256(prefix).hexdigest(),
+        "ignored_progress_tail_bytes": len(observed) - boundary, "unit_count": len(units),
+        "units_by_status": dict(statuses), "units_by_validation": dict(validations),
+        "retained_atoms_by_validation": dict(retained), "rows_by_validation": dict(row_coverage),
+        "scope_complete": validations["complete"] == len(units), "row_count": row_count,
+        "rows_sha256": "sha256:" + row_hash.hexdigest()}
+    write("manifest.json", encode(manifest))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)  # scope inventories and raw provider outputs may contain private source data
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -743,6 +866,9 @@ def main(argv: list[str] | None = None) -> int:
     report.add_argument("--units", required=True)
     report.add_argument("--output", required=True)
     report.add_argument("--run-id", action="append", required=True)
+    project = commands.add_parser("project", help="private candidate fact rows; no model or canonical writes")
+    for name in ("units", "annotation-output", "run-id", "mapping", "output"):
+        project.add_argument("--" + name, required=True)
     args = parser.parse_args(argv)
     if args.command == "scope":
         return scope_command(args)
@@ -752,6 +878,8 @@ def main(argv: list[str] | None = None) -> int:
         return report_command(args)
     if args.command == "reconcile":
         return reconcile_command(args)
+    if args.command == "project":
+        return project_command(args)
     if args.command == "retry":
         if args.from_run == args.run_id:
             parser.error("a retry needs a NEW run id")

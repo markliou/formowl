@@ -310,5 +310,62 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(report["scope_complete"])
 
 
+class CandidateProjectionCommandTests(unittest.TestCase):
+    def fixture(self):
+        from test_graph_reconciliation import CandidateFactRowTests
+        from formowl_graph.storage import CandidateAtomStore, CandidateRelationStore, SemanticMetadataStore
+        from formowl_ingestion.storage.records import ObservationStore
+        root = _paths.fresh_test_dir("semantic-candidate-projection")
+        members = CandidateFactRowTests().members(partial=True)
+        source, ann = root / "source", root / "annotation"
+        CandidateRelationStore(ann)
+        for member in members:
+            CandidateAtomStore(ann).create(member["atom"])
+        SemanticMetadataStore(ann).create(members[0]["ledger"])
+        for observation in members[0]["observations"].values():
+            ObservationStore(source).create(observation)
+        ledger = members[0]["ledger"]
+        run = ledger["extractor_run_id"]
+        unit = {"unit_id": members[0]["unit_id"], "store": str(source), "kind": "mail",
+                "observation_ids": list(members[0]["observations"]),
+                "focus_observation_ids": ledger["value"]["pins"]["focus_observation_ids"]}
+        scope = (json.dumps(unit) + "\n" + json.dumps({**unit, "unit_id": "unit-failed"}) + "\n").encode()
+        (root / "units").write_bytes(scope)
+        (ann / f"run-{run}.configuration.json").write_text(json.dumps({
+            "units_sha256": "sha256:" + hashlib.sha256(scope).hexdigest(),
+            "source_revision": ledger["value"]["pins"]["source_revision_fingerprint"]}))
+        (ann / "progress.jsonl").write_text(json.dumps({"run": run, "unit": unit["unit_id"],
+            "status": "pending", "validation_status": "partial", "ledger": ledger["semantic_metadata_id"]}) + "\n"
+            + json.dumps({"run": run, "unit": "unit-failed", "status": "failed"}) + "\n" + '{"unfinished":')
+        (root / "mapping").write_text(json.dumps(CandidateFactRowTests.mapping().data))
+        args = SimpleNamespace(units=str(root / "units"), annotation_output=str(ann), run_id=run,
+                               mapping=str(root / "mapping"), output=str(root / "export"))
+        return root, args
+
+    def test_partial_export_uses_complete_prefix_and_never_claims_complete_coverage(self):
+        root, args = self.fixture()
+        with patch("urllib.request.urlopen", side_effect=AssertionError("no model allowed")):
+            self.assertEqual(annotation.project_command(args), 0)
+        result = json.loads((root / "export" / "manifest.json").read_text())
+        self.assertEqual(result["units_by_validation"], {"partial": 1})
+        self.assertEqual(result["row_count"], 1)
+        self.assertFalse(result["scope_complete"])
+        self.assertGreater(result["ignored_progress_tail_bytes"], 0)
+        rows = list(map(json.loads, (root / "export" / "rows.jsonl").read_text().splitlines()))
+        self.assertEqual(rows[0]["unit_validation_status"], "partial")
+        self.assertEqual(set(rows[0]["fields"]), {"asset_code", "ticket_code", "target_date"})
+        self.assertEqual((root / "export" / "rows.jsonl").stat().st_mode & 0o777, 0o600)
+
+    def test_changed_atom_stops_before_publishing_an_export_manifest(self):
+        root, args = self.fixture()
+        atom_file = next((root / "annotation" / "graph" / "candidate-atoms").glob("*.json"))
+        atom = json.loads(atom_file.read_text())
+        atom["properties"]["assertion"]["value"] = "changed"
+        atom_file.write_text(json.dumps(atom))
+        with self.assertRaisesRegex(Exception, "candidate.*changed"):
+            annotation.project_command(args)
+        self.assertFalse((root / "export" / "manifest.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

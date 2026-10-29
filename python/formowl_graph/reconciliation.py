@@ -23,6 +23,9 @@ group; nothing is merged or published.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from copy import deepcopy
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 import json
 import unicodedata
 from typing import Any, Mapping, Sequence
@@ -38,8 +41,9 @@ from formowl_contract import (
     stable_resource_contract_id,
 )
 
-from .candidates import _semantic_spans
+from .candidates import _semantic_spans, _semantic_span_text
 from .local_semantic_reader import Adapter
+from .ontology import CandidatePropertyMapping
 
 PROFILE = "cross_unit_reconciliation_v4"
 RELATION_TYPES = ("same_fact", "updates", "supersedes", "contradicts", "refines")
@@ -64,6 +68,174 @@ evidence 的 quote 必須是該 observation 內一段連續原文，逐字照抄
 
 def _normalize(text: Any) -> str:
     return unicodedata.normalize("NFKC", text).casefold().strip() if isinstance(text, str) else ""
+
+
+def _fact_member_pins(member: Mapping[str, Any]) -> dict:
+    """Revalidate retained candidates against their ledger and immutable sources."""
+    atom, ledger, sources = member["atom"], member["ledger"], member["observations"]
+    value, props = ledger["value"], atom["properties"]
+    pins = value["pins"]
+    if (ledger["metadata_type"] != "source_unit_semantic_read"
+            or (value.get("annotation_status"), value.get("validation_status"))
+            not in {("annotated", "complete"), ("pending", "partial")}
+            or atom.get("status") != "pending_review"
+            or not atom.get("requires_review")
+            or value["candidate_hashes"].get(atom["candidate_atom_id"]) != sha256_json(atom)
+            or props.get("semantic_read_ledger_id") != ledger["semantic_metadata_id"]
+            or atom["source_semantic_metadata_ids"] != [ledger["semantic_metadata_id"]]
+            or props.get("read_pins_fingerprint") != sha256_json(pins)
+            or pins["source_unit_id"] != "su_" + sha256_json(member["unit_id"])[7:39]
+            or sha256_json(props.get("permission_scope")) != pins["permission_scope_fingerprint"]):
+        raise ContractValidationError("candidate fact member has invalid ledger binding")
+    for oid in atom["source_observation_ids"]:
+        source = sources.get(oid)
+        if (source is None or source.get("observation_id") != oid
+                or sha256_json(source) != pins["observation_hashes"].get(oid)
+                or sha256_json(source.get("permission_scope")) != pins["permission_scope_fingerprint"]):
+            raise ContractValidationError("candidate fact source pin changed")
+    spans = props.get("evidence_spans", [])
+    if not spans:
+        raise ContractValidationError("candidate fact evidence is missing")
+    for span in spans:
+        source, text = _semantic_span_text(
+            {k: span.get(k) for k in ("observation_id", "field_path", "quote", "occurrence_index")}, sources)
+        start, end = span.get("start"), span.get("end")
+        if (span["observation_id"] not in atom["source_observation_ids"]
+                or span.get("observation_hash") != sha256_json(source)
+                or span.get("native_locator") != source.get("location")
+                or span.get("source_extractor_run_id") != source.get("extractor_run_id")
+                or type(start) is not int or type(end) is not int or not 0 <= start < end <= len(text)
+                or text[start:end] != span["quote"]):
+            raise ContractValidationError("candidate fact evidence changed")
+    return pins
+
+
+def _fact_outer_mail_date(sources: Mapping[str, dict], pins: Mapping[str, Any]) -> dict:
+    """Only a pinned outer header; unknown/naive dates never acquire a timezone."""
+    evidence, dates = [], set()
+    for oid, source in sources.items():
+        payload = source.get("payload") or {}
+        if (source.get("observation_type") != "email_header"
+                or str(payload.get("header_name", "")).casefold() != "date"):
+            continue
+        if (sha256_json(source) != pins["observation_hashes"].get(oid)
+                or sha256_json(source.get("permission_scope")) != pins["permission_scope_fingerprint"]):
+            raise ContractValidationError("candidate fact header pin changed")
+        raw = payload.get("header_value")
+        evidence.append({"observation_id": oid, "observation_hash": sha256_json(source),
+                         "field_path": ["payload", "header_value"], "quote": raw,
+                         "native_locator": deepcopy(source["location"])})
+        try:
+            date = parsedate_to_datetime(raw)
+            dates.add(date.astimezone(timezone.utc).isoformat() if date.utcoffset() is not None else None)
+        except (ValueError, TypeError, OverflowError):
+            dates.add(None)
+    known = len(dates) == 1 and None not in dates
+    return {"value": next(iter(dates)) if known else None, "evidence": evidence,
+            "status": "verified" if known else "ambiguous" if len(dates) > 1 else "unavailable"}
+
+
+def _inherit_document_headers(rows: Sequence[dict], properties: Sequence[str]) -> None:
+    """Only explicitly configured, unique header values in this exact source unit.
+
+    Singleton header rows remain intact. Inherited fields retain every original
+    atom/evidence record; conflicts neither fill nor overwrite detail fields.
+    """
+    def document_key(row):
+        return tuple(row[k] for k in ("unit_id", "source_unit_id", "source_revision_fingerprint",
+                                       "permission_scope_fingerprint"))
+
+    def value_key(field):
+        return sha256_json([field["value"], field["unit"], field["qualifiers"]])
+
+    headers: dict[tuple, dict[str, list[dict]]] = {}
+    for row in rows:
+        if row["item_or_row"] is not None:
+            continue
+        for prop in properties:
+            fields = [f for f in row["fields"].get(prop, []) if f["value"] is not None]
+            headers.setdefault(document_key(row), {}).setdefault(prop, []).extend(fields)
+    for row in rows:
+        if row["item_or_row"] is None:
+            continue
+        for prop, fields in headers.get(document_key(row), {}).items():
+            if not fields:
+                continue
+            values = {value_key(f) for f in fields}
+            local = row["fields"].get(prop, [])
+            if len(values) != 1 or local and {value_key(f) for f in local} != values:
+                row.setdefault("document_header_conflicts", {})[prop] = sorted(
+                    {f["candidate_atom_id"] for f in [*fields, *local]})
+            elif not local:
+                row["fields"][prop] = [{**deepcopy(f), "inherited_from_document_header": True} for f in fields]
+
+
+def project_candidate_fact_rows(members: Sequence[Mapping[str, Any]], *,
+                                mapping: CandidatePropertyMapping) -> list[dict[str, Any]]:
+    """Candidate-only, deterministic same-unit/explicit-row projection.
+
+    Null row identifiers are singletons. Values and conflicts are retained;
+    identity candidates never merge records or grant access. No domain fields
+    are implicit: both aliases and identity keys come from governance data.
+    """
+    rows: dict[str, dict] = {}
+    for member in members:
+        pins = _fact_member_pins(member)
+        atom, ledger = member["atom"], member["ledger"]
+        props = atom["properties"]
+        assertion = props["assertion"]
+        match = mapping.match(assertion.get("property"))
+        if match["status"] != "candidate":
+            continue
+        item = assertion.get("item_or_row")
+        scope = {k: pins[k] for k in ("source_revision_fingerprint", "permission_scope_fingerprint")}
+        row_key = {**scope, "unit_id": member["unit_id"], "source_unit_id": pins["source_unit_id"],
+                   "item_or_row": item, "singleton": atom["candidate_atom_id"] if item is None else None,
+                   "mapping_fingerprint": mapping.fingerprint}
+        rid = "factrow_" + sha256_json(row_key)[7:]
+        row = rows.setdefault(rid, {
+            "artifact_id": "formowl_candidate_fact_row_v1", "row_id": rid, **row_key,
+            "review_status": "pending_review", "semantic_correctness_verified": False,
+            "unit_validation_status": ledger["value"]["validation_status"],
+            "outer_mail_date": _fact_outer_mail_date(member["observations"], pins),
+            "fields": {}, "conflicting_properties": [], "identity_candidates": []})
+        field = {k: deepcopy(assertion.get(k)) for k in ("value", "unit", "target", "event_type", "state", "actor")}
+        field.update(raw_property=assertion.get("property"), qualifiers=match["qualifiers"],
+                     candidate_atom_id=atom["candidate_atom_id"], candidate_atom_hash=sha256_json(atom),
+                     ledger_id=ledger["semantic_metadata_id"], ledger_hash=sha256_json(ledger),
+                     unit_validation_status=ledger["value"]["validation_status"],
+                     times=deepcopy(props.get("times", [])), evidence_spans=deepcopy(props["evidence_spans"]))
+        row["fields"].setdefault(match["property_id"], []).append(field)
+    _inherit_document_headers(list(rows.values()), mapping.data.get("document_level_properties", []))
+    for row in rows.values():
+        for prop, fields in row["fields"].items():
+            fields.sort(key=lambda f: f["candidate_atom_id"])
+            by_qualifier: dict[str, set[str]] = {}
+            for f in fields:
+                by_qualifier.setdefault(sha256_json(f["qualifiers"]), set()).add(sha256_json([f["value"], f["unit"]]))
+            if any(len(values) > 1 for values in by_qualifier.values()):
+                row["conflicting_properties"].append(prop)
+        row["conflicting_properties"].sort()
+        if row["item_or_row"] is None:
+            continue
+        for group in mapping.data.get("identity_groups", []):
+            identity = {}
+            for prop in group["properties"]:
+                if prop in row.get("document_header_conflicts", {}):
+                    break
+                # Unlike property-label folding, identity values retain punctuation
+                # and leading zeros. No fuzzy or substring identity matching.
+                values = {" ".join(_normalize(f["value"]).split()) for f in row["fields"].get(prop, [])}
+                if len(values) != 1 or not next(iter(values)):
+                    break
+                identity[prop] = next(iter(values))
+            else:
+                key = {k: row[k] for k in ("source_revision_fingerprint", "permission_scope_fingerprint",
+                                            "mapping_fingerprint")}
+                key.update(group=group["name"], values=identity)
+                row["identity_candidates"].append({"candidate_identity_id": "factid_" + sha256_json(key)[7:],
+                                                    **key, "review_status": "pending_review"})
+    return [rows[key] for key in sorted(rows)]
 
 
 def _contains_value_as_independent_word(quote: Any, value: Any) -> bool:
