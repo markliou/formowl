@@ -1560,15 +1560,28 @@ def _bounded_mail_header_groups(items, *, limit, byte_limit=16 * 1024):
 
 
 def _ordinary_presentation_unit(item):
-    """Only independent text and plain mail's own header; no native/neighbor chain."""
+    """Already-validated text with its own parent/header; no native/neighbor chain."""
     context = item.get("source_context", {})
     if context.get("annotation_pin"):
         context = {key: value for key, value in context.items()
                    if key not in {"annotation_pin", "candidate_ids", "exact_field_proof"}}
-    if context and (context.get("relationship") != "outer_message_header"
-                    or any(key.startswith("parent_attachment") for key in context)):
+    attachment = (item.get("source_type") == "mail_attachment_text"
+                  and item.get("attachment_locator", {}).get("block_type") in {"heading", "paragraph"}
+                  and context.get("relationship") == "attachment_parent")
+    if context and context.get("relationship") != "outer_message_header" and not attachment:
         return False
-    if (item.get("source_type") not in {"mail_body_segment", "mail_message", "mail_header"}
+    if attachment or any(key.startswith("parent_attachment") for key in context):
+        # Source projection already checked the parent/child hash, lineage and
+        # permission. Keep those bindings intact through the same whole-unit
+        # reservoir and envelope check, including the expanded outer header.
+        if not all(context.get(key) for key in (
+            "parent_attachment_observation_id", "parent_attachment_observation_hash",
+        )):
+            return False
+        if attachment and (item["attachment_locator"].get("parent_attachment_observation_id")
+                           != context["parent_attachment_observation_id"]):
+            return False
+    if (not attachment and item.get("source_type") not in {"mail_body_segment", "mail_message", "mail_header"}
             and item.get("document_locator", {}).get("block_type") not in {"heading", "paragraph"}):
         return False
     header = item.get("_mail_parent_header")

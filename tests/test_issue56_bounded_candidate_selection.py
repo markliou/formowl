@@ -1,6 +1,7 @@
 """Synthetic candidate selection at the existing source presentation boundary."""
 
 from copy import deepcopy
+from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
@@ -9,15 +10,136 @@ import unittest
 from unittest.mock import patch
 
 import _paths  # noqa: F401
-from formowl_contract import sha256_json
+from formowl_contract import ContractValidationError, sha256_json
 from formowl_gateway import issue56_sealed_source_loader as loader
 from formowl_mail.human_uat_orchestrator import compact_evidence_for_model, evidence_citation_ids
 from formowl_mail.issue56_sealed_source import load_issue56_ingestion_revision
 from formowl_retrieval.gateway import _SourcePhaseTrace, _source_phase_trace_scope
 from test_issue56_uat_handler_composition import _source_start_preparation_fixture
+import test_issue56_uat_handler_composition as source_fixture
 
 
 class BoundedCandidateSelectionTests(unittest.TestCase):
+    @staticmethod
+    def attachment_source(root, *, oversized=False):
+        # Fill the synthetic extractor's inventory identity before ingestion
+        # writes/seals it. The text parser and source guards remain real.
+        run = source_fixture.run_ingestion_job
+        def ingest(**kwargs):
+            adapter = kwargs["extractor_adapters"][0]
+            extract = adapter.extract
+            def bound_parent(extraction_input):
+                result = extract(extraction_input)
+                message = next(item for item in result.observations if item.observation_type == "email_message")
+                result.observations[:] = [
+                    replace(item, payload={**item.payload,
+                                           "source_inventory_item_id": "synthetic-native-table",
+                                           "message_fingerprint": message.payload["message_fingerprint"]})
+                    if item.observation_type == "email_attachment_occurrence" else item
+                    for item in result.observations
+                ]
+                return result
+            with patch.object(adapter, "extract", side_effect=bound_parent):
+                return run(**kwargs)
+        text = "Clienta release date 2036-02-03." + (" quartz" * 2600 if oversized else "")
+        with patch.object(source_fixture, "run_ingestion_job", side_effect=ingest):
+            fixture = _source_start_preparation_fixture(
+                root, families=("mail",), mail_text="Clienta request is pending.",
+                attachment_content=(text.encode(), "text/plain"),
+            )
+        revision = load_issue56_ingestion_revision(fixture.directory, expected_revision_sha256=fixture.preparation_sha256)
+        handler = loader._build_source_start_semantic_handler(revision, mail_tool=False)
+        arguments = {"query_text": "Find Clienta release date", "required_terms": ["clienta"], "page_size": 2,
+                     "requester_user_id": loader.APPROVER_ACTOR, "workspace_id": loader.WORKSPACE_ID,
+                     "session_id": "synthetic-attachment-retention", "request_contract": {
+                         "original_query_hash": sha256_json("Find Clienta release date"),
+                         "query_class": "evidence_lookup", "source_family_scope": ["mail"],
+                         "requested_fields": ["release date"], "maximum_claim_strength": "cited_evidence"}}
+        child = next(item for item in fixture.observations if item.observation_type == "paragraph")
+        parent = next(item for item in fixture.observations if item.observation_type == "email_attachment_occurrence")
+        return fixture, revision, handler, arguments, child, parent
+
+    def test_attachment_overflow_replaces_earlier_body_as_one_bound_parent_unit_without_reread(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, revision, handler, arguments, child, parent = self.attachment_source(Path(directory))
+            target_hash = sha256_json(child.to_dict())
+            body = next(item for item in fixture.observations if item.observation_type == "email_body_segment")
+            trace = _SourcePhaseTrace({})
+            original_scan = revision.source_records.scan_authorized_observations
+            seen = []
+            def scan(**kwargs):
+                callback = kwargs["observation_callback"]
+                def observe(item, scope):
+                    seen.append(item.observation_id)
+                    return callback(item, scope)
+                return original_scan(**{**kwargs, "observation_callback": observe})
+            with (patch.object(revision.source_records, "scan_authorized_observations", side_effect=scan) as scans,
+                  patch.object(loader.time, "monotonic", return_value=time.monotonic()), _source_phase_trace_scope(trace)):
+                result = handler(arguments)
+            events = json.loads(trace.snapshot())["details"]
+            self.assertTrue(any(x.get("name") == "admitted" and x.get("observation_hash") == sha256_json(body.to_dict()) for x in events))
+            self.assertTrue(any(x.get("name") == "context_limit" and x.get("observation_hash") == target_hash for x in events))
+            self.assertEqual(scans.call_count, 1)
+            self.assertEqual(seen.count(child.observation_id), 1)
+            self.assertIn(target_hash, result["citations"])
+            self.assertNotIn(sha256_json(body.to_dict()), result["citations"])
+            evidence = result["evidence"]
+            self.assertEqual(len(evidence), 2)
+            paragraph = next(item for item in evidence if item["citation_hash"] == target_hash)
+            header = next(item for item in evidence if item["citation_hash"] == paragraph["mail_header_citation_hash"])
+            self.assertEqual(paragraph["snippet"], child.text)
+            self.assertEqual(paragraph["source_context"]["parent_attachment_observation_hash"], sha256_json(parent.to_dict()))
+            self.assertEqual(header["source_context"]["parent_attachment_observation_hash"], sha256_json(parent.to_dict()))
+            self.assertEqual(header["source_context"]["anchor_citation_hash"], target_hash)
+            self.assertEqual(header["message_occurrence_id"], paragraph["message_occurrence_id"])
+            self.assertEqual(paragraph["occurrence_lineage_fingerprint"], loader._attachment_child_lineages(
+                {child.observation_id: child, parent.observation_id: parent})[child.observation_id].lineage_fingerprint)
+            self.assertEqual(set(evidence_citation_ids(result)), set(evidence_citation_ids(compact_evidence_for_model(result))))
+            self.assertTrue(result["presentation_truncated"])
+            self.assertEqual(result["coverage"]["status"], "incomplete")
+
+    def test_attachment_reservoir_does_not_publish_missing_parent_or_invalid_child_lineage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, revision, handler, arguments, child, _ = self.attachment_source(Path(directory))
+            target_hash = sha256_json(child.to_dict())
+            original_scan = revision.source_records.scan_authorized_observations
+            def missing_parent(**kwargs):
+                callback = kwargs["observation_callback"]
+                def observe(item, scope):
+                    if item.observation_type == "email_attachment_occurrence":
+                        return True
+                    return callback(item, scope)
+                return original_scan(**{**kwargs, "observation_callback": observe})
+            with (patch.object(revision.source_records, "scan_authorized_observations", side_effect=missing_parent),
+                  patch.object(loader.time, "monotonic", return_value=time.monotonic())):
+                result = handler(arguments)
+            self.assertNotIn(target_hash, result["citations"])
+            # Fault-inject after hydration so this checks the projection's real
+            # lineage guard independently of the earlier sealed-hash guard.
+            original_scan = revision.source_records.scan_authorized_observations
+            def broken_lineage(**kwargs):
+                callback = kwargs["observation_callback"]
+                def observe(item, scope):
+                    if item.observation_id == child.observation_id:
+                        item = replace(item, payload={**item.payload, "lineage": {
+                            **item.payload["lineage"], "parent_asset_id": "asset_synthetic_mismatch"}})
+                    return callback(item, scope)
+                return original_scan(**{**kwargs, "observation_callback": observe})
+            with (patch.object(revision.source_records, "scan_authorized_observations", side_effect=broken_lineage),
+                  patch.object(loader.time, "monotonic", return_value=time.monotonic())):
+                with self.assertRaisesRegex(ContractValidationError, "attachment text source hash/parent binding"):
+                    handler(arguments)
+
+    def test_attachment_reservoir_keeps_original_when_complete_attachment_cannot_fit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, _, handler, arguments, child, _ = self.attachment_source(Path(directory), oversized=True)
+            self.assertGreater(len(child.text.encode()), 16384)
+            with patch.object(loader.time, "monotonic", return_value=time.monotonic()):
+                result = handler(arguments)
+            self.assertNotIn(sha256_json(child.to_dict()), result["citations"])
+            body = next(item for item in fixture.observations if item.observation_type == "email_body_segment")
+            self.assertIn(sha256_json(body.to_dict()), result["citations"])
+
     @staticmethod
     def mail(name, text, *, message="quoted-message", order="REQ-104"):
         body_hash, header_hash = (sha256_json(name + suffix) for suffix in ("-body", "-header"))
