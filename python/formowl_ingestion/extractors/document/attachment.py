@@ -100,7 +100,7 @@ class AttachmentDocumentExtractor:
         return "attachment_document_parser"
 
     def version(self) -> str:
-        return "0.7.4"
+        return "0.7.5"
 
     def supported_mime_types(self) -> list[str]:
         # run_extractor uses this as a routing admission check for every child
@@ -1519,9 +1519,25 @@ def _pdf_content_impl(data: bytes, *, config: dict[str, Any]) -> _ParsedContent:
     for page_index in range(1, admitted_pages + 1):
         page = pages[page_index - 1]
         try:
-            text = page.extract_text(
-                extraction_mode="layout", layout_mode_space_vertically=False,
-            ) or ""
+            try:
+                text = page.extract_text(
+                    extraction_mode="layout", layout_mode_space_vertically=False,
+                ) or ""
+            except Exception:
+                text = None
+            try:
+                plain = page.extract_text() or ""
+            except Exception:
+                if text is None:
+                    raise  # Both modes failed; retain the existing page failure path.
+                plain = ""
+            mode = "layout"
+            # Layout can omit rotated text. Ignore layout padding when checking
+            # for substantial loss; retain the page's plain text in that case.
+            if text is None or 2 * sum(not char.isspace() for char in text) < sum(
+                not char.isspace() for char in plain
+            ):
+                text, mode = plain, "plain_fallback"
         except Exception as exc:
             # One unreadable page must not discard the others; only a file with
             # no readable page at all is a failed extraction.
@@ -1539,6 +1555,7 @@ def _pdf_content_impl(data: bytes, *, config: dict[str, Any]) -> _ParsedContent:
                         "page": page_index,
                         "block_index": 1,
                         "page_text_status": "extracted",
+                        "page_text_mode": mode,
                     },
                     payload={"source_format": "pdf", "native_text": True},
                 )

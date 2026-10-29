@@ -5,7 +5,7 @@ import hashlib
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 from zipfile import ZipFile
 
 import _paths  # noqa: F401
@@ -270,7 +270,56 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
                  ["2", "ZX-743.B", "4", "Pcs", "2030-05-12"]],
             ],
         )
-        self.assertEqual(result.extractor_run.extractor_version, "0.7.4")
+        self.assertEqual([o.location["page_text_mode"] for o in result.observations],
+                         ["layout", "layout"])
+        self.assertEqual(result.extractor_run.extractor_version, "0.7.5")
+
+    def test_pdf_falls_back_to_plain_per_page_for_rotated_text(self) -> None:
+        content = _positioned_pdf_bytes([
+            [(20, 740, "Part"), (200, 740, "ZX-815")],
+            [(20, 100, "Clienta rotated item ZX-816 /synthetic/private-note.txt")],
+        ], rotated_pages={2})
+        result = self._run_registered(content, "application/pdf", "rotated.pdf")
+        self.assertEqual(result.extractor_run.status, "succeeded")
+        self.assertEqual(len(result.observations), 2)
+        first, rotated = result.observations
+        self.assertEqual(first.text.split(), ["Part", "ZX-815"])
+        self.assertEqual(first.location["page_text_mode"], "layout")
+        self.assertEqual(rotated.text, "Clienta rotated item ZX-816 [redacted_path]")
+        self.assertEqual(rotated.location["page"], 2)
+        self.assertEqual(rotated.location["page_text_mode"], "plain_fallback")
+        self.assertEqual(rotated.location["page_text_status"], "extracted")
+        self.assertNotIn("/synthetic/private-note.txt", str(rotated.to_dict()))
+        self.assertNotIn("attachment_document_pdf_page_text_unavailable",
+                         result.extractor_run.warnings)
+
+    def test_pdf_plain_fallback_counts_nonwhitespace_and_keeps_half_boundary(self) -> None:
+        pages = [Mock(), Mock(), Mock()]
+        # Padding cannot hide lost characters; exactly half still keeps layout.
+        pairs = [(" \t\u2003ab", "a b c d e"), (" \nab", "a b c d"),
+                 (" \t\n", "Empty layout recovered")]
+        for page, (layout, plain) in zip(pages, pairs, strict=True):
+            page.extract_text.side_effect = lambda *, extraction_mode="plain", _l=layout, _p=plain, **kwargs: (
+                _l if extraction_mode == "layout" else _p)
+        with patch("pypdf.PdfReader", return_value=Mock(pages=pages, is_encrypted=False)):
+            result = self._extract(b"%PDF-1.4", mime_type="application/pdf", filename="threshold.pdf")
+        self.assertFalse(result.errors)
+        self.assertEqual([o.text for o in result.observations],
+                         ["a b c d e", "ab", "Empty layout recovered"])
+        self.assertEqual([o.location["page_text_mode"] for o in result.observations],
+                         ["plain_fallback", "layout", "plain_fallback"])
+
+    def test_pdf_keeps_readable_mode_when_the_other_mode_raises(self) -> None:
+        pages = [Mock(), Mock()]
+        pages[0].extract_text.side_effect = [ValueError("fictional layout failure"), "Recovered plain"]
+        pages[1].extract_text.side_effect = ["Kept layout", ValueError("fictional plain failure")]
+        with patch("pypdf.PdfReader", return_value=Mock(pages=pages, is_encrypted=False)):
+            result = self._extract(b"%PDF-1.4", mime_type="application/pdf", filename="modes.pdf")
+        self.assertFalse(result.errors)
+        self.assertEqual([o.text for o in result.observations], ["Recovered plain", "Kept layout"])
+        self.assertEqual([o.location["page_text_mode"] for o in result.observations],
+                         ["plain_fallback", "layout"])
+        self.assertNotIn("attachment_document_pdf_page_text_extract_failed", result.warnings)
 
     def test_native_pdf_and_independent_utf8_preserve_safe_text_around_redacted_spans(self) -> None:
         pdf_text = "SYN-LEFT Qty 23.75 / / Grade B SYN-RIGHT"
@@ -302,10 +351,10 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
                     extracted_value=observation.extracted_value,
                 ))
                 assert_no_public_raw_references(observation.to_dict())
-                self.assertEqual(AttachmentDocumentExtractor().version(), "0.7.4")
-                self.assertEqual(result.extractor_run.extractor_version, "0.7.4")
+                self.assertEqual(AttachmentDocumentExtractor().version(), "0.7.5")
+                self.assertEqual(result.extractor_run.extractor_version, "0.7.5")
 
-    def test_pdf_reads_only_admitted_pages_once(self) -> None:
+    def test_pdf_reads_both_modes_only_for_admitted_pages(self) -> None:
         pages = [Mock(), Mock()]
         pages[0].extract_text.return_value = "Page one"
         pages[1].extract_text.side_effect = AssertionError("page beyond cap was read")
@@ -317,9 +366,9 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
                 config={"attachment_max_pages": 1},
             )
         self.assertFalse(result.errors)
-        pages[0].extract_text.assert_called_once_with(
-            extraction_mode="layout", layout_mode_space_vertically=False,
-        )
+        self.assertEqual(pages[0].extract_text.call_args_list, [
+            call(extraction_mode="layout", layout_mode_space_vertically=False), call(),
+        ])
         pages[1].extract_text.assert_not_called()
         self.assertIn("attachment_document_page_limit_reached", result.warnings)
 
@@ -603,7 +652,9 @@ def _xlsx_package(sheet: str, styles: str) -> bytes:
     return output.getvalue()
 
 
-def _positioned_pdf_bytes(pages: list[list[tuple[int, int, str]]]) -> bytes:
+def _positioned_pdf_bytes(
+    pages: list[list[tuple[int, int, str]]], *, rotated_pages: set[int] | None = None,
+) -> bytes:
     from pypdf import PdfWriter
     from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
@@ -613,14 +664,15 @@ def _positioned_pdf_bytes(pages: list[list[tuple[int, int, str]]]) -> bytes:
         NameObject("/Subtype"): NameObject("/Type1"),
         NameObject("/BaseFont"): NameObject("/Helvetica"),
     }))
-    for positions in pages:
+    for page_index, positions in enumerate(pages, 1):
         page = writer.add_blank_page(width=612, height=792)
         page[NameObject("/Resources")] = DictionaryObject({
             NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
         })
         stream = DecodedStreamObject()
+        matrix = "0 1 -1 0" if page_index in (rotated_pages or ()) else "1 0 0 1"
         stream.set_data("\n".join(
-            f"BT /F1 10 Tf 1 0 0 1 {x} {y} Tm ({text}) Tj ET"
+            f"BT /F1 10 Tf {matrix} {x} {y} Tm ({text}) Tj ET"
             for x, y, text in positions
         ).encode("ascii"))
         page[NameObject("/Contents")] = writer._add_object(stream)
