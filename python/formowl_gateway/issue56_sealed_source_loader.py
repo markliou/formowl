@@ -1582,6 +1582,62 @@ def _soft_unit_utility(hits):
     return len({field for field, _ in hits}), len(hits)
 
 
+def _presentation_duplicate_key(item):
+    # Equal words alone do not identify the same business event. Require the
+    # validated canonical mail identity as well as identical body/header text;
+    # occurrences remain separate and the retained copy keeps its own provenance.
+    if (not _ordinary_presentation_unit(item) or item.get("source_type") != "mail_body_segment"
+            or not item.get("email_message_id") or not item.get("snippet")):
+        return None
+    return sha256_json([item["email_message_id"], item.get("source_scope_fingerprint"),
+                        item.get("revision_binding"), item["snippet"],
+                        item.get("_mail_parent_header", {}).get("snippet")])
+
+
+def _presentation_row_values(item, fields):
+    cells = item.get("table_row", {}).get("cells", ())
+    if not fields or not cells or item.get("content_redacted"):
+        return None
+    values = {}
+    for cell in cells:
+        field = cell.get("field")
+        if (not isinstance(field, str) or field in values or "value" not in cell
+                or cell.get("source_proven_field_schema") is not True
+                or cell.get("field_truncated") or cell.get("value_truncated")
+                or cell.get("content_redacted")):
+            return None
+        # A rendered value also makes a cell nonempty (for example a formula).
+        values[field] = cell.get("value")
+        if values[field] in (None, "") and cell.get("display_value") not in (None, ""):
+            values[field] = cell["display_value"]
+    if not set(fields).issubset(values):
+        return None
+    identity = {field: value for field, value in values.items() if field not in fields}
+    if not identity or not any(value not in (None, "") for value in identity.values()):
+        return None
+    return identity, tuple(values[field] for field in fields)
+
+
+def _presentation_replaceable_indices(items, incoming, fields):
+    """Only source-proved redundancy/blankness; never a query-word score."""
+    incoming_key = _presentation_duplicate_key(incoming)
+    incoming_row = _presentation_row_values(incoming, fields)
+    seen = set()
+    replaceable = []
+    for index, item in enumerate(items):
+        key = _presentation_duplicate_key(item)
+        if key is not None:
+            if key in seen and key != incoming_key:
+                replaceable.append(index)
+            seen.add(key)
+        row = _presentation_row_values(item, fields)
+        if (row is not None and incoming_row is not None and row[0] == incoming_row[0]
+                and all(value in (None, "") for value in row[1])
+                and any(value not in (None, "") for value in incoming_row[1])):
+            replaceable.append(index)
+    return sorted(set(replaceable), reverse=True)
+
+
 def _admit_source_model_envelope(payload, *, staged_items, limit, deadline, deferred_items=(),
                                  selection_hits=None, overflow_hashes=()):
     """Re-admit cached validated units against the unchanged complete presentation."""
@@ -1637,9 +1693,7 @@ def _admit_source_model_envelope(payload, *, staged_items, limit, deadline, defe
         _ordinary_presentation_unit(item)
         for item in (*staged_items, *deferred_items, *payload.get(content_key, ()))
     ))
-    # Overflow-only units must never slip into the legacy append-only suffix.
     cached_candidates = deferred_items
-    deferred_items = tuple(item for item in deferred_items if item["citation_hash"] not in overflow)
     if payload_fits and not deferred_items and not reselect:
         return observed(payload)
     # Selection repairs only a proved full-envelope byte loss, not existing
@@ -1660,6 +1714,8 @@ def _admit_source_model_envelope(payload, *, staged_items, limit, deadline, defe
         result["status"] = "partial" if evidence else "pending_review"
         if truncated:
             result["presentation_truncated"] = True
+            if isinstance(result.get("coverage"), dict):
+                result["coverage"] = {**result["coverage"], "status": "incomplete"}
         if truncated and "warnings" in result:
             result["warnings"] = sorted(set((*result["warnings"], "context_limit")))
         agent = dict(result.get("query_agent", {}))
@@ -1758,26 +1814,51 @@ def _admit_source_model_envelope(payload, *, staged_items, limit, deadline, defe
         old_hits = set().union(*(selection_hits.get(item["citation_hash"], set())
                                 for item in selected.get(content_key, ())))
         if time.monotonic() < deadline and _soft_unit_utility(covered) > _soft_unit_utility(old_hits):
-            return observed(proposal)
+            selected = proposal
     # Only the caller can supply same-turn, pre-deadline validated cache units.
     # This is final presentation, not a callback/replay or a new source budget.
     content = list(selected.get(content_key, ()))
     seen = {item["citation_hash"] for item in content}
-    for item in deferred_items[:max(0, 128 - len(staged_items))]:
+    fields = payload.get("query_agent", {}).get("request_contract", {}).get(
+        "requested_fields", payload.get("requested_field_coverage", {}).get("requested_fields", ()))
+    # Full-envelope loss can omit an already-staged unit too. Count distinct
+    # references once; a deferred prefix replayed into staging must not consume
+    # the suffix's remaining candidate slots a second time.
+    pending = {}
+    for item in (*staged_items, *cached_candidates) if byte_loss else cached_candidates:
+        if item["citation_hash"] not in pending and len(pending) < 128:
+            pending[item["citation_hash"]] = item
+    for item in pending.values():
         if time.monotonic() >= deadline:
             break
         if item["citation_hash"] in seen:
             continue
         records, truncated = _bounded_mail_header_groups([*content, item], limit=limit)
-        if truncated:
-            continue
         candidate = compose(records, truncated=byte_loss)
-        accepted = fits(candidate)
+        accepted = not truncated and fits(candidate)
+        if not accepted:
+            # Reconstruct only the already-presented whole units. Dependencies
+            # remain in the proposal: fits rejects any orphan if its anchor is
+            # removed, so unique neighbor evidence cannot be silently dropped.
+            units = list({entry["citation_hash"]: entry for entry in (*staged_items, *cached_candidates)
+                          if entry["citation_hash"] in seen}.values())
+            original, original_truncated = _bounded_mail_header_groups(units, limit=limit)
+            if (not original_truncated and Counter(json.dumps(entry, sort_keys=True) for entry in original)
+                    == Counter(json.dumps(entry, sort_keys=True) for entry in content)):
+                for index in _presentation_replaceable_indices(units, item, fields):
+                    if time.monotonic() >= deadline:
+                        break
+                    units.pop(index)
+                    records, truncated = _bounded_mail_header_groups([*units, item], limit=limit)
+                    candidate = compose(records)
+                    accepted = not truncated and fits(candidate)
+                    if accepted:
+                        break
         if time.monotonic() >= deadline:
             break
         if accepted:
             content = records
-            seen.update(record["citation_hash"] for record in records)
+            seen = {record["citation_hash"] for record in records}
             selected = candidate
     return observed(selected)
 
@@ -2679,12 +2760,15 @@ def _build_source_start_semantic_handler(
                    predicate_rejected_count=annotation_hint_counts["predicate_rejected"],
                    admitted_candidate_count=len(admitted_hashes.intersection(annotation_identity_hints)))
 
-        def cache_overflow(item):
+        def cache_overflow(item, *, overflow=True):
             # This seam receives a fully guarded/projected unit, never a source ref.
-            if (date_priority or auto_exact or deferred or not field_terms or not _ordinary_presentation_unit(item)
+            if (date_priority or auto_exact or not requested_fields
+                    or (overflow and not _ordinary_presentation_unit(item)
+                        and _presentation_row_values(item, requested_fields) is None)
                     or time.monotonic() >= source_budget["deadline"]):
                 return
-            units = {entry["citation_hash"]: entry for entry in (*admitted_items, *presentation_cache)}
+            units = {entry["citation_hash"]: entry
+                     for entry in (*admitted_items, *(entry[2] for entry in deferred), *presentation_cache)}
             if item["citation_hash"] not in units and len(units) >= 128:
                 return
             standalone, truncated = _bounded_mail_header_groups([item], limit=limit)
@@ -2692,7 +2776,7 @@ def _build_source_start_semantic_handler(
                 return
             for entry in (*admitted_items, *presentation_cache, item):
                 key = entry["citation_hash"]
-                if key not in selection_hits:
+                if key not in selection_hits and _ordinary_presentation_unit(entry):
                     if time.monotonic() >= source_budget["deadline"]:
                         return
                     words = set(tokenizer.analyze(entry.get("snippet", "")).tokens)
@@ -2705,17 +2789,30 @@ def _build_source_start_semantic_handler(
             covered = set().union(*(selection_hits.get(entry["citation_hash"], set()) for entry in admitted_items))
             while pool and time.monotonic() < source_budget["deadline"]:
                 best = max(range(len(pool)), key=lambda i: _soft_unit_utility(
-                    selection_hits[pool[i]["citation_hash"]] - covered,
+                    selection_hits.get(pool[i]["citation_hash"], set()) - covered,
                 ))
                 entry = pool.pop(best)
                 records, truncated = _bounded_mail_header_groups([*kept, entry], limit=limit)
                 if (not truncated and len(records) <= limit
                         and len(json.dumps(records, ensure_ascii=False).encode("utf-8")) <= 16 * 1024):
                     kept.append(entry)
-                    covered.update(selection_hits[entry["citation_hash"]])
+                    covered.update(selection_hits.get(entry["citation_hash"], ()))
+            if item["citation_hash"] not in {entry["citation_hash"] for entry in kept}:
+                # This is the existing byte-bounded reservoir, not publication.
+                # Keep whole alternative units; only final full-envelope fits
+                # below can grant presentation. No source is hydrated again.
+                trial = list(kept)
+                for index in _presentation_replaceable_indices(trial, item, requested_fields):
+                    trial.pop(index)
+                    records, truncated = _bounded_mail_header_groups([*trial, item], limit=limit)
+                    if (not truncated and len(records) <= limit
+                            and len(json.dumps(records, ensure_ascii=False).encode("utf-8")) <= 16 * 1024):
+                        kept = [*trial, item]
+                        break
             if time.monotonic() < source_budget["deadline"]:
                 presentation_cache[:] = kept
-                overflow_hashes.add(item["citation_hash"])
+                if overflow:
+                    overflow_hashes.add(item["citation_hash"])
             retained = {entry["citation_hash"] for entry in (*admitted_items, *presentation_cache)}
             overflow_hashes.intersection_update(retained)
             for key in tuple(selection_hits):
@@ -2776,6 +2873,7 @@ def _build_source_start_semantic_handler(
                             or len(json.dumps(buffered, ensure_ascii=False).encode("utf-8"))
                             > 16 * 1024 - source_budget["context_bytes"]):
                         context_limit_reached = True
+                        cache_overflow(item)
                         _trace(trace, "decision", "context_limit", observation_hash)
                     else:
                         deferred_selector = (item.get("mail_import_session_id")
@@ -2784,12 +2882,7 @@ def _build_source_start_semantic_handler(
                         deferred.append((observation, scope_id, item, active_family, deferred_selector))
                         if (not auto_exact and active_family in {"mail", "document_text"}
                                 and time.monotonic() < source_budget["deadline"]):
-                            # Original reservation cache wins; never evict it for new overflow.
-                            if overflow_hashes:
-                                presentation_cache.clear()
-                                overflow_hashes.clear()
-                                selection_hits.clear()
-                            presentation_cache.append(item)
+                            cache_overflow(item, overflow=False)
                         deferred_hashes.add(observation_hash)
                         _trace(trace, "decision", "deferred", observation_hash)
                     # Later selectors/candidates in this family cannot overtake
@@ -4161,8 +4254,8 @@ def _build_source_start_semantic_handler(
         presentation_deferred = (
             tuple(presentation_cache)
             if query_class == "evidence_lookup" and not auto_exact
-            and double_check.scan is not None and double_check.scan.stop_reason == "deadline"
-            and not double_check.scan.complete and time.monotonic() < presentation_deadline
+            and double_check.scan is not None and not date_priority
+            and time.monotonic() < presentation_deadline
             else ()
         )
         if overflow_hashes and double_check.scan is not None and time.monotonic() < presentation_deadline:
