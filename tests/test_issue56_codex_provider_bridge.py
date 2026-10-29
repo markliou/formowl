@@ -422,7 +422,74 @@ class _RecordingTransport:
         return None
 
 
+
+def _use_short_citation_fixtures(case):
+    """Adapt legacy canonical-ID stub drafts, never the actual parser/validator.
+
+    New wire-contract tests below do not use this adapter: their fake model
+    copies the handle directly from the real tool output.
+    """
+    case.wire_ids = {}
+    present = orchestrator._TurnCitationPresentation.present
+    def capture(registry, canonical):
+        display = present(registry, canonical)
+        governed = set(evidence_citation_ids(canonical))
+        def pair(raw, wire):
+            if isinstance(raw, Mapping) and isinstance(wire, Mapping):
+                for key in raw.keys() & wire.keys():
+                    pair(raw[key], wire[key])
+            elif isinstance(raw, (list, tuple)) and isinstance(wire, (list, tuple)):
+                for a, b in zip(raw, wire):
+                    pair(a, b)
+            elif isinstance(raw, str) and raw in governed and isinstance(wire, str) and wire.startswith("C"):
+                case.wire_ids[raw] = wire
+        pair(canonical, display)
+        return display
+
+    def draft(text):
+        try:
+            value = json.loads(text)
+        except (TypeError, ValueError):
+            return text
+        if isinstance(value, dict) and isinstance(value.get("citation_ids"), list):
+            value["citation_ids"] = [case.wire_ids.get(item, item) for item in value["citation_ids"]]
+            return json.dumps(value, ensure_ascii=False)
+        return text
+
+    def response(value):
+        value = copy.deepcopy(value)
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in {"text", "output_text"} and isinstance(item, str):
+                    value[key] = draft(item)
+                elif isinstance(item, (dict, list)):
+                    value[key] = response(item)
+        elif isinstance(value, list):
+            value = [response(item) for item in value]
+        return value
+
+    respond = CodexResponsesConversationModel.respond
+    def respond_with_wire_stub(model, **kwargs):
+        request = model._request_response
+        with mock.patch.object(model, "_request_response", side_effect=lambda payload: response(request(payload))):
+            return respond(model, **kwargs)
+    run_turn = _RecordingTransport.run_turn
+    def app_wire_stub(transport, **kwargs):
+        result = run_turn(transport, **kwargs)
+        return replace(result, final_message=draft(result.final_message))
+    for patcher in (
+        mock.patch.object(orchestrator._TurnCitationPresentation, "present", capture),
+        mock.patch.object(CodexResponsesConversationModel, "respond", respond_with_wire_stub),
+        mock.patch.object(_RecordingTransport, "run_turn", app_wire_stub),
+    ):
+        patcher.start()
+        case.addCleanup(patcher.stop)
+
+
 class Issue56CodexProviderBridgeTests(unittest.TestCase):
+    def setUp(self):
+        _use_short_citation_fixtures(self)
+
     def test_app_server_context_kinds_match_official_0164_wire_enum(self) -> None:
         wire = object.__new__(CodexAppServerStdioTransport)
         wire._state_lock = threading.RLock()
@@ -461,7 +528,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         self.assertEqual(len(requests), 1)
         context = requests[0]["additionalContext"]
         self.assertEqual(set(context), {
-            "formowl_runtime_clock", "formowl_authorized_capabilities",
+            "formowl_citation_presentation", "formowl_runtime_clock", "formowl_authorized_capabilities",
             "formowl_turn_request_contract", "formowl_latest_evidence",
             "formowl_recovery_history",
         })
@@ -4542,7 +4609,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
             self.assertEqual(payload["tool_choice"], "none")
             repair_context = payload["input"][-1]["content"]
             self.assertIn("citation_validation_failed", repair_context)
-            self.assertIn(citation, repair_context)
+            self.assertIn(self.wire_ids[citation], repair_context)
             return {
                 "status": "completed",
                 "output_text": _decision(
@@ -5386,7 +5453,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         self.assertEqual(outcome.citation_ids, (citation_id,))
         self.assertEqual(outcome.tool_results, (evidence_result,))
         tool_output = json.loads(received[1]["input"][-1]["output"])
-        self.assertEqual(tool_output["data"]["citations"][0]["citation_id"], citation_id)
+        self.assertEqual(tool_output["data"]["citations"][0]["citation_id"], self.wire_ids[citation_id])
         self.assertEqual(
             tool_output["data"]["evidence_snippets"][0]["snippet"],
             "Bounded post-MCP evidence snippet.",
@@ -6227,7 +6294,19 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         run_turn.assert_called_once()
         self.assertEqual(result, original)
         self.assertEqual(outcome.citation_ids, citations[:2])
-        self.assertEqual(transport.tool_outputs[0]["data"], compact_evidence_for_model(result))
+        def expected_display(value, key=""):
+            if isinstance(value, dict):
+                return {k: expected_display(v, k) for k, v in value.items()}
+            if isinstance(value, (tuple, list)):
+                return [expected_display(v, key) for v in value]
+            if isinstance(value, str) and value in self.wire_ids:
+                return self.wire_ids[value]
+            if key in {"citations", "citation_ids", "citation_id", "citation_hash",
+                       "mail_header_citation_hash", "anchor_citation_hash"} and isinstance(value, str):
+                return self.wire_ids.get(value)
+            return value
+        self.assertEqual(transport.tool_outputs[0]["data"],
+                         expected_display(compact_evidence_for_model(result)))
         diagnostic = outcome.provider_diagnostic or {}
         self.assertIn("finalization_validation", diagnostic)
         stage, = diagnostic["mcp_citation_stages"]
@@ -6277,12 +6356,12 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         cases = (
             (decision(("synthetic-foreign",)), "citation_rejected", "citation_unavailable", 1),
             (decision(()), "citation_rejected", "citations_missing", 0),
-            (decision(("synthetic-available",) * 2), "citation_rejected", "citation_ids_duplicate", 0),
+            (decision(("synthetic-available",) * 2), "citation_rejected", "citation_ids_duplicate", 2),
             (json.dumps(malformed_ids), "parse_rejected", "citation_ids_not_array", 0),
             ("private malformed JSON", "parse_rejected", "invalid_json", 0),
             (decision(("synthetic-available",), "complete"), "coverage_rejected", "incomplete_coverage_hidden", 1),
         )
-        for final_message, validation_result, reason_code, parsed_count in cases:
+        for final_message, validation_result, reason_code, submitted_count in cases:
             with self.subTest(reason_code=reason_code), tempfile.TemporaryDirectory() as workspace:
                 transport = _RecordingTransport(
                     calls=({"query_text": "Clienta source lookup"},), final_message=final_message,
@@ -6301,9 +6380,10 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                 self.assertIn("finalization_validation", diagnostic)
                 final, = diagnostic["finalization_validation"]
                 self.assertEqual(final["validation_result"], validation_result)
-                self.assertEqual(final["reason_code"], reason_code)
+                self.assertEqual(final["reason_code"], ("citation_handle_rejected"
+                if reason_code in {"citation_unavailable", "citation_ids_duplicate"} else reason_code))
                 self.assertFalse(final["repair_attempted"])
-                self.assertEqual(final["final_model"]["citation_count"], parsed_count)
+                self.assertEqual(final["final_model"]["citation_count"], submitted_count)
                 self.assertEqual(final["available_governed"]["citation_count"], 1)
                 self.assertEqual(runtime_project(diagnostic)["finalization_validation"], [final])
                 rendered = json.dumps(diagnostic)
@@ -6331,7 +6411,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                 history=(), user_text="request", latest_evidence=None,
                 safety_identifier="app-server-compaction", evidence_tool=lambda _: result,
             )
-        self.assertEqual(evidence_citation_ids(transport.tool_outputs[0]["data"]), ("synthetic-small",))
+        self.assertEqual(evidence_citation_ids(transport.tool_outputs[0]["data"]), (self.wire_ids["synthetic-small"],))
         diagnostic = outcome.provider_diagnostic or {}
         self.assertIn("finalization_validation", diagnostic)
         stage, = diagnostic["mcp_citation_stages"]
@@ -6341,7 +6421,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         self.assertEqual(stage["compacted_presented"]["citation_count"], 1)
         self.assertEqual(final["available_governed"], stage["compacted_presented"])
         self.assertEqual(final["validation_result"], "citation_rejected")
-        self.assertEqual(final["reason_code"], "citation_unavailable")
+        self.assertEqual(final["reason_code"], "citation_handle_rejected")
         self.assertFalse(final["repair_attempted"])
 
     def test_app_server_failure_without_diagnostic_stays_error(self) -> None:
@@ -7237,3 +7317,116 @@ def tearDownModule() -> None:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShortCitationProviderTests(unittest.TestCase):
+    def test_app_server_wire_handles_outcome_and_browser_originals(self):
+        citation = "sha256:" + "a" * 64
+        raw = {"status": "complete", "citations": [citation]}
+        transport = _RecordingTransport(calls=({"query_text": "clienta lookup"},), final_message="")
+        run = transport.run_turn
+        captured = []
+        def reply(**kwargs):
+            turn = run(**kwargs)
+            wire = transport.tool_outputs[-1]["data"]
+            handle, = wire["citations"]
+            self.assertRegex(handle, r"^C[a-km-np-z2-9]{4}\.1$")
+            self.assertNotIn(citation, json.dumps(wire))
+            captured.append(handle)
+            return replace(turn, final_message=_decision(citations=(handle,), coverage_status="complete"))
+        with tempfile.TemporaryDirectory() as workspace, mock.patch.object(transport, "run_turn", side_effect=reply):
+            model = CodexAppServerConversationModel(transport, workspace_dir=workspace)
+            outcome = model.respond(history=(), user_text="authorized lookup", latest_evidence=None,
+                safety_identifier="short-citation-test", evidence_tool=lambda _: raw)
+        self.assertEqual(outcome.citation_ids, (citation,))
+        self.assertEqual(outcome.tool_results, (raw,))
+        browser = _browser_projection(outcome, responses=(raw,), latest_evidence=None)
+        self.assertEqual(browser["citations"], [citation])
+        self.assertNotIn(captured[0], json.dumps(browser))
+
+    def test_responses_wire_and_single_repair_use_current_handles(self):
+        citation = "sha256:" + "b" * 64
+        raw = {"status": "complete", "citations": [citation]}
+        model = CodexResponsesConversationModel(base_url="https://provider.example.test/v1", api_key="synthetic")
+        calls, handles, trace = [], [], []
+        def reply(payload):
+            calls.append(copy.deepcopy(payload))
+            if len(calls) == 1:
+                return {"status": "completed", "output": [{"type": "function_call", "call_id": "clienta",
+                    "name": "query_effective_graph_view", "arguments": json.dumps({"query_text": "clienta lookup"})}]}
+            wire = json.loads(next(item["output"] for item in payload["input"] if item.get("type") == "function_call_output"))
+            handle, = wire["data"]["citations"]
+            self.assertRegex(handle, r"^C[a-km-np-z2-9]{4}\.1$")
+            self.assertNotIn(citation, json.dumps(wire))
+            handles.append(handle)
+            if len(calls) == 2:
+                selected = "private-untrusted-draft"
+            else:
+                self.assertEqual(payload["tools"], [])
+                self.assertEqual(payload["tool_choice"], "none")
+                repair = payload["input"][-1]["content"]
+                self.assertIn(handle, repair)
+                self.assertNotIn(citation, repair)
+                self.assertNotIn("private-untrusted-draft", repair)
+                selected = handle
+            return {"status": "completed", "output_text": _decision(citations=(selected,), coverage_status="complete")}
+        token = orchestrator._PRIVATE_UAT_CITATION_TRACE.set(trace)
+        try:
+            with mock.patch.object(model, "_request_response", side_effect=reply):
+                outcome = model.respond(history=(), user_text="authorized lookup", latest_evidence=None,
+                    safety_identifier="short-citation-test", evidence_tool=lambda _: raw)
+        finally:
+            orchestrator._PRIVATE_UAT_CITATION_TRACE.reset(token)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(handles[0], handles[1])
+        self.assertEqual(outcome.citation_ids, (citation,))
+        self.assertEqual(_browser_projection(outcome, responses=(raw,), latest_evidence=None)["citations"], [citation])
+        finals = [stage["citation_presentation"] for stage in trace if stage["stage"] == "finalization"]
+        self.assertEqual([item["final_classifications"] for item in finals], [["raw_id_forbidden"], ["resolved"]])
+        self.assertNotIn("private-untrusted-draft", json.dumps(trace))
+        rejected = next(stage for stage in trace if stage["stage"] == "finalization")
+        self.assertEqual(rejected["final_model"]["citation_count"], 1)
+        self.assertEqual(rejected["final_model"]["citation_ids"], [sha256_json("private-untrusted-draft")])
+        self.assertEqual(rejected["final_model"]["citation_id_encodings"], ["hashed_non_sha256"])
+
+    def test_responses_prior_obligation_survives_decode_and_turn_rotation(self):
+        ids = ["sha256:" + char * 64 for char in "cd"]
+        prior = {"status": "complete", "citations": ids}
+        model = CodexResponsesConversationModel(base_url="https://provider.example.test/v1", api_key="synthetic")
+        calls, old_handles, trace = [], [], []
+        def reply(payload):
+            calls.append(copy.deepcopy(payload))
+            self.assertEqual(payload["tools"], [])
+            summary = next(item["content"] for item in payload["input"]
+                           if "Untrusted bounded summary" in item.get("content", ""))
+            handles = json.loads(summary.split("\n", 1)[1])["data"]["citations"]
+            self.assertNotIn(ids[0], json.dumps(payload))
+            if len(calls) == 1:
+                old_handles.extend(handles)
+                selected = handles[:1]  # A valid handle cannot waive the second original-ID obligation.
+            elif len(calls) == 2:
+                self.assertIn("prior_citations_missing", payload["input"][-1]["content"])
+                selected = handles
+            elif len(calls) == 3:
+                self.assertTrue(set(old_handles).isdisjoint(handles))
+                selected = old_handles  # Previous turn cannot authorize even identical canonical evidence.
+            else:
+                self.assertIn("citation_handle_rejected", payload["input"][-1]["content"])
+                selected = handles
+            return {"status": "completed", "output_text": _decision(response_kind="render_prior_evidence",
+                citations=tuple(selected), coverage_status="complete")}
+        token = orchestrator._PRIVATE_UAT_CITATION_TRACE.set(trace)
+        try:
+            with mock.patch.object(model, "_request_response", side_effect=reply):
+                for _ in range(2):
+                    outcome = model.respond(history=(), user_text="Rewrite the previous answer in English; preserve citations",
+                        latest_evidence=prior, safety_identifier="prior-scope",
+                        evidence_tool=lambda _: self.fail("prior transform must not search"),
+                        authorized_capability_summary={"source_families": ["document_text"],
+                            "prior_visible_answer": {"status": "complete", "citation_ids": ids}})
+                    self.assertEqual(outcome.citation_ids, tuple(ids))
+        finally:
+            orchestrator._PRIVATE_UAT_CITATION_TRACE.reset(token)
+        self.assertEqual(len(calls), 4)
+        self.assertTrue(any(stage.get("citation_presentation", {}).get("final_classifications") ==
+                            ["wrong_turn_scope", "wrong_turn_scope"] for stage in trace))

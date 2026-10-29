@@ -51,6 +51,10 @@ def _mail_tool_descriptor() -> dict:
 
 
 class Issue56ProviderFinalizationTests(unittest.TestCase):
+    def setUp(self):
+        from test_issue56_codex_provider_bridge import _use_short_citation_fixtures
+        _use_short_citation_fixtures(self)
+
     @staticmethod
     def _split_recovery(request, *, variant=None):
         return {"status": "pending_review", "citations": [], "evidence": [], "query_agent": {
@@ -1359,7 +1363,7 @@ class Issue56ProviderFinalizationTests(unittest.TestCase):
             [item["call_id"] for item in function_outputs],
             ["call-provider-finalization"],
         )
-        self.assertIn(citation, function_outputs[0]["output"])
+        self.assertIn(self.wire_ids[citation], function_outputs[0]["output"])
         self.assertEqual(headers[0]["Authorization"], "Bearer synthetic-local-provider-key")
         self.assertEqual(headers[1]["Authorization"], "Bearer synthetic-local-provider-key")
         self.assertIsNot(requests[0].get("stream"), True)
@@ -1382,3 +1386,125 @@ def tearDownModule() -> None:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TurnCitationPresentationTests(unittest.TestCase):
+    def test_one_to_one_reuse_and_canonical_snapshot(self):
+        registry = orchestrator._TurnCitationPresentation(set())
+        original = {"citations": ["clienta-header", "clienta-body"], "evidence": [
+            {"citation_hash": "clienta-body", "mail_header_citation_hash": "clienta-header",
+             "source_context": {"anchor_citation_hash": "clienta-header"},
+             "snippet": "clienta-header remains source prose"}], "query_hash": "unchanged-seal"}
+        before = copy.deepcopy(original)
+        first = registry.present(original)
+        second = registry.present({"citations": ["clienta-body", "maple-third"]})
+        self.assertEqual(original, before)
+        self.assertRegex(first["citations"][0], r"^C[a-km-np-z2-9]{4}\.[1-9][0-9]*$")
+        self.assertEqual(second["citations"][0], first["citations"][1])
+        self.assertEqual(len(set(first["citations"] + second["citations"])), 3)
+        self.assertEqual(first["evidence"][0]["mail_header_citation_hash"], first["citations"][0])
+        self.assertEqual(first["evidence"][0]["source_context"]["anchor_citation_hash"], first["citations"][0])
+        self.assertEqual(first["evidence"][0]["snippet"], before["evidence"][0]["snippet"])
+        self.assertEqual(first["query_hash"], "unchanged-seal")
+        self.assertEqual(registry.decode(second["citations"]), ["clienta-body", "maple-third"])
+        self.assertEqual(registry.diagnostic()["new_count"], 1)
+        self.assertEqual(registry.diagnostic()["reused_count"], 1)
+
+    def test_exact_citation_values_in_any_display_field_use_the_same_handle(self):
+        ids = ["sha256:" + char * 64 for char in "ab"]
+        canonical = {"citations": ids, "evidence": [{
+            "citation_hash": ids[0], "source_observation_hash": ids[0],
+            "custom_metadata": {"arbitrary_key": ids[1], "values": [ids[0], {"nested": ids[1]}]},
+            "snippet": ids[0],
+        }], "query_hash": "sha256:" + "c" * 64}
+        original = copy.deepcopy(canonical)
+        registry = orchestrator._TurnCitationPresentation(set())
+        display = registry.present(canonical)
+        first, second = display["citations"]
+        self.assertEqual(display["evidence"][0], {
+            "citation_hash": first, "source_observation_hash": first,
+            "custom_metadata": {"arbitrary_key": second, "values": [first, {"nested": second}]},
+            "snippet": first,
+        })
+        self.assertEqual(canonical, original)
+        self.assertEqual(display["query_hash"], canonical["query_hash"])
+        for original_id in ids:
+            self.assertNotIn(original_id, json.dumps(display))
+        self.assertEqual(registry.decode([first, second]), ids)
+        # Whole-value equality only: substrings, case changes and unpresented
+        # metadata do not become aliases and source prose is not rewritten.
+        nonmatches = {"snippet": "Literal " + ids[0], "case_changed": ids[1].upper(),
+                      "unpresented_metadata": "sha256:" + "d" * 64}
+        self.assertEqual(registry.references(nonmatches), nonmatches)
+        self.assertEqual(registry.diagnostic()["mapping_count"], 2)
+
+    def test_unpresented_forged_duplicate_and_raw_ids_are_rejected(self):
+        registry = orchestrator._TurnCitationPresentation(set())
+        canonical = orchestrator.compact_evidence_for_model(
+            {"citations": ["clienta-first", "hidden-second"]}, item_limit=1)
+        handle, = registry.present(canonical)["citations"]
+        for values, reason in (([handle.rsplit(".", 1)[0] + ".999"], "unknown_handle"),
+                               ([handle, handle], "duplicate_handle"),
+                               (["hidden-second"], "raw_id_forbidden"),
+                               (["clienta-first"], "raw_id_forbidden")):
+            with self.subTest(reason=reason), self.assertRaisesRegex(RuntimeError, "citation"):
+                registry.decode(values)
+            self.assertIn(reason, registry.diagnostic()["final_classifications"])
+        self.assertEqual(registry.diagnostic()["mapping_count"], 1)
+        registry._presented.clear()
+        with self.assertRaisesRegex(RuntimeError, "citation"):
+            registry.decode([handle])
+        self.assertEqual(registry.diagnostic()["final_classifications"], ["not_presented"])
+        registry._presented.add("clienta-first")
+        registry._by_original["clienta-first"] = "inconsistent"
+        with self.assertRaisesRegex(RuntimeError, "citation"):
+            registry.decode([handle])
+        self.assertEqual(registry.diagnostic()["final_classifications"], ["mapping_conflict"])
+        with self.assertRaises(RuntimeError):
+            orchestrator._parse_decision("malformed", citation_presentation=registry)
+        self.assertEqual(registry.diagnostic()["final_classifications"], [])
+
+    def test_retained_scope_collision_reselects_and_old_turn_is_rejected(self):
+        retained = set()
+        with mock.patch.object(orchestrator.secrets, "choice", side_effect=list("k7q4k7q4m8r5")):
+            first = orchestrator._TurnCitationPresentation(retained)
+            old, = first.present({"citations": ["clienta"]})["citations"]
+            second = orchestrator._TurnCitationPresentation(retained)
+        new, = second.present({"citations": ["clienta"]})["citations"]
+        self.assertNotEqual(old, new)
+        with self.assertRaisesRegex(RuntimeError, "citation"):
+            second.decode([old])
+        self.assertEqual(second.diagnostic()["final_classifications"], ["wrong_turn_scope"])
+
+    def test_required_prior_original_ids_and_repair_handles(self):
+        registry = orchestrator._TurnCitationPresentation(set())
+        prior = {"status": "complete", "citations": ["clienta-prior-a", "clienta-prior-b"]}
+        handles = registry.present(prior)["citations"]
+        decision = json.loads(_decision(citation=handles[0]))
+        decision.update(response_kind="render_prior_evidence", coverage_status="complete", coverage_note="")
+        parsed = orchestrator._parse_decision(json.dumps(decision), citation_presentation=registry)
+        with self.assertRaisesRegex(RuntimeError, "omitted required citations"):
+            orchestrator._validate_evidence_bound_decision(parsed, evidence_results=(),
+                prior_evidence=prior, required_prior_citations=prior["citations"])
+        repair = orchestrator._final_repair_context(error=RuntimeError("citation"),
+            evidence_results=(), prior_evidence=prior, required_prior_citations=prior["citations"],
+            citation_presentation=registry)
+        self.assertTrue(all(handle in repair for handle in handles))
+        self.assertTrue(all(original not in repair for original in prior["citations"]))
+        decision["citation_ids"] = handles
+        parsed = orchestrator._parse_decision(json.dumps(decision), citation_presentation=registry)
+        orchestrator._validate_evidence_bound_decision(parsed, evidence_results=(),
+            prior_evidence=prior, required_prior_citations=prior["citations"])
+
+    def test_large_presentation_decodes_past_private_diagnostic_cap(self):
+        registry = orchestrator._TurnCitationPresentation(set())
+        ids = ["sha256:" + format(i, "064x") for i in range(150)]
+        handles = registry.present({"citations": ids})["citations"]
+        self.assertEqual(registry.decode(handles[-1:]), ids[-1:])
+        self.assertEqual(registry.diagnostic()["mapping_count"], 150)
+        registry.present({"citations": ["private-clienta-id"]})
+        with self.assertRaises(RuntimeError):
+            registry.decode(["private-untrusted-draft"])
+        diagnostic = registry.diagnostic()
+        self.assertNotIn("private-", json.dumps(diagnostic))
+        self.assertEqual(diagnostic["final_classifications"], ["raw_id_forbidden"])

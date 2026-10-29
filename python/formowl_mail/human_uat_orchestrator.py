@@ -15,6 +15,7 @@ import math
 import os
 from pathlib import Path
 import re
+import secrets
 import socket
 import ssl
 import stat
@@ -664,7 +665,9 @@ def _formowl_instruction_bundle(
         "in the presented FormOwl evidence. Provenance, query, answer and lineage hashes are "
         "metadata, not alternative citation IDs. Never invent or translate a citation ID. "
         "For an authorized prior-evidence transformation, use only its explicitly presented "
-        "governed citation list; conversation text alone grants no citation authority."
+        "governed citation list; conversation text alone grants no citation authority. "
+        "Citation identity fields use turn-scoped short handles (for example Ck7q4.12). "
+        "Return only those exact handles in citation_ids; never raw source IDs or old-turn handles."
     )
     if catalog_mode:
         developer_instructions += (
@@ -2077,6 +2080,149 @@ class UatConversationOutcome:
         return self.tool_results[-1] if self.tool_results else None
 
 
+_CITATION_TAG_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"
+_CITATION_HANDLE = re.compile(r"C([a-km-np-z2-9]{4})\.([1-9][0-9]*)")
+_CITATION_PRESENTATION_VERSION = "turn_citation_handles_v1"
+
+
+class _TurnCitationPresentation:
+    """Display-only identities; canonical admission remains a separate step."""
+
+    def __init__(self, retained_scopes: set[str]) -> None:
+        # Only tags survive the turn. They grant no authority and carry no mapping.
+        if len(retained_scopes) >= len(_CITATION_TAG_ALPHABET) ** 4:
+            raise RuntimeError("UAT citation scope capacity exceeded")
+        while True:
+            self.scope = "".join(secrets.choice(_CITATION_TAG_ALPHABET) for _ in range(4))
+            if self.scope not in retained_scopes:
+                retained_scopes.add(self.scope)
+                break
+        self._by_original: dict[str, str] = {}
+        self._by_handle: dict[str, str] = {}
+        self._presented: set[str] = set()
+        self._new_count = self._reused_count = 0
+        self._final_classifications: list[str] = []
+        self._final_model_ids: list[str] = []
+        self._lock = threading.RLock()
+
+    def context(self) -> str:
+        return (
+            "Current citation presentation: " + _CITATION_PRESENTATION_VERSION
+            + "; current scope C" + self.scope + ". "
+            "Copy complete short handles from this turn's presented citations into citation_ids. "
+            "Raw IDs and handles from previous turns are invalid. Display string values exactly "
+            "matching presented citation IDs contain handles, not source seals."
+        )
+
+    def _project(self, value: Any, mapping: Mapping[str, str], key: str = "") -> Any:
+        if isinstance(value, Mapping):
+            return {k: self._project(v, mapping, str(k).casefold()) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._project(v, mapping, key) for v in value]
+        # Metadata can repeat a governed ID under a non-citation field name.
+        # Resolve whole string values only, from the already-presented registry;
+        # never discover new authority or replace substrings in source prose.
+        if isinstance(value, str) and value in mapping:
+            return mapping[value]
+        if isinstance(value, str) and key in {
+            "citations", "citation_ids", "citation_id", "citation_hash",
+            "mail_header_citation_hash", "anchor_citation_hash",
+        }:
+            # Reference-only metadata cannot mint authority, including prior-visible IDs.
+            return mapping.get(value)
+        return deepcopy(value)
+
+    def present(self, canonical: Mapping[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            ids = evidence_citation_ids(canonical)
+            mapping = dict(self._by_original)
+            new = 0
+            for original in ids:
+                if original not in mapping:
+                    mapping[original] = f"C{self.scope}.{len(mapping) + 1}"
+                    new += 1
+            if (len(self._by_handle) != len(self._by_original)
+                    or len(set(mapping.values())) != len(mapping)) or any(
+                self._by_handle.get(handle) != original for original, handle in self._by_original.items()
+            ):
+                raise RuntimeError("UAT citation presentation mapping conflict")
+            display = self._project(canonical, mapping)
+            # Compaction already chose the evidence; smaller handles never admit more.
+            # Full-read payloads retain their existing larger, sealed batch boundary.
+            original_bytes = len(json.dumps(canonical, ensure_ascii=False, separators=(",", ":")).encode())
+            display_bytes = len(json.dumps(display, ensure_ascii=False, separators=(",", ":")).encode())
+            if display_bytes > max(_MAX_MODEL_EVIDENCE_BYTES, original_bytes):
+                raise RuntimeError("UAT citation presentation budget exceeded")
+            self._by_original = mapping
+            self._by_handle = {handle: original for original, handle in mapping.items()}
+            self._presented.update(ids)
+            self._new_count, self._reused_count = new, len(ids) - new
+            return display
+
+    def references(self, value: Any) -> Any:
+        with self._lock:
+            return self._project(value, self._by_original)
+
+    def reset_finalization(self) -> None:
+        with self._lock:
+            self._final_classifications = []
+            self._final_model_ids = []
+
+    def record_final_submission(self, items: Sequence[Any]) -> None:
+        with self._lock:
+            # Invalid non-string items are JSON-encoded for diagnostics only;
+            # decode still rejects their original types. No conversion grants authority.
+            self._final_model_ids = [item if isinstance(item, str) else
+                                    json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+                                    for item in items]
+
+    def model_citation_snapshot(self, *, private: bool) -> dict[str, Any]:
+        with self._lock:
+            snapshot = (_private_citation_ids_snapshot(self._final_model_ids) if private
+                        else _citation_ids_snapshot(self._final_model_ids))
+            # Snapshot identities are deduplicated, but submitted-item count is not.
+            return {**snapshot, "citation_count": len(self._final_model_ids)}
+
+    def decode(self, handles: Sequence[Any]) -> list[str]:
+        with self._lock:
+            self.record_final_submission(handles)
+            resolved, classifications, seen = [], [], set()
+            for handle in handles:
+                match = _CITATION_HANDLE.fullmatch(handle) if isinstance(handle, str) else None
+                original = self._by_handle.get(handle) if isinstance(handle, str) else None
+                if not match:
+                    reason = "raw_id_forbidden"
+                elif match[1] != self.scope:
+                    reason = "wrong_turn_scope"
+                elif handle in seen:
+                    reason = "duplicate_handle"
+                elif original is None:
+                    reason = "unknown_handle"
+                elif self._by_original.get(original) != handle:
+                    reason = "mapping_conflict"
+                elif original not in self._presented:
+                    reason = "not_presented"
+                else:
+                    reason = "resolved"
+                    resolved.append(original)
+                classifications.append(reason)
+                if isinstance(handle, str):
+                    seen.add(handle)
+            self._final_classifications = classifications[:_MAX_RESPONSE_CITATIONS]
+            if any(reason != "resolved" for reason in classifications):
+                raise _FinalizationValidationError("UAT citation handle rejected", "citation_handle_rejected")
+            return resolved
+
+    def diagnostic(self, *, final: bool = True) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "presentation_version": _CITATION_PRESENTATION_VERSION,
+                "mapping_count": len(self._by_original),
+                "new_count": self._new_count, "reused_count": self._reused_count,
+                **({"final_classifications": list(self._final_classifications)} if final else {}),
+            }
+
+
 class UatConversationModel(Protocol):
     @property
     def model_name(self) -> str: ...
@@ -2100,6 +2246,7 @@ class UatConversationModel(Protocol):
 class CodexAppServerThread:
     thread_id: str
     model_name: str
+    citation_scopes: set[str] = field(default_factory=set, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -3357,12 +3504,15 @@ class CodexAppServerConversationModel:
                 for expired_thread in expired_threads:
                     self._transport.delete_thread(expired_thread.thread_id)
                 evidence_records: list[tuple[UatEvidenceToolRequest, dict[str, Any]]] = []
+                citation_presentation = _TurnCitationPresentation(thread.citation_scopes)
+                presented_evidence_by_record: dict[int, dict[str, Any]] = {}
                 evidence_lock = threading.Lock()
                 tool_attempt_count = 0
                 rejected_tool_attempt_count = 0
                 last_rejection_code: str | None = None
                 tool_budget_exhausted = False
                 source_tool_attempted = False
+                presentation_failed = False
                 mcp_citation_stages: list[dict[str, Any]] = []
                 finalization_validation: list[dict[str, Any]] = []
                 split_guidance_injection: dict[str, Any] = {}
@@ -3430,7 +3580,7 @@ class CodexAppServerConversationModel:
                     tool_name: str,
                     arguments: Mapping[str, Any],
                 ) -> Mapping[str, Any]:
-                    nonlocal tool_attempt_count, tool_budget_exhausted, source_tool_attempted
+                    nonlocal tool_attempt_count, tool_budget_exhausted, source_tool_attempted, presentation_failed
                     if tool_name != formowl_tool_name:
                         raise RuntimeError("Codex requested an unknown UAT tool")
                     with evidence_lock:
@@ -3467,12 +3617,22 @@ class CodexAppServerConversationModel:
                             exc, arguments, validation_stage="evidence_tool",
                         )
                     with evidence_lock:
+                        record_index = len(evidence_records)
                         evidence_records.append((request, result))
                         request_contract_binder.record_comparison_result(request, result)
                     comparison_pending = request_contract_binder.comparison_pending
                     compaction_diagnostic: dict[str, Any] = {}
-                    model_result = compact_evidence_for_model(result, diagnostic=compaction_diagnostic)
+                    model_result = deepcopy(compact_evidence_for_model(result, diagnostic=compaction_diagnostic))
+                    try:
+                        display_result = citation_presentation.present(model_result)
+                    except (RuntimeError, TypeError, ValueError):
+                        presentation_failed = True
+                        return {"trust": "untrusted_evidence", "data": {
+                            "status": "unavailable", "citations": [],
+                            "reason_code": "citation_presentation_failed",
+                        }}
                     with evidence_lock:
+                        presented_evidence_by_record[record_index] = model_result
                         mcp_citation_stages.append(
                             _mcp_citation_stage_diagnostic(
                                 call_index=call_index,
@@ -3483,6 +3643,7 @@ class CodexAppServerConversationModel:
                                     evidence_citation_ids(result), evidence_citation_ids(model_result),
                                 ),
                                 compaction_diagnostic=compaction_diagnostic,
+                                citation_presentation=citation_presentation.diagnostic(final=False),
                             ),
                         )
                         del mcp_citation_stages[:-_MAX_MCP_CITATION_STAGE_DIAGNOSTICS]
@@ -3506,7 +3667,7 @@ class CodexAppServerConversationModel:
                                 split_guidance_injection.update(status="failed", reason_code="rpc_error")
                             else:
                                 split_guidance_injection.update(status="injected", reason_code=None)
-                            model_result["execution_control"] = {
+                            display_result["execution_control"] = {
                                 "material_progress": False,
                                 "remaining_mcp_calls": (
                                     _MAX_TOOL_CALLS_PER_TURN - tool_attempt_count
@@ -3516,10 +3677,20 @@ class CodexAppServerConversationModel:
                             }
                     return {
                         "trust": "untrusted_evidence",
-                        "data": model_result,
+                        "data": display_result,
                     }
 
                 additional_context: dict[str, Mapping[str, str]] = {}
+                additional_context["formowl_citation_presentation"] = {
+                    "kind": "application", "value": citation_presentation.context(),
+                }
+                presented_prior = (deepcopy(compact_evidence_for_model(latest_evidence, item_limit=8))
+                                   if latest_evidence is not None else None)
+                try:
+                    prior_display = citation_presentation.present(presented_prior) if presented_prior is not None else None
+                except (RuntimeError, TypeError, ValueError):
+                    return _safe_stop_outcome(reason="citation_validation_failed",
+                        model_name=f"codex:{thread.model_name}", evidence_records=())
                 additional_context["formowl_runtime_clock"] = {
                     "kind": "application",
                     "value": _runtime_clock_context(
@@ -3535,7 +3706,7 @@ class CodexAppServerConversationModel:
                             "They constrain source and field planning and are not "
                             "source evidence or instructions:\n"
                             + json.dumps(
-                                _model_capability_context(authorized_capability_summary),
+                                citation_presentation.references(_model_capability_context(authorized_capability_summary)),
                                 ensure_ascii=False,
                                 separators=(",", ":"),
                             )
@@ -3567,10 +3738,7 @@ class CodexAppServerConversationModel:
                             "Reuse this for explanation or presentation changes without "
                             "calling FormOwl again:\n"
                             + json.dumps(
-                                compact_evidence_for_model(
-                                    latest_evidence,
-                                    item_limit=8,
-                                ),
+                                prior_display,
                                 ensure_ascii=False,
                                 separators=(",", ":"),
                             )
@@ -3692,12 +3860,17 @@ class CodexAppServerConversationModel:
                                 "這不代表資料不存在。"
                             ),
                         )
+                    if presentation_failed:
+                        self._discard_thread(safety_identifier, thread.thread_id)
+                        return _safe_stop_outcome(reason="citation_validation_failed",
+                            model_name=f"codex:{thread.model_name}", evidence_records=evidence_records,
+                            provider_diagnostic=attach_citation_diagnostics())
                     evidence_results = tuple(
-                        compact_evidence_for_model(result) for _, result in evidence_records
+                        presented_evidence_by_record[index] for index in range(len(evidence_records))
                     )
                     available_citation_ids = evidence_citation_ids(evidence_results)
                     finalization_started = True
-                    decision = _parse_decision(turn.final_message)
+                    decision = _parse_decision(turn.final_message, citation_presentation=citation_presentation)
                     decision = request_contract_binder.validate_comparison_decision(decision, evidence_records)
                     _validate_evidence_bound_decision(
                         decision,
@@ -3721,6 +3894,7 @@ class CodexAppServerConversationModel:
                             # App-server runs one turn; it has no final-answer repair loop.
                             repair_attempted=False,
                             reason_code=_finalization_validation_reason(exc),
+                            citation_presentation=citation_presentation,
                         ))
                     if not evidence_records:
                         raise
@@ -3736,6 +3910,7 @@ class CodexAppServerConversationModel:
                     available_citation_ids=available_citation_ids,
                     validation_result="passed",
                     repair_attempted=False,
+                    citation_presentation=citation_presentation,
                 ))
                 return UatConversationOutcome(
                     **decision,
@@ -5155,6 +5330,7 @@ def _mcp_citation_stage_diagnostic(
     presented_result: Mapping[str, Any] | None,
     projection_result: str,
     compaction_diagnostic: Mapping[str, Any] | None = None,
+    citation_presentation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     raw_citations = evidence_citation_ids(raw_result) if raw_result is not None else ()
     presented_citations = (
@@ -5162,6 +5338,7 @@ def _mcp_citation_stage_diagnostic(
     )
     _record_private_citation_stage({
         "stage": "mcp", "call_index": call_index,
+        **({"citation_presentation": dict(citation_presentation)} if citation_presentation is not None else {}),
         "raw_governed": _private_citation_ids_snapshot(raw_citations),
         "compacted_presented": _private_citation_ids_snapshot(presented_citations),
         "projection_result": projection_result,
@@ -5187,19 +5364,23 @@ def _finalization_validation_diagnostic(
     validation_result: str,
     repair_attempted: bool,
     reason_code: str | None = None,
+    citation_presentation: _TurnCitationPresentation | None = None,
 ) -> dict[str, Any]:
     reason = ({"reason_code": _safe_finalization_reason(reason_code)}
               if reason_code is not None else {})
     _record_private_citation_stage({
         "stage": "finalization",
-        "final_model": _private_citation_ids_snapshot(final_citation_ids),
+        **({"citation_presentation": citation_presentation.diagnostic()} if citation_presentation is not None else {}),
+        "final_model": (citation_presentation.model_citation_snapshot(private=True) if citation_presentation is not None
+                        else _private_citation_ids_snapshot(final_citation_ids)),
         "available_governed": _private_citation_ids_snapshot(available_citation_ids),
         "validation_result": validation_result,
         "repair_attempted": bool(repair_attempted),
         **reason,
     })
     return {
-        "final_model": _citation_ids_snapshot(final_citation_ids),
+        "final_model": (citation_presentation.model_citation_snapshot(private=False) if citation_presentation is not None
+                        else _citation_ids_snapshot(final_citation_ids)),
         "available_governed": _citation_ids_snapshot(available_citation_ids),
         "validation_result": (
             _safe_enum_value(validation_result, _FINALIZATION_VALIDATION_RESULTS)
@@ -5908,6 +6089,7 @@ class _ResponsesConversationJournal:
     closed: bool = False
     exhausted: bool = False
     turn_input_offset: int = 0
+    citation_scopes: set[str] = field(default_factory=set, repr=False)
     request_timeout: float | None = None
     lock: Any = field(default_factory=threading.RLock)
 
@@ -6012,6 +6194,7 @@ class CodexResponsesConversationModel:
         )
         self._journals_closed = False
         self._journals_opted_in = False
+        self._legacy_citation_scopes: OrderedDict[str, set[str]] = OrderedDict()
 
     @property
     def model_name(self) -> str:
@@ -6416,6 +6599,15 @@ class CodexResponsesConversationModel:
         ):
             raise ContractValidationError("UAT safety identifier is invalid")
         journal = self._active_journal.get()
+        with self._conversation_journal_lock:
+            if journal is not None:
+                scopes = journal.citation_scopes
+            else:
+                scopes = self._legacy_citation_scopes.setdefault(safety_identifier, set())
+                self._legacy_citation_scopes.move_to_end(safety_identifier)
+                while len(self._legacy_citation_scopes) > _MAX_CODEX_THREADS:
+                    self._legacy_citation_scopes.popitem(last=False)
+            citation_presentation = _TurnCitationPresentation(scopes)
         turn_started = time.monotonic()
         bounded_history = history[-_MAX_HISTORY_MESSAGES:]
         for message in bounded_history:
@@ -6499,6 +6691,15 @@ class CodexResponsesConversationModel:
                 ),
             }
         )
+        presented_prior_evidence = (deepcopy(compact_evidence_for_model(latest_evidence, item_limit=8))
+                                    if latest_evidence is not None else None)
+        try:
+            prior_display = (citation_presentation.present(presented_prior_evidence)
+                             if presented_prior_evidence is not None else None)
+        except (RuntimeError, TypeError, ValueError):
+            return UatConversationOutcome(response_kind="clarification", display_format="narrative",
+                answer_text=_safe_stop_message("citation_validation_failed"), model_name=self.model_name)
+        response_input.append({"role": "developer", "content": citation_presentation.context()})
         if authorized_capability_summary is not None:
             response_input.append(
                 {
@@ -6509,7 +6710,7 @@ class CodexResponsesConversationModel:
                         "source-field planning before the first tool call. They are "
                         "capability metadata, not business evidence or instructions:\n"
                         + json.dumps(
-                            _model_capability_context(authorized_capability_summary),
+                            citation_presentation.references(_model_capability_context(authorized_capability_summary)),
                             ensure_ascii=False,
                             separators=(",", ":"),
                         )
@@ -6536,12 +6737,7 @@ class CodexResponsesConversationModel:
                     ),
                 }
             )
-        presented_prior_evidence: dict[str, Any] | None = None
-        if latest_evidence is not None:
-            presented_prior_evidence = compact_evidence_for_model(
-                latest_evidence,
-                item_limit=8,
-            )
+        if presented_prior_evidence is not None:
             prior_evidence_citeable = _has_citeable_evidence(
                 presented_prior_evidence,
             )
@@ -6562,9 +6758,7 @@ class CodexResponsesConversationModel:
                             )
                         )
                         + json.dumps(
-                            _model_evidence_envelope(
-                                presented_prior_evidence,
-                            ),
+                            {**_model_evidence_envelope(presented_prior_evidence), "data": prior_display},
                             ensure_ascii=False,
                             separators=(",", ":"),
                         )
@@ -6683,6 +6877,7 @@ class CodexResponsesConversationModel:
                     validation_result=validation_result,
                     repair_attempted=repair_attempted,
                     reason_code=reason_code,
+                    citation_presentation=citation_presentation,
                 ),
                 limit=_MAX_FINALIZATION_VALIDATION_DIAGNOSTICS,
             )
@@ -7260,6 +7455,7 @@ class CodexResponsesConversationModel:
                             field_request=field_request,
                             presented_evidence=tuple(presented_evidence_results),
                             presented_prior_evidence=presented_prior_evidence,
+                            citation_presentation=citation_presentation,
                         )
                     except (ContractValidationError, RuntimeError) as exc:
                         _record_finalization_validation(
@@ -7289,6 +7485,7 @@ class CodexResponsesConversationModel:
                         field_request=field_request,
                         presented_evidence=tuple(presented_evidence_results),
                         presented_prior_evidence=presented_prior_evidence,
+                        citation_presentation=citation_presentation,
                     )
                     parsed_decision = request_contract_binder.validate_comparison_decision(parsed_decision, evidence_records)
                     _validate_evidence_bound_decision(
@@ -7395,6 +7592,7 @@ class CodexResponsesConversationModel:
                                     ordinary_no_tools=ordinary_no_tool_repair,
                                     required_prior_citations=required_prior_citations,
                                     field_count=len(note_fields),
+                                    citation_presentation=citation_presentation,
                                 ),
                             },
                         ])
@@ -7650,9 +7848,15 @@ class CodexResponsesConversationModel:
                                     )
                                 else:
                                     compaction_diagnostic: dict[str, Any] = {}
-                                    presented_result = compact_evidence_for_model(
+                                    presented_result = deepcopy(compact_evidence_for_model(
                                         result, diagnostic=compaction_diagnostic,
-                                    )
+                                    ))
+                                    try:
+                                        display_result = citation_presentation.present(presented_result)
+                                    except (RuntimeError, TypeError, ValueError):
+                                        return _safe_stop_outcome(reason="citation_validation_failed",
+                                            model_name=self.model_name,
+                                            evidence_records=[*evidence_records, (request, result)])
                                     _append_bounded(
                                         mcp_citation_stage_diagnostics,
                                         _mcp_citation_stage_diagnostic(
@@ -7665,6 +7869,7 @@ class CodexResponsesConversationModel:
                                                 evidence_citation_ids(presented_result),
                                             ),
                                             compaction_diagnostic=compaction_diagnostic,
+                                            citation_presentation=citation_presentation.diagnostic(final=False),
                                         ),
                                         limit=_MAX_MCP_CITATION_STAGE_DIAGNOSTICS,
                                     )
@@ -7732,7 +7937,7 @@ class CodexResponsesConversationModel:
                                             )
                                         formowl_halted = True
                                         force_final = True
-                                    tool_output = _model_evidence_envelope(presented_result)
+                                    tool_output = {**_model_evidence_envelope(presented_result), "data": display_result}
                                     citations = evidence_citation_ids(presented_result)
                                     field_support = _validated_field_support(request, result)
                                     material_progress = bool(
@@ -9931,6 +10136,7 @@ _FINALIZATION_REASON_RULES = {
     "coverage_status_invalid": "coverage_status must be complete, incomplete, or not_applicable.",
     "coverage_note_invalid": "coverage_note must be text; in typed notes mode it must be the empty string.",
     "incomplete_coverage_undisclosed": "When coverage_status is incomplete, disclose the limitation in coverage_note.",
+    "citation_handle_rejected": "Copy only exact current-turn citation handles; no raw IDs, old handles or duplicates.",
     "citation_ids_invalid": "Every citation_id must be a nonblank string from the presented governed citation set.",
     "citation_ids_duplicate": "citation_ids must contain no duplicate identifiers.",
     "citation_ids_limit": f"citation_ids must contain at most {_MAX_RESPONSE_CITATIONS} identifiers.",
@@ -9997,6 +10203,7 @@ def _final_repair_context(
     ordinary_no_tools: bool = False,
     required_prior_citations: Sequence[str] = (),
     field_count: int = 0,
+    citation_presentation: _TurnCitationPresentation | None = None,
 ) -> str:
     if ordinary_no_tools:
         if reason_code == "transform_identity_failed":
@@ -10023,6 +10230,10 @@ def _final_repair_context(
     available = set(evidence_citation_ids(evidence_results))
     if prior_evidence is not None:
         available.update(evidence_citation_ids(prior_evidence))
+    if citation_presentation is not None:
+        available = set(citation_presentation.references({"citations": sorted(available)})["citations"])
+        required_prior_citations = citation_presentation.references(
+            {"citations": list(required_prior_citations)})["citations"]
     repair_reason = reason_code or _validation_stop_reason(error)
     validation_reason = _finalization_validation_reason(error)
     rule = _FINALIZATION_REASON_RULES.get(validation_reason, "Follow the current decision schema and validation rules.")
@@ -10738,13 +10949,19 @@ def _parse_decision(
     field_request: UatEvidenceToolRequest | None = None,
     presented_evidence: Sequence[Mapping[str, Any]] = (),
     presented_prior_evidence: Mapping[str, Any] | None = None,
+    citation_presentation: _TurnCitationPresentation | None = None,
 ) -> dict[str, Any]:
+    if citation_presentation is not None:
+        citation_presentation.reset_finalization()
     if not isinstance(final_message, str) or not final_message.strip():
         raise _FinalizationValidationError("Codex returned no UAT answer", "no_text")
     try:
         payload = json.loads(final_message)
     except json.JSONDecodeError as exc:
         raise _FinalizationValidationError("Codex returned an invalid UAT answer", "invalid_json") from exc
+    if (citation_presentation is not None and isinstance(payload, dict)
+            and isinstance(payload.get("citation_ids"), list)):
+        citation_presentation.record_final_submission(payload["citation_ids"])
     required_keys = {
         "response_kind",
         "answer_text",
@@ -10759,6 +10976,8 @@ def _parse_decision(
         raise _FinalizationValidationError("Codex returned an invalid UAT answer", "key_set_mismatch")
     if not isinstance(payload["citation_ids"], list):
         raise _FinalizationValidationError("Codex returned an invalid UAT answer", "citation_ids_not_array")
+    if citation_presentation is not None:
+        payload["citation_ids"] = citation_presentation.decode(payload["citation_ids"])
     if typed_evidence_notes:
         payload = _render_typed_evidence_notes(
             payload, field_request, presented_evidence, presented_prior_evidence,

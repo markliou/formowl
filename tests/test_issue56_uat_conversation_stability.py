@@ -31,6 +31,10 @@ from formowl_mail import human_uat_orchestrator as orchestrator
 
 
 class Issue56UatConversationStabilityTests(unittest.TestCase):
+    def setUp(self):
+        from test_issue56_codex_provider_bridge import _use_short_citation_fixtures
+        _use_short_citation_fixtures(self)
+
     def test_unsafe_expanded_query_is_rejected_before_mcp_with_private_hash_trace(self):
         prompt = "Find the review condition for UNIT-Q7 in authorized records."
         for suffix in (" / cite evidence", " /private/fixture", " secret=synthetic"):
