@@ -2143,14 +2143,14 @@ def _build_source_recovery_summary(
     if replan_required:
         result_status = "replan_required"
     term_status = (
-        "complete" if scan_complete
-        else "partial" if required_term_observation_count
-        else "unavailable"
+        "unavailable" if not required_term_observation_count
+        else "complete" if scan_complete else "partial"
     )
     safe_term_counts = [
         {
             "term": term,
-            "count": int(required_term_hit_counts.get(term, 0)),
+            "count": (int(required_term_hit_counts.get(term, 0))
+                      if required_term_observation_count else None),
             "status": term_status,
         }
         for term in required_terms
@@ -2172,6 +2172,11 @@ def _build_source_recovery_summary(
         }
     else:
         date_priority = dict(date_priority_phase)
+        if (date_priority.get("sql_complete") is True
+                and type(date_priority.get("candidate_count")) is int
+                and date_priority["candidate_count"] >= 0):
+            date_priority["candidate_count_scope"] = "indexed_token_intersection"
+            date_priority["source_completeness"] = "unknown"
     citation_hashes = (
         list(dict.fromkeys(
             item["citation_hash"] for item in evidence_items

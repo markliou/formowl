@@ -72,6 +72,28 @@ class _PreparedPackage:
 
 
 class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
+    def test_recovery_summary_distinguishes_unread_terms_from_observed_zero(self):
+        for observed, complete in ((0, False), (0, True), (3, False), (3, True)):
+            with self.subTest(observed=observed, complete=complete):
+                summary = gateway_loader._build_source_recovery_summary(
+                    query_text="clienta 甲社專案", source_family_scope=("mail",),
+                    required_terms=("clienta", "甲社專案"), initial_status="pending_review",
+                    initial_warnings=("retrieval_projection_unavailable",), initial_evidence_count=0,
+                    result_status="pending_review", double_check=SimpleNamespace(scan=SimpleNamespace(
+                        complete=complete, scanned_observation_count=observed,
+                        stop_reason=None if complete else "indexed_token_scope")), evidence=(),
+                    required_term_observation_count=observed, required_term_hit_counts={"clienta": 0, "甲社專案": 0},
+                    joint_candidate_count=0, source_authority_fingerprint=sha256_json("source"),
+                    source_session_binding_fingerprint=sha256_json("session"), warnings=("used",), recheck_variant=None,
+                    date_priority_phase={"attempted": True, "candidate_count": 0, "sql_complete": True},
+                )
+                for item in summary["required_term_hit_counts"]:
+                    self.assertEqual(item["count"], 0 if observed else None)
+                    self.assertEqual(item["status"], ("complete" if complete else "partial") if observed else "unavailable")
+                self.assertEqual(summary["date_priority"]["candidate_count_scope"], "indexed_token_intersection")
+                self.assertEqual(summary["date_priority"]["source_completeness"], "unknown")
+                self.assertEqual(summary["joint_candidate_count_state"], "complete_zero" if complete else "unknown")
+
     def test_source_start_parent_map_has_separate_finite_cap_and_preserves_seals(self) -> None:
         from test_issue56_uat_handler_composition import _source_start_preparation_fixture
 

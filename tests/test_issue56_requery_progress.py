@@ -52,6 +52,31 @@ def _result(citations, *, contract=None, supported=(), prose="Synthetic source c
 
 
 class RequeryProgressTests(unittest.TestCase):
+    def test_private_request_retains_exact_page_size(self):
+        from formowl_gateway.issue56_uat_runtime import _private_behavior_call_diagnostic
+        for page_size in (None, 17):
+            with self.subTest(page_size=page_size):
+                request = orchestrator.UatEvidenceToolRequest(query_text="clienta evidence", page_size=page_size)
+                safe = _private_behavior_call_diagnostic(request, {}, None)
+                self.assertIn("page_size", safe)
+                self.assertEqual(safe["page_size"], page_size)
+
+    def test_private_summary_keeps_unavailable_counts_and_indexed_scope(self):
+        trace = {
+            "response_stage": "payload_validated", "browser_request_sha256": sha256_json("turn"),
+            "query_hash": sha256_json("query"), "mcp_call_index": 1, "citation_count": 0,
+            "request_discriminator": {"tool_name": "query_effective_graph_view", "query_text_char_count": 12,
+                                      "selector_kind": "none", "selector_present": False, "selector_count": 0},
+        }
+        recovery = {"required_term_hit_counts": [{"term": "clienta", "count": None, "status": "unavailable"}],
+                    "date_priority": {"attempted": True, "candidate_count": 0, "sql_complete": True,
+                                      "candidate_count_scope": "indexed_token_intersection",
+                                      "source_completeness": "unknown"}}
+        safe = _private_graph_recheck_trace(trace, {"status": "replan_required", "query_agent": {
+            "context_bundle": {"source_recovery": recovery}}})
+        self.assertEqual(safe["required_term_hit_counts"], recovery["required_term_hit_counts"])
+        self.assertEqual(safe["date_priority"], recovery["date_priority"])
+
     def test_actual_source_start_shortlist_miss_stops_before_second_provider(self):
         from test_issue56_source_query_stability import SourceQueryStabilityTests
 

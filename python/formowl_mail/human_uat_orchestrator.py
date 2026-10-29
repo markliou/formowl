@@ -659,6 +659,13 @@ def _formowl_instruction_bundle(
     developer_instructions = developer_template.replace(
         "{evidence_tool_name}", tool_name,
     )
+    developer_instructions += (
+        "\nFor a new source lookup, copy citation IDs only from the current turn's citations list "
+        "in the presented FormOwl evidence. Provenance, query, answer and lineage hashes are "
+        "metadata, not alternative citation IDs. Never invent or translate a citation ID. "
+        "For an authorized prior-evidence transformation, use only its explicitly presented "
+        "governed citation list; conversation text alone grants no citation authority."
+    )
     if catalog_mode:
         developer_instructions += (
             "\nThe latest appended server turn boundary alone selects the active tool and "
@@ -2197,6 +2204,8 @@ class CodexAppServerTransport(Protocol):
         tool_handler: Callable[[str, Mapping[str, Any]], Mapping[str, Any]],
     ) -> CodexAppServerTurn: ...
 
+    def inject_split_refinement(self, thread_id: str) -> None: ...
+
     def delete_thread(self, thread_id: str) -> None: ...
 
     def close(self) -> None: ...
@@ -2835,6 +2844,16 @@ class CodexAppServerStdioTransport:
             provider_env_key=self._provider_env_key,
         )
 
+    def inject_split_refinement(self, thread_id: str) -> None:
+        """Append server-owned control as a developer item, without a new turn."""
+        self._request("thread/inject_items", {
+            "threadId": thread_id,
+            "items": [{
+                "type": "message", "role": "developer",
+                "content": [{"type": "input_text", "text": _SPLIT_ONLY_REPLAN_GUIDANCE}],
+            }],
+        })
+
     def delete_thread(self, thread_id: str) -> None:
         if not isinstance(thread_id, str) or not thread_id:
             return
@@ -3346,6 +3365,7 @@ class CodexAppServerConversationModel:
                 source_tool_attempted = False
                 mcp_citation_stages: list[dict[str, Any]] = []
                 finalization_validation: list[dict[str, Any]] = []
+                split_guidance_injection: dict[str, Any] = {}
 
                 def attach_citation_diagnostics(
                     diagnostic: Mapping[str, Any] | None = None,
@@ -3355,6 +3375,8 @@ class CodexAppServerConversationModel:
                         merged["mcp_citation_stages"] = list(mcp_citation_stages)
                     if finalization_validation:
                         merged["finalization_validation"] = list(finalization_validation)
+                    if split_guidance_injection:
+                        merged["split_guidance_injection"] = dict(split_guidance_injection)
                     return merged or None
 
                 def rejected_tool_result(
@@ -3378,6 +3400,10 @@ class CodexAppServerConversationModel:
                         reason="invalid_arguments",
                         remaining_mcp_calls=_MAX_TOOL_CALLS_PER_TURN - tool_attempt_count,
                         validation_code=rejection["rejection_code"],
+                        split_refinement_allowed=(
+                            request_contract_binder._split_refinement_armed
+                            and tool_attempt_count < _MAX_TOOL_CALLS_PER_TURN
+                        ),
                     )
                     data = envelope["data"]
                     data["status"] = "rejected"
@@ -3473,6 +3499,13 @@ class CodexAppServerConversationModel:
                             )
                         )
                         if split_offer:
+                            try:
+                                self._transport.inject_split_refinement(thread.thread_id)
+                            except Exception:
+                                # Optional guidance must not invalidate the tool result.
+                                split_guidance_injection.update(status="failed", reason_code="rpc_error")
+                            else:
+                                split_guidance_injection.update(status="injected", reason_code=None)
                             model_result["execution_control"] = {
                                 "material_progress": False,
                                 "remaining_mcp_calls": (
@@ -3830,6 +3863,12 @@ _PROVIDER_TRANSPORT_TYPE_NAMES = frozenset(
 def safe_provider_transport_diagnostics(value: Mapping[str, Any]) -> dict[str, Any]:
     """One strict projection shared by the existing HTTP, gateway and trace owners."""
     safe: dict[str, Any] = {}
+    injection = value.get("split_guidance_injection")
+    if isinstance(injection, Mapping):
+        status, reason = injection.get("status"), injection.get("reason_code")
+        if (status == "injected" and reason is None
+                or status == "failed" and reason == "rpc_error"):
+            safe["split_guidance_injection"] = {"status": status, "reason_code": reason}
     for key, allowed in (("failure_phase", _PROVIDER_FAILURE_PHASES),
                          ("transport_exception_type", _PROVIDER_TRANSPORT_TYPE_NAMES)):
         token = value.get(key)
@@ -4891,6 +4930,10 @@ def _private_citation_ids_snapshot(citation_ids: Sequence[str]) -> dict[str, Any
         **_citation_ids_snapshot(normalized),
         "citation_ids": [
             _safe_diagnostic_fingerprint(value) or sha256_json(value)
+            for value in normalized[:_MAX_MODEL_CITATIONS]
+        ],
+        "citation_id_encodings": [
+            "raw_sha256" if _safe_diagnostic_fingerprint(value) else "hashed_non_sha256"
             for value in normalized[:_MAX_MODEL_CITATIONS]
         ],
         "identifier_encoding": "sha256_or_sha256_json",
@@ -6716,6 +6759,7 @@ class CodexResponsesConversationModel:
                 suppress_evidence_citations=suppress_evidence_citations,
                 provider_diagnostic=diagnostic or None,
                 authorized_capability_summary=authorized_capability_summary,
+                repair_attempted=final_repair_attempted,
             )
 
         def _loop_provider_diagnostic(
@@ -9680,6 +9724,7 @@ def _execution_control_envelope(
     reason: str,
     remaining_mcp_calls: int,
     validation_code: str | None = None,
+    split_refinement_allowed: bool = False,
 ) -> dict[str, Any]:
     external_replan = {
         "status": "required",
@@ -9761,7 +9806,11 @@ def _execution_control_envelope(
             " A subject-plus-requested-property phrase is not a literal content "
             "predicate. Keep target identifiers/entities separate from output fields, "
             "unless the user explicitly requires the whole phrase as literal content "
-            "or a value. Do not change any already validated required terms."
+            "or a value. "
+            + ("The existing server-authorized split-only exception remains available; "
+               "otherwise preserve all validated required terms."
+               if split_refinement_allowed and remaining_mcp_calls > 0
+               else "Do not change any already validated required terms.")
             + " " + EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE
         )
     return {
@@ -9778,6 +9827,8 @@ def _execution_control_envelope(
         "execution_control": {
             "material_progress": False,
             "remaining_mcp_calls": remaining_mcp_calls,
+            **({"split_only_refinement": True}
+               if split_refinement_allowed and remaining_mcp_calls > 0 else {}),
             "stop_reason": reason,
         },
     }
@@ -10011,7 +10062,7 @@ def _final_repair_context(
     )
 
 
-def _safe_stop_message(reason: str) -> str:
+def _safe_stop_message(reason: str, *, repair_attempted: bool = False) -> str:
     messages = {
         "invalid_arguments": (
             "這次查詢參數沒有通過 FormOwl 驗證，系統已停止重送近似字串。"
@@ -10069,7 +10120,8 @@ def _safe_stop_message(reason: str) -> str:
             "模型產生的答案沒有正確揭露證據覆蓋限制，修正後仍未通過" "驗證；因此已安全停止。"
         ),
     }
-    return messages.get(reason, messages["no_evidence"])
+    message = messages.get(reason, messages["no_evidence"])
+    return message if repair_attempted else message.replace("修正後仍未", "未")
 
 
 def _source_evidence_fallback_text(
@@ -10366,13 +10418,15 @@ def _safe_stop_outcome(
     suppress_evidence_citations: bool = False,
     provider_diagnostic: Mapping[str, Any] | None = None,
     authorized_capability_summary: Mapping[str, Any] | None = None,
+    repair_attempted: bool = False,
 ) -> UatConversationOutcome:
     message = _source_evidence_fallback_text(
         reason, evidence_records,
     ) or _safe_stop_message(
         "incomplete_status" if reason == "provider_incomplete"
         and provider_diagnostic is not None
-        and provider_diagnostic.get("reason_code") == "incomplete_status" else reason
+        and provider_diagnostic.get("reason_code") == "incomplete_status" else reason,
+        repair_attempted=repair_attempted,
     )
     # Presentation only: preserve the loop stop reason, budgets and error priority.
     if (reason in {"no_evidence", "no_progress"} and not citation_ids

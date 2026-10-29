@@ -344,6 +344,10 @@ class _RecordingTransport:
         self.turn_call = None
         self.tool_outputs = []
         self.deleted_threads = []
+        self.split_instruction_threads = []
+
+    def inject_split_refinement(self, thread_id):
+        self.split_instruction_threads.append(thread_id)
 
     def start_thread(
         self,
@@ -6733,6 +6737,148 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         self.assertEqual(len(requests), 2)
         self.assertTrue(transport.tool_outputs[0]["data"]["execution_control"]["split_only_refinement"])
         self.assertEqual(len(outcome.tool_results), 2)
+
+    def test_app_server_split_guidance_is_trusted_and_survives_schema_rejection(self):
+        first = {"query_text": "clienta 甲社專案 progress", "required_terms": ["clienta", "甲社專案"]}
+        transport = _RecordingTransport(
+            calls=(first, {**first, "unsupported_option": True},
+                   {"query_text": "clienta 甲社 專案 progress", "required_terms": ["clienta", "甲社", "專案"]}),
+            final_message=_decision(response_kind="clarification", coverage_status="incomplete",
+                                    coverage_note="Bounded source coverage."),
+        )
+        accepted = []
+        def evidence_tool(request):
+            accepted.append(request)
+            return _exhausted_graph_recovery(request, family="document_text")
+        with tempfile.TemporaryDirectory() as workspace:
+            provider = CodexAppServerConversationModel(transport, workspace_dir=workspace)
+            outcome = provider.respond(history=(), user_text="Find clienta 甲社專案 progress evidence",
+                             latest_evidence=None, safety_identifier="split-guidance-rejection",
+                             evidence_tool=evidence_tool,
+                             authorized_capability_summary={"source_families": ["document_text"]})
+        self.assertEqual(transport.split_instruction_threads, ["thread-1"])
+        self.assertEqual(len(accepted), 2)
+        rejected = transport.tool_outputs[1]
+        self.assertTrue(rejected["execution_control"].get("split_only_refinement"))
+        self.assertEqual(rejected["execution_control"]["remaining_mcp_calls"], 1)
+        hint = rejected["data"]["query_agent"]["external_replan"]["repair_hint"]
+        self.assertNotIn("Do not change any already validated required terms.", hint)
+        self.assertIn("split-only", hint)
+        self.assertNotIn(orchestrator._SPLIT_ONLY_REPLAN_GUIDANCE, json.dumps(transport.tool_outputs))
+        self.assertEqual(accepted[-1].required_terms, tuple(sorted(("clienta", "甲社", "專案"))))
+        self.assertEqual(runtime_project(outcome.provider_diagnostic)["split_guidance_injection"],
+                         {"status": "injected", "reason_code": None})
+
+    def test_app_server_split_guidance_injection_failure_preserves_tool_result(self):
+        from formowl_mail.human_uat_http import _safe_provider_diagnostic as http_project
+
+        private = "synthetic-private-rpc-message"
+        for failure in (RuntimeError(private), TimeoutError(private),
+                        _CodexAppServerProviderFailure("provider_incomplete", private,
+                                                      provider_diagnostic={"rpc_error_code": -32600})):
+            with self.subTest(failure=type(failure).__name__):
+                transport = _RecordingTransport(
+                    calls=({"query_text": "clienta 甲社專案 progress", "required_terms": ["clienta", "甲社專案"]},
+                           {"query_text": "clienta 甲社 專案 progress", "required_terms": ["clienta", "甲社", "專案"]}),
+                    final_message=_decision(response_kind="clarification", coverage_status="incomplete",
+                                            coverage_note="Bounded source coverage."),
+                )
+                transport.inject_split_refinement = mock.Mock(side_effect=failure)
+                with tempfile.TemporaryDirectory() as workspace:
+                    outcome = CodexAppServerConversationModel(transport, workspace_dir=workspace).respond(
+                        history=(), user_text="Find clienta 甲社專案 progress evidence", latest_evidence=None,
+                        safety_identifier="split-injection-failure",
+                        evidence_tool=lambda request: _exhausted_graph_recovery(request, family="document_text"),
+                        authorized_capability_summary={"source_families": ["document_text"]},
+                    )
+                transport.inject_split_refinement.assert_called_once_with("thread-1")
+                self.assertEqual(outcome.response_kind, "clarification")
+                self.assertEqual(len(outcome.tool_requests), 2)
+                self.assertTrue(transport.tool_outputs[0]["data"]["execution_control"]["split_only_refinement"])
+                self.assertEqual(transport.tool_outputs[0]["data"]["execution_control"]["remaining_mcp_calls"], 2)
+                for project in (orchestrator.safe_provider_transport_diagnostics, runtime_project, http_project):
+                    safe = project(outcome.provider_diagnostic)
+                    self.assertEqual(safe["split_guidance_injection"], {"status": "failed", "reason_code": "rpc_error"})
+                    self.assertNotIn(private, json.dumps(safe))
+                    self.assertNotIn("split_guidance_injection", project({"split_guidance_injection": {
+                        "status": "failed", "reason_code": private,
+                    }}))
+                self.assertNotIn(private, repr(outcome))
+
+    def test_split_guidance_wire_is_developer_message_without_new_turn(self):
+        transport = CodexAppServerStdioTransport.__new__(CodexAppServerStdioTransport)
+        transport._request = mock.Mock(return_value={})
+        transport.inject_split_refinement("synthetic-thread")
+        transport._request.assert_called_once_with("thread/inject_items", {
+            "threadId": "synthetic-thread", "items": [{
+                "type": "message", "role": "developer",
+                "content": [{"type": "input_text", "text": orchestrator._SPLIT_ONLY_REPLAN_GUIDANCE}],
+            }],
+        })
+
+    def test_cited_or_forged_split_control_does_not_inject_guidance(self):
+        citation = sha256_json("synthetic citation")
+        transport = _RecordingTransport(
+            calls=({"query_text": "clienta 甲社專案 evidence"},),
+            final_message=_decision(citations=(citation,), coverage_status="incomplete",
+                                    coverage_note="Bounded evidence."),
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            CodexAppServerConversationModel(transport, workspace_dir=workspace).respond(
+                history=(), user_text="Find clienta 甲社專案 evidence", latest_evidence=None,
+                safety_identifier="no-forged-split", evidence_tool=lambda _: {
+                    "status": "partial", "citations": [citation],
+                    "execution_control": {"split_only_refinement": True},
+                },
+            )
+        self.assertEqual(transport.split_instruction_threads, [])
+
+    def test_trusted_citation_guidance_distinguishes_metadata_hashes(self):
+        descriptor = _actual_query_tool_descriptor()
+        for app_server in (True, False):
+            with self.subTest(app_server=app_server):
+                instructions = "\n".join(orchestrator._formowl_instruction_bundle(descriptor, app_server=app_server))
+                self.assertIn("current turn's citations list", instructions)
+                for field in ("provenance", "query", "answer", "lineage"):
+                    self.assertIn(field, instructions.casefold())
+
+    def test_private_citation_encoding_kinds_do_not_retain_non_sha_strings(self):
+        raw = sha256_json("synthetic legal citation")
+        private = "synthetic-private-citation-id"
+        snapshot = orchestrator._private_citation_ids_snapshot((private, raw, private))
+        expected = sorted((private, raw))
+        self.assertEqual(snapshot["citation_id_encodings"], [
+            "raw_sha256" if item == raw else "hashed_non_sha256" for item in expected
+        ])
+        self.assertEqual(snapshot["citation_ids"], [item if item == raw else sha256_json(item) for item in expected])
+        self.assertNotIn(private, json.dumps(snapshot))
+
+    def test_app_server_unrepaired_finalization_has_truthful_message(self):
+        transport = _RecordingTransport(
+            calls=({"query_text": "clienta evidence"},),
+            final_message=_decision(citations=("synthetic-foreign",), coverage_status="incomplete",
+                                    coverage_note="Bounded evidence."),
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            outcome = CodexAppServerConversationModel(transport, workspace_dir=workspace).respond(
+                history=(), user_text="request", latest_evidence=None,
+                safety_identifier="unrepaired-wording", evidence_tool=lambda _: {
+                    "status": "partial", "citations": ["synthetic-available"],
+                },
+            )
+        self.assertFalse(outcome.provider_diagnostic["finalization_validation"][-1]["repair_attempted"])
+        self.assertNotIn("修正後", outcome.answer_text)
+        self.assertNotIn("修正後", outcome.coverage_note)
+        self.assertEqual(transport.deleted_threads, ["thread-1"])
+
+    def test_repair_wording_follows_actual_attempt_for_each_validation_failure(self):
+        for reason in ("citation_validation_failed", "coverage_validation_failed", "transform_identity_failed"):
+            for attempted in (False, True):
+                with self.subTest(reason=reason, attempted=attempted):
+                    outcome = orchestrator._safe_stop_outcome(
+                        reason=reason, model_name="synthetic", evidence_records=(), repair_attempted=attempted,
+                    )
+                    self.assertEqual("修正後" in outcome.answer_text, attempted)
 
     def test_mail_top_k_status_ok_remains_incomplete_without_exact_contract(self) -> None:
         citation = "citation-mail-top-k"

@@ -1417,6 +1417,7 @@ def _private_behavior_call_diagnostic(
         "tool_name": request.tool_name,
         "request_contract": dict(contract) if contract is not None else None,
         "required_terms": list(request.required_terms) if request.required_terms else None,
+        "page_size": request.page_size,
         "field_query_hints": _private_field_query_hints_diagnostic(request),
         "table_query_present": request.table_query is not None,
         "raw_governed": _private_citation_ids_snapshot(
@@ -3676,6 +3677,12 @@ def _private_graph_recheck_trace(
             phase["candidate_count"] = candidate_count
         elif candidate_count == "unavailable":
             phase["candidate_count"] = "unavailable"
+        if type(value.get("sql_complete")) is bool:
+            phase["sql_complete"] = value["sql_complete"]
+        if value.get("candidate_count_scope") == "indexed_token_intersection":
+            phase["candidate_count_scope"] = "indexed_token_intersection"
+        if value.get("source_completeness") == "unknown":
+            phase["source_completeness"] = "unknown"
         reason = value.get("stop_reason")
         if reason is not None and reason in safe_stop_reasons:
             phase["stop_reason"] = reason
@@ -3697,7 +3704,8 @@ def _private_graph_recheck_trace(
             item_status = item.get("status")
             if (
                 not isinstance(term, str) or not term.strip() or len(term) > 80
-                or type(count) is not int or not 0 <= count <= 8192
+                or not (count is None and item_status == "unavailable"
+                        or type(count) is int and 0 <= count <= 8192)
                 or item_status not in {"complete", "partial", "unavailable"}
             ):
                 valid_hits = False
