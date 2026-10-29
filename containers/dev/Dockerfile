@@ -57,7 +57,8 @@ RUN python -m pip install --no-cache-dir "setuptools>=68" wheel \
         "sentence-transformers==3.3.1" \
         "tokenizers==0.20.3" \
         "transformers==4.46.3" \
-    && python -m pip check
+    && python -m pip check \
+    && python -c "import pypdf; assert pypdf.__version__ == '5.9.0'"
 
 RUN mkdir -p /models/huggingface /models/sentence-transformers \
     && chmod -R 0777 /models

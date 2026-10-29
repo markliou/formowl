@@ -100,7 +100,7 @@ class AttachmentDocumentExtractor:
         return "attachment_document_parser"
 
     def version(self) -> str:
-        return "0.7.3"
+        return "0.7.4"
 
     def supported_mime_types(self) -> list[str]:
         # run_extractor uses this as a routing admission check for every child
@@ -1519,7 +1519,9 @@ def _pdf_content_impl(data: bytes, *, config: dict[str, Any]) -> _ParsedContent:
     for page_index in range(1, admitted_pages + 1):
         page = pages[page_index - 1]
         try:
-            text = page.extract_text() or ""
+            text = page.extract_text(
+                extraction_mode="layout", layout_mode_space_vertically=False,
+            ) or ""
         except Exception as exc:
             # One unreadable page must not discard the others; only a file with
             # no readable page at all is a failed extraction.

@@ -243,6 +243,35 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
         self.assertFalse(scan_result.observations)
         self.assertIn("attachment_document_pdf_ocr_required", scan_result.warnings)
 
+    def test_pdf_layout_keeps_visual_rows_across_column_ordered_pages(self) -> None:
+        content = _positioned_pdf_bytes([
+            [
+                (20, 740, "Order number"), (20, 720, "Order date"), (20, 700, "Supplier"),
+                (200, 740, "K-204"), (200, 720, "2030-04-19"), (200, 700, "Clienta"),
+            ],
+            [
+                (20, 740, "Item"), (20, 720, "1"), (20, 700, "2"),
+                (120, 740, "Part"), (120, 720, "ZX-742/A"), (120, 700, "ZX-743.B"),
+                (250, 740, "Qty"), (250, 720, "12 Pcs"), (250, 700, "4 Pcs"),
+                (350, 740, "Due"), (350, 720, "2030-05-10"), (350, 700, "2030-05-12"),
+            ],
+        ])
+        result = self._run_registered(content, "application/pdf", "layout.pdf")
+        self.assertEqual(result.extractor_run.status, "succeeded")
+        self.assertEqual([o.location["page"] for o in result.observations], [1, 2])
+        self.assertEqual(
+            [[line.split() for line in o.text.splitlines() if line.strip()]
+             for o in result.observations],
+            [
+                [["Order", "number", "K-204"], ["Order", "date", "2030-04-19"],
+                 ["Supplier", "Clienta"]],
+                [["Item", "Part", "Qty", "Due"],
+                 ["1", "ZX-742/A", "12", "Pcs", "2030-05-10"],
+                 ["2", "ZX-743.B", "4", "Pcs", "2030-05-12"]],
+            ],
+        )
+        self.assertEqual(result.extractor_run.extractor_version, "0.7.4")
+
     def test_native_pdf_and_independent_utf8_preserve_safe_text_around_redacted_spans(self) -> None:
         pdf_text = "SYN-LEFT Qty 23.75 / / Grade B SYN-RIGHT"
         independent_text = "SYN-LEFT 稽核 café Qty 23.75 / / /私密/樣本.txt Grade B SYN-RIGHT"
@@ -273,8 +302,8 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
                     extracted_value=observation.extracted_value,
                 ))
                 assert_no_public_raw_references(observation.to_dict())
-                self.assertEqual(AttachmentDocumentExtractor().version(), "0.7.3")
-                self.assertEqual(result.extractor_run.extractor_version, "0.7.3")
+                self.assertEqual(AttachmentDocumentExtractor().version(), "0.7.4")
+                self.assertEqual(result.extractor_run.extractor_version, "0.7.4")
 
     def test_pdf_reads_only_admitted_pages_once(self) -> None:
         pages = [Mock(), Mock()]
@@ -288,7 +317,9 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
                 config={"attachment_max_pages": 1},
             )
         self.assertFalse(result.errors)
-        pages[0].extract_text.assert_called_once()
+        pages[0].extract_text.assert_called_once_with(
+            extraction_mode="layout", layout_mode_space_vertically=False,
+        )
         pages[1].extract_text.assert_not_called()
         self.assertIn("attachment_document_page_limit_reached", result.warnings)
 
@@ -569,6 +600,32 @@ def _xlsx_package(sheet: str, styles: str) -> bytes:
         )
         archive.writestr("xl/styles.xml", styles)
         archive.writestr("xl/worksheets/sheet1.xml", sheet)
+    return output.getvalue()
+
+
+def _positioned_pdf_bytes(pages: list[list[tuple[int, int, str]]]) -> bytes:
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+    writer = PdfWriter()
+    font = writer._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"),
+    }))
+    for positions in pages:
+        page = writer.add_blank_page(width=612, height=792)
+        page[NameObject("/Resources")] = DictionaryObject({
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+        })
+        stream = DecodedStreamObject()
+        stream.set_data("\n".join(
+            f"BT /F1 10 Tf 1 0 0 1 {x} {y} Tm ({text}) Tj ET"
+            for x, y, text in positions
+        ).encode("ascii"))
+        page[NameObject("/Contents")] = writer._add_object(stream)
+    output = io.BytesIO()
+    writer.write(output)
     return output.getvalue()
 
 
