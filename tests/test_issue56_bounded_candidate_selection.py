@@ -21,7 +21,7 @@ import test_issue56_uat_handler_composition as source_fixture
 
 class BoundedCandidateSelectionTests(unittest.TestCase):
     @staticmethod
-    def attachment_source(root, *, oversized=False):
+    def attachment_source(root, *, oversized=False, dated=False):
         # Fill the synthetic extractor's inventory identity before ingestion
         # writes/seals it. The text parser and source guards remain real.
         run = source_fixture.run_ingestion_job
@@ -41,8 +41,22 @@ class BoundedCandidateSelectionTests(unittest.TestCase):
                 return result
             with patch.object(adapter, "extract", side_effect=bound_parent):
                 return run(**kwargs)
+        dump = json.dumps
+        def archive(value, *args, **kwargs):
+            if dated and isinstance(value, dict) and value.get("archive_id") == "archive_source_start":
+                template = value["messages"][0]
+                value = {**value, "messages": [
+                    {**template, "message_id": "<" + name + "@example.test>", "sent_at": date,
+                     "body": text, "body_hash": sha256_json(text)}
+                    for name, date, text in (
+                        ("new-attachment", "2030-03-01T08:00:00+08:00", "Cover note."),
+                        ("old-body", "2020-01-01T00:00:00+00:00", "Clienta pending. Quoted Date: 2099-01-01."),
+                        ("middle-body", "2025-01-01T00:00:00+00:00", "Clienta acknowledged."),
+                    )]}
+            return dump(value, *args, **kwargs)
         text = "Clienta release date 2036-02-03." + (" quartz" * 2600 if oversized else "")
-        with patch.object(source_fixture, "run_ingestion_job", side_effect=ingest):
+        with (patch.object(source_fixture, "run_ingestion_job", side_effect=ingest),
+              patch.object(source_fixture.json, "dumps", side_effect=archive)):
             fixture = _source_start_preparation_fixture(
                 root, families=("mail",), mail_text="Clienta request is pending.",
                 attachment_content=(text.encode(), "text/plain"),
@@ -139,6 +153,96 @@ class BoundedCandidateSelectionTests(unittest.TestCase):
             self.assertNotIn(sha256_json(child.to_dict()), result["citations"])
             body = next(item for item in fixture.observations if item.observation_type == "email_body_segment")
             self.assertIn(sha256_json(body.to_dict()), result["citations"])
+
+    def test_newer_zero_score_attachment_survives_reservoir_and_final_acceptance(self):
+        import hashlib
+        from formowl_mail.issue56_sealed_source import bind_mail_date_priority, mail_date_priority_scope
+        with tempfile.TemporaryDirectory() as directory:
+            _, revision, handler, arguments, child, _ = self.attachment_source(Path(directory), dated=True)
+            target = sha256_json(child.to_dict())
+            arguments["request_contract"]["requested_fields"] = ["產地"]  # Every candidate has zero field tokens.
+            original_scan = revision.source_records.scan_authorized_observations
+            original_envelope = loader._admit_source_model_envelope
+            for recent in (False, True):
+                prompt = "Clienta 最後一次出貨的產地" if recent else "Clienta 的產地"
+                arguments["request_contract"]["original_query_hash"] = "sha256:" + hashlib.sha256(prompt.encode()).hexdigest()
+                public = {k: v for k, v in arguments.items() if k not in {"requester_user_id", "workspace_id", "session_id"}}
+                binding = bind_mail_date_priority(user_text=prompt, arguments=public, tool_name="query_effective_graph_view")
+                seen, captures = [], []
+                def scan(**kwargs):
+                    callback = kwargs["observation_callback"]
+                    def observe(item, scope):
+                        seen.append(item.observation_id)
+                        return callback(item, scope)
+                    return original_scan(**{**kwargs, "observation_callback": observe,
+                                            "context_anchor_callback": lambda *_: False})
+                def envelope(payload, **kwargs):
+                    captures.append(deepcopy(kwargs))
+                    return original_envelope(payload, **kwargs)
+                with (mail_date_priority_scope(binding),
+                      patch.object(revision.source_records, "scan_authorized_observations", side_effect=scan) as scans,
+                      patch.object(revision.source_records, "scan_date_ordered_mail", side_effect=AssertionError("no new date scan")),
+                      patch.object(loader, "_admit_source_model_envelope", side_effect=envelope),
+                      patch.object(loader.time, "monotonic", return_value=time.monotonic())):
+                    result = handler(arguments)
+                self.assertEqual(scans.call_count, 1)
+                self.assertEqual(seen.count(child.observation_id), 1)
+                if not recent:
+                    self.assertNotIn(target, result["citations"])
+                    continue
+                self.assertIn(target, result["citations"])
+                self.assertIn(target, {x["citation_hash"] for x in captures[-1]["deferred_items"]})
+                self.assertTrue(all(not v for v in captures[-1]["selection_hits"].values()))
+                self.assertLessEqual(len(captures[-1]["outer_dates"]), 128)
+                paragraph = next(x for x in result["evidence"] if x["citation_hash"] == target)
+                self.assertEqual(paragraph["snippet"], child.text)
+                date_key = (target, paragraph["source_scope_fingerprint"], paragraph["message_occurrence_id"],
+                            paragraph["occurrence_lineage_fingerprint"])
+                self.assertEqual(captures[-1]["outer_dates"][date_key], "2030-03-01T00:00:00.000000+00:00")
+                self.assertEqual(len(result["evidence"]), 2)
+                self.assertEqual(set(evidence_citation_ids(result)), set(evidence_citation_ids(compact_evidence_for_model(result))))
+                self.assertNotIn("latest_claim_verified", json.dumps(result))
+                self.assertNotIn("outer_dates", json.dumps(result))
+                self.assertEqual(result["coverage"]["status"], "incomplete")
+
+    def test_recency_secondary_key_preserves_scores_stability_and_guards(self):
+        old = self.mail("old", "Clienta source.", message="old")
+        new = self.mail("new", "Clienta source.", message="new")
+        def identity(item):
+            return (item["citation_hash"], item["source_scope_fingerprint"],
+                    item["message_occurrence_id"], item["occurrence_lineage_fingerprint"])
+        for variant in ("newer", "higher_old_score", "same_date", "unknown", "wrong_lineage", "expired", "oversized", "native"):
+            with self.subTest(variant=variant):
+                incoming = deepcopy(new)
+                staged = [old]
+                dates = {identity(old): "2020-01-01T00:00:00.000000+00:00",
+                         identity(new): "2030-01-01T00:00:00.000000+00:00"}
+                hits = {old["citation_hash"]: set(), new["citation_hash"]: set()}
+                if variant == "higher_old_score":
+                    hits[old["citation_hash"]] = {(0, "source")}
+                if variant == "same_date":
+                    dates[identity(new)] = dates[identity(old)]
+                if variant == "unknown":
+                    dates = {}
+                if variant == "wrong_lineage":
+                    incoming["occurrence_lineage_fingerprint"] = sha256_json("different-source-binding")
+                if variant == "oversized":
+                    incoming["snippet"] += "x" * 17000
+                if variant == "native":
+                    staged.append(self.row("fixed", "Northland", "2035-04-09"))
+                payload = self.payload(staged)
+                original = deepcopy((payload, staged, incoming, dates))
+                result = loader._admit_source_model_envelope(
+                    payload, staged_items=staged, deferred_items=[incoming], limit=3 if variant == "native" else 2,
+                    deadline=time.monotonic() + (-1 if variant == "expired" else 10),
+                    selection_hits=hits, overflow_hashes={incoming["citation_hash"]}, outer_dates=dates,
+                )
+                self.assertEqual((payload, staged, incoming, dates), original)
+                if variant == "newer":
+                    self.assertIn(new["citation_hash"], result["citations"])
+                    self.assertNotIn(old["citation_hash"], result["citations"])
+                else:
+                    self.assertEqual(result, payload)
 
     @staticmethod
     def mail(name, text, *, message="quoted-message", order="REQ-104"):

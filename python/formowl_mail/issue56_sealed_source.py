@@ -1536,6 +1536,24 @@ def reviewed_annotation_query_scope(binding):
 _MAIL_DATE_PRIORITY: ContextVar[Any] = ContextVar("issue56_private_mail_date_priority", default=None)
 
 
+@dataclass(frozen=True)
+class MailDatePriorityBinding:
+    request_binding: tuple[str, tuple[str, ...], str]
+    mode: str
+
+
+def _mail_presentation_recency_intent(text):
+    """Closed original-language intent; positions/windows are not latest events."""
+    compact = re.sub(r"\s+", "", text)
+    if (re.search(r"(?:最新|最[後后])(?:一|1)?(?:頁|页|欄|栏|行|個字|个字)", compact)
+            or re.search(r"最近(?:[0-9一二兩两三四五六七八九十百幾几數数]+)(?:個|个)?(?:天|日|週|周|月|年)", compact)
+            or "上上次" in compact
+            or ("上一次" in compact and re.search(r"之前|以前|那[筆笔次張张]|[這这][筆笔次張张]|本次|指定那", compact))):
+        return False
+    return bool(re.search(r"最新|最近(?:一次|一[筆笔封])|最[後后]一次|上一次", compact)
+                or re.search(r"\b(?:latest|most recent)\b", text))
+
+
 def bind_mail_date_priority(*, user_text, arguments, tool_name):
     """Called only after the server has frozen original-grounded required terms."""
     contract = arguments.get("request_contract") or {}
@@ -1545,17 +1563,26 @@ def bind_mail_date_priority(*, user_text, arguments, tool_name):
     # Closed positive recency intent; quoted, negated or comparative commands
     # remain ordinary bounded lookup. No source/customer vocabulary is added.
     if (not terms or any(not t or t not in text for t in terms)
-            or not re.search(r"最新|最近|\b(?:latest|most recent)\b", text)
             or re.search(r"[\"'「」『』“”]|不|勿|非|排除|比較|比较|\b(?:not|no|without|except|compare|versus)\b", text)
             or contract.get("query_class") != "evidence_lookup"
-            or contract.get("source_family_scope") != ["mail"]
+            or "mail" not in (contract.get("source_family_scope") or ())
             or contract.get("original_query_hash") != "sha256:" + hashlib.sha256(user_text.encode()).hexdigest()
             or contract.get("native_locator") is not None
             or any(arguments.get(key) is not None for key in (
                 "table_query", "exact_inventory_kind", "exact_field", "cursor"))):
         return None
-    return (contract["original_query_hash"], terms,
-            sha256_json({"name": tool_name, "arguments": arguments}))
+    # Preserve the existing scanner's exact eligibility. New language/mixed
+    # scopes only grant same-score presentation ordering, never additional reads.
+    if (contract.get("source_family_scope") == ["mail"]
+            and re.search(r"最新|最近|\b(?:latest|most recent)\b", text)):
+        mode = "date_scan"
+    elif _mail_presentation_recency_intent(text):
+        mode = "presentation_tiebreak"
+    else:
+        return None
+    return MailDatePriorityBinding(
+        (contract["original_query_hash"], terms,
+         sha256_json({"name": tool_name, "arguments": arguments})), mode)
 
 
 @contextmanager

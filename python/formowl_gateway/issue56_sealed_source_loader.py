@@ -1370,7 +1370,8 @@ def _placement_initial_context(query_agent):
             "warnings": list(dict.fromkeys((*query_agent.get("warnings", ()), "occurrence_placement_unverified")))}
 
 
-def _placement_mail_group(placement, observation, scope_id, item, *, source, protected_terms, tokenizer):
+def _placement_mail_group(placement, observation, scope_id, item, *, source, protected_terms, tokenizer,
+                          outer_date_callback=None):
     """All predicates on one guarded pair and the actual visible projection."""
     pair = _SOURCE_OCCURRENCE_PAIR.get()
     if pair is None or pair[0] is not observation:
@@ -1383,7 +1384,8 @@ def _placement_mail_group(placement, observation, scope_id, item, *, source, pro
         return None
     # Reuse the existing provenance, permission, fingerprint and whole-pair
     # projection boundary. The job component is supplied only by guarded reader.
-    grouped = _mail_header_context(observation, item, parent, source=source, scope_id=scope_id)
+    grouped = _mail_header_context(observation, item, parent, source=source, scope_id=scope_id,
+                                  outer_date_callback=outer_date_callback)
     header = grouped.get("_mail_parent_header")
     if not isinstance(header, Mapping) or grouped.get("content_redacted") or header.get("content_redacted"):
         return None
@@ -1444,7 +1446,8 @@ def _closed_placement_mail_handler(handler):
     return guarded
 
 
-def _mail_header_context(observation, item, parent, *, source, scope_id, attachment_parent=None):
+def _mail_header_context(observation, item, parent, *, source, scope_id, attachment_parent=None,
+                         outer_date_callback=None):
     """Project already-read outer headers, never infer them from quoted bodies."""
     attachment_context = {}
     if attachment_parent is not None:
@@ -1512,6 +1515,8 @@ def _mail_header_context(observation, item, parent, *, source, scope_id, attachm
         return item
     parent_hash = sha256_json(parent.to_dict())
     lineage = source_occurrence_lineage_from_observation(parent, authorized_source=source)
+    if outer_date_callback is not None:
+        outer_date_callback(item, (parent.payload or {}).get("sent_at"))
     header = {
         **{key: item[key] for key in ("email_message_id", "message_occurrence_id",
                                     "mail_import_session_id", "revision_binding") if key in item},
@@ -1595,6 +1600,22 @@ def _soft_unit_utility(hits):
     return len({field for field, _ in hits}), len(hits)
 
 
+def _presentation_unit_identity(item):
+    return (item["citation_hash"], item.get("source_scope_fingerprint"),
+            item.get("message_occurrence_id"), item["occurrence_lineage_fingerprint"])
+
+
+def _presentation_order(hits, units, outer_dates):
+    # Dates are only a secondary key, supplied by guarded outer parents. Count
+    # each anchor once, not its expanded dependency header; unknown adds no date.
+    if not outer_dates:
+        return _soft_unit_utility(hits), ()
+    dates = tuple(sorted((date for item in units
+                          if item.get("source_context", {}).get("relationship") != "outer_message_header"
+                          and (date := (outer_dates or {}).get(_presentation_unit_identity(item)))), reverse=True))
+    return _soft_unit_utility(hits), dates
+
+
 def _presentation_duplicate_key(item):
     # Equal words alone do not identify the same business event. Require the
     # validated canonical mail identity as well as identical body/header text;
@@ -1652,7 +1673,7 @@ def _presentation_replaceable_indices(items, incoming, fields):
 
 
 def _admit_source_model_envelope(payload, *, staged_items, limit, deadline, deferred_items=(),
-                                 selection_hits=None, overflow_hashes=()):
+                                 selection_hits=None, overflow_hashes=(), outer_dates=None):
     """Re-admit cached validated units against the unchanged complete presentation."""
     trace = _SOURCE_PHASE_TRACE.get()
     envelope_cell = _trace(trace, "phase", "envelope", before=len(payload.get("evidence_snippets", payload.get("evidence", ()))))
@@ -1812,8 +1833,9 @@ def _admit_source_model_envelope(payload, *, staged_items, limit, deadline, defe
         proposal = compose([])
         while pool and time.monotonic() < deadline:
             # Stable max: staged order first, then stable reservoir order.
-            best = max(range(len(pool)), key=lambda index: _soft_unit_utility(
+            best = max(range(len(pool)), key=lambda index: _presentation_order(
                 selection_hits.get(pool[index]["citation_hash"], set()) - covered,
+                (pool[index],), outer_dates,
             ))
             item = pool.pop(best)
             records, truncated = _bounded_mail_header_groups([*chosen, item], limit=limit)
@@ -1826,7 +1848,9 @@ def _admit_source_model_envelope(payload, *, staged_items, limit, deadline, defe
                 proposal = trial
         old_hits = set().union(*(selection_hits.get(item["citation_hash"], set())
                                 for item in selected.get(content_key, ())))
-        if time.monotonic() < deadline and _soft_unit_utility(covered) > _soft_unit_utility(old_hits):
+        if (time.monotonic() < deadline
+                and _presentation_order(covered, proposal.get(content_key, ()), outer_dates)
+                > _presentation_order(old_hits, selected.get(content_key, ()), outer_dates)):
             selected = proposal
     # Only the caller can supply same-turn, pre-deadline validated cache units.
     # This is final presentation, not a callback/replay or a new source budget.
@@ -2674,20 +2698,23 @@ def _build_source_start_semantic_handler(
             "deadline": time.monotonic() + SOURCE_START_EVIDENCE_TIME_BUDGET_MS / 1000,
             "reads": 0, "evidence": 0, "context_bytes": 0,
         }
-        from formowl_mail.issue56_sealed_source import _MAIL_DATE_PRIORITY
+        from formowl_mail.issue56_sealed_source import _MAIL_DATE_PRIORITY, MailDatePriorityBinding, _mail_message_date_value
         date_binding = _MAIL_DATE_PRIORITY.get()
         date_metadata = {}
         date_priority = False
         if date_binding is not None:
             public = {key: value for key, value in arguments.items()
                       if key not in {"requester_user_id", "workspace_id", "session_id"}}
-            if (date_binding != (request_contract["original_query_hash"], required_terms,
+            if (not isinstance(date_binding, MailDatePriorityBinding)
+                    or date_binding.request_binding != (request_contract["original_query_hash"], required_terms,
                                 sha256_json({"name": "query_mail_evidence" if mail_tool else "query_effective_graph_view",
                                              "arguments": public}))
                     or query_class != "evidence_lookup" or not required_terms
-                    or request_contract["source_family_scope"] != ["mail"]):
+                    or date_binding.mode not in {"date_scan", "presentation_tiebreak"}
+                    or "mail" not in request_contract["source_family_scope"]
+                    or (date_binding.mode == "date_scan" and request_contract["source_family_scope"] != ["mail"])):
                 raise ContractValidationError("mail date priority request binding is invalid")
-            date_priority = True
+            date_priority = date_binding.mode == "date_scan"
         # Runtime scopes the absolute TURN deadline; the read/recheck phase
         # separately retains its bounded UAT cap. Cached presentation does not read.
         presentation_deadline = _SOURCE_EVIDENCE_DEADLINE.get()
@@ -2707,6 +2734,8 @@ def _build_source_start_semantic_handler(
         )
         if auto_exact:
             date_priority = False  # Preserve the existing primary native/exact route.
+        presentation_recency = bool(date_binding is not None and date_binding.mode == "presentation_tiebreak"
+                                   and not auto_exact)
         if date_priority:
             # Apply AM's 500ms cap only after excluding primary native/exact.
             source_budget["deadline"] = min(source_budget["deadline"], time.monotonic() + .5)
@@ -2755,6 +2784,7 @@ def _build_source_start_semantic_handler(
         presentation_cache: list[dict[str, Any]] = []
         overflow_hashes: set[str] = set()
         selection_hits: dict[str, set[tuple[int, str]]] = {}
+        outer_dates: dict[tuple, str] = {}
         field_terms: list[set[str]] = []
         annotation_ids: tuple[str, ...] = ()
         annotation_hashes: tuple[str, ...] = ()
@@ -2763,6 +2793,24 @@ def _build_source_start_semantic_handler(
         annotation_hint_counts = {"projected": 0, "predicate_passed": 0,
                                   "predicate_rejected": 0}
         annotation_identity_reads_cell = None
+
+        def prune_outer_dates():
+            if not outer_dates:
+                return
+            retained = {_presentation_unit_identity(item) for item in (
+                *admitted_items, *(entry[2] for entry in deferred), *presentation_cache)}
+            for key in tuple(outer_dates):
+                if key not in retained:
+                    del outer_dates[key]
+
+        def remember_outer_date(item, value):
+            prune_outer_dates()
+            date, status = _mail_message_date_value(value)
+            key = _presentation_unit_identity(item)
+            if status == "ok" and (key in outer_dates or len(outer_dates) < 128):
+                outer_dates[key] = date
+
+        date_callback = remember_outer_date if presentation_recency else None
 
         def finish_annotation_identity_reads() -> None:
             if annotation_identity_reads_cell is None:
@@ -2801,8 +2849,9 @@ def _build_source_start_semantic_handler(
             kept = []
             covered = set().union(*(selection_hits.get(entry["citation_hash"], set()) for entry in admitted_items))
             while pool and time.monotonic() < source_budget["deadline"]:
-                best = max(range(len(pool)), key=lambda i: _soft_unit_utility(
+                best = max(range(len(pool)), key=lambda i: _presentation_order(
                     selection_hits.get(pool[i]["citation_hash"], set()) - covered,
+                    (pool[i],), outer_dates,
                 ))
                 entry = pool.pop(best)
                 records, truncated = _bounded_mail_header_groups([*kept, entry], limit=limit)
@@ -3291,6 +3340,7 @@ def _build_source_start_semantic_handler(
                         source=source,
                         scope_id=scope_id,
                         attachment_parent=parent,
+                        outer_date_callback=date_callback,
                     )
                     return admit(observation, snippet, scope_id)
                 occurrence_id = location.get("message_occurrence_id")
@@ -3430,6 +3480,7 @@ def _build_source_start_semantic_handler(
                         source=source,
                         protected_terms=protected_terms,
                         tokenizer=tokenizer,
+                        outer_date_callback=date_callback,
                     )
                     if snippet is None:
                         return None
@@ -3447,7 +3498,10 @@ def _build_source_start_semantic_handler(
                         ),
                         source=source,
                         scope_id=scope_id,
+                        outer_date_callback=date_callback,
                     )
+                    if observation.observation_type == "email_message" and date_callback is not None:
+                        date_callback(snippet, payload.get("sent_at"))
             elif active_family == "document_text":
                 if (
                     observation.modality != "text"
@@ -4132,6 +4186,9 @@ def _build_source_start_semantic_handler(
         )
         missing = [field for field in requested_fields if field not in supported]
         date_priority_phase = None
+        if presentation_recency:
+            date_priority_phase = {"attempted": False, "candidate_count": "unavailable",
+                                   "status": "unavailable", "stop_reason": "presentation_tiebreak_only"}
         if date_priority:
             date_candidate_count = date_metadata.get("candidate_occurrence_count")
             matching_count = date_metadata.get("matching_occurrence_count", 0)
@@ -4273,6 +4330,7 @@ def _build_source_start_semantic_handler(
         )
         if overflow_hashes and double_check.scan is not None and time.monotonic() < presentation_deadline:
             presentation_deferred = tuple(presentation_cache)
+        prune_outer_dates()
         if mail_tool:
             mail_evidence = []
             citations = []
@@ -4303,6 +4361,7 @@ def _build_source_start_semantic_handler(
                 payload, staged_items=double_check.evidence, deferred_items=presentation_deferred,
                 limit=max(0, limit - source_budget["evidence"]), deadline=presentation_deadline,
                 selection_hits=selection_hits, overflow_hashes=overflow_hashes,
+                outer_dates=outer_dates,
             )
             return _finalize_mail_date_presentation(payload, date_metadata) if date_priority else payload
         payload = {
@@ -4342,6 +4401,7 @@ def _build_source_start_semantic_handler(
             payload, staged_items=double_check.evidence, deferred_items=presentation_deferred,
             limit=max(0, limit - source_budget["evidence"]), deadline=presentation_deadline,
                 selection_hits=selection_hits, overflow_hashes=overflow_hashes,
+                outer_dates=outer_dates,
         )
         return _finalize_mail_date_presentation(payload, date_metadata) if date_priority else payload
 
@@ -5854,6 +5914,11 @@ def build_issue56_production_semantic_retrieval_handler(
                 date_priority_phase = {
                     "attempted": False, "candidate_count": "unavailable",
                     "status": "unavailable", "stop_reason": "not_bound",
+                }
+            elif date_priority_binding.mode == "presentation_tiebreak":
+                date_priority_phase = {
+                    "attempted": False, "candidate_count": "unavailable",
+                    "status": "unavailable", "stop_reason": "presentation_tiebreak_not_available",
                 }
             else:
                 # The indexed graph_view path does not invoke the native

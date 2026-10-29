@@ -521,5 +521,40 @@ class SourceQueryStabilityTests(unittest.TestCase):
                     )
 
 
+class MailPresentationRecencyIntentTests(unittest.TestCase):
+    @staticmethod
+    def bind(prompt, *, scope=("mail", "attachment_table"), **changes):
+        import hashlib
+        from formowl_mail.issue56_sealed_source import bind_mail_date_priority
+        arguments = {"query_text": "Find latest Clienta records", "required_terms": ["clienta"],
+                     "request_contract": {"original_query_hash": "sha256:" + hashlib.sha256(prompt.encode()).hexdigest(),
+                         "query_class": "evidence_lookup", "source_family_scope": list(scope),
+                         "requested_fields": ["release"], "maximum_claim_strength": "cited_evidence"}}
+        arguments.update(changes)
+        return bind_mail_date_priority(user_text=prompt, arguments=arguments, tool_name="query_effective_graph_view")
+
+    def test_general_recency_is_bound_to_presentation_without_new_date_scans(self):
+        for phrase in ("最近一次下單", "最後一次出貨", "最后一次採購", "上一次出貨是哪天", "最新進度"):
+            with self.subTest(phrase=phrase):
+                binding = self.bind("Clienta " + phrase)
+                self.assertIsNotNone(binding)
+                self.assertEqual(binding.mode, "presentation_tiebreak")
+        self.assertEqual(self.bind("Clienta 最後一次出貨", scope=("mail",)).mode, "presentation_tiebreak")
+        self.assertEqual(self.bind("Clienta 最新進度", scope=("mail",)).mode, "date_scan")
+
+    def test_positions_windows_literals_and_relative_previous_are_not_latest(self):
+        for phrase in ("最後一頁", "最後一欄", "最後一行", "最後一個字", "最近三個月所有訂單",
+                       "不要最新", "比較最新和最舊", "查含『最新』字樣", "交貨日期是什麼", "PO 哪天開立",
+                       "上一次與這次比較", "指定那筆之前的上一次出貨", "上上次出貨", "最新一欄"):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(self.bind("Clienta " + phrase))
+
+    def test_model_rewriting_or_unbound_scope_cannot_grant_recency(self):
+        self.assertIsNone(self.bind("Clienta 的資料"))  # query_text above says latest.
+        self.assertIsNone(self.bind("Clienta 最新進度", scope=("document_text",)))
+        self.assertIsNone(self.bind("Clienta 最新進度", required_terms=["invented"]))
+        self.assertIsNone(self.bind("Clienta 最新進度", cursor="synthetic-cursor"))
+
+
 if __name__ == "__main__":
     unittest.main()
