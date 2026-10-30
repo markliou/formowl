@@ -1596,8 +1596,11 @@ def _ordinary_presentation_unit(item):
 
 
 def _soft_unit_utility(hits):
-    # Field/token relevance is NOT validated field support.
-    return len({field for field, _ in hits}), len(hits)
+    # Private namespaces share the existing bounded hit cache. Literal identifier
+    # and whole-label coverage outrank fragmented field tokens; none proves support.
+    tokens = {(field, word) for field, word in hits if field >= 0}
+    return (sum(field == -1 for field, _ in hits), sum(field == -2 for field, _ in hits),
+            len({field for field, _ in tokens}), len(tokens))
 
 
 def _presentation_unit_identity(item):
@@ -2786,6 +2789,7 @@ def _build_source_start_semantic_handler(
         selection_hits: dict[str, set[tuple[int, str]]] = {}
         outer_dates: dict[tuple, str] = {}
         field_terms: list[set[str]] = []
+        presentation_identifiers: tuple[str, ...] = ()
         annotation_ids: tuple[str, ...] = ()
         annotation_hashes: tuple[str, ...] = ()
         annotation_target: str | None = None
@@ -2843,6 +2847,10 @@ def _build_source_start_semantic_handler(
                     words = set(tokenizer.analyze(entry.get("snippet", "")).tokens)
                     selection_hits[key] = {(i, word) for i, terms in enumerate(field_terms)
                                            for word in terms.intersection(words)}
+                    text = unicodedata.normalize("NFKC", entry.get("snippet", "")).casefold()
+                    selection_hits[key].update((-1, term) for term in presentation_identifiers if term in text)
+                    selection_hits[key].update((-2, field) for field in requested_fields
+                                               if unicodedata.normalize("NFKC", field).casefold() in text)
             pool = list(presentation_cache)
             if item["citation_hash"] not in {entry["citation_hash"] for entry in pool}:
                 pool.append(item)
@@ -2980,6 +2988,7 @@ def _build_source_start_semantic_handler(
                 annotation_hashes, \
                 annotation_target
             nonlocal annotation_identity_hints, annotation_identity_reads_cell
+            nonlocal presentation_identifiers
             check_source_evidence_deadline(deadline)
 
             analysis = tokenizer.analyze(query_text)
@@ -3079,6 +3088,10 @@ def _build_source_start_semantic_handler(
                 sorted(lookup_terms if required_terms else query_terms)
             )
             if query_class == "evidence_lookup" and not auto_exact:
+                presentation_identifiers = tuple(term for term in required_terms if term.isdecimal() or any(
+                    span.identifier_kind == "business_identifier" and span.exact_token == term
+                    for span in tokenizer.analyze(term).protected_identifiers
+                ))
                 for field in requested_fields:
                     check_source_evidence_deadline(deadline)
                     field_terms.append(set(tokenizer.analyze(field).tokens))

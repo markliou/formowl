@@ -21,7 +21,7 @@ import test_issue56_uat_handler_composition as source_fixture
 
 class BoundedCandidateSelectionTests(unittest.TestCase):
     @staticmethod
-    def attachment_source(root, *, oversized=False, dated=False):
+    def attachment_source(root, *, oversized=False, dated=False, body_text=None, attachment_text=None):
         # Fill the synthetic extractor's inventory identity before ingestion
         # writes/seals it. The text parser and source guards remain real.
         run = source_fixture.run_ingestion_job
@@ -54,11 +54,11 @@ class BoundedCandidateSelectionTests(unittest.TestCase):
                         ("middle-body", "2025-01-01T00:00:00+00:00", "Clienta acknowledged."),
                     )]}
             return dump(value, *args, **kwargs)
-        text = "Clienta release date 2036-02-03." + (" quartz" * 2600 if oversized else "")
+        text = attachment_text or "Clienta release date 2036-02-03." + (" quartz" * 2600 if oversized else "")
         with (patch.object(source_fixture, "run_ingestion_job", side_effect=ingest),
               patch.object(source_fixture.json, "dumps", side_effect=archive)):
             fixture = _source_start_preparation_fixture(
-                root, families=("mail",), mail_text="Clienta request is pending.",
+                root, families=("mail",), mail_text=body_text or "Clienta request is pending.",
                 attachment_content=(text.encode(), "text/plain"),
             )
         revision = load_issue56_ingestion_revision(fixture.directory, expected_revision_sha256=fixture.preparation_sha256)
@@ -72,6 +72,87 @@ class BoundedCandidateSelectionTests(unittest.TestCase):
         child = next(item for item in fixture.observations if item.observation_type == "paragraph")
         parent = next(item for item in fixture.observations if item.observation_type == "email_attachment_occurrence")
         return fixture, revision, handler, arguments, child, parent
+
+    def test_context_byte_overflow_keeps_more_complete_field_labels(self):
+        filler = " quartz" * 1150
+        weak = "Clienta 甲社專案 ZX-742 742 release window delivery." + filler
+        target = "Clienta 甲社專案 ZX-742 742 release date 2036-02-03." + filler
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, revision, handler, arguments, _, parent = self.attachment_source(
+                Path(directory), body_text=weak, attachment_text=weak + "\n\n" + target)
+            arguments["page_size"] = 6
+            arguments["query_text"] = "Find Clienta ZX-742 742 release date"
+            arguments["required_terms"] = ["clienta", "zx-742", "742"]
+            arguments["request_contract"]["requested_fields"] = ["release date", "delivery window"]
+            child = next(item for item in fixture.observations if item.text == target)
+            target_hash = sha256_json(child.to_dict())
+            captures, seen = [], []
+            original_scan = revision.source_records.scan_authorized_observations
+            original_envelope = loader._admit_source_model_envelope
+            def scan(**kwargs):
+                callback = kwargs["observation_callback"]
+                def observe(item, scope):
+                    seen.append(item.observation_id)
+                    return callback(item, scope)
+                return original_scan(**{**kwargs, "observation_callback": observe,
+                                        "context_anchor_callback": lambda *_: False})
+            def envelope(payload, **kwargs):
+                captures.append(deepcopy(kwargs))
+                return original_envelope(payload, **kwargs)
+            trace = _SourcePhaseTrace({})
+            with (patch.object(revision.source_records, "scan_authorized_observations", side_effect=scan) as scans,
+                  patch.object(loader, "_admit_source_model_envelope", side_effect=envelope),
+                  patch.object(loader.time, "monotonic", return_value=time.monotonic()),
+                  _source_phase_trace_scope(trace)):
+                result = handler(arguments)
+            events = json.loads(trace.snapshot())["details"]
+            self.assertTrue(any(item.get("name") == "context_limit" and item.get("observation_hash") == target_hash
+                                for item in events))
+            cached = captures[-1]["deferred_items"]
+            self.assertIn(target_hash, {item["citation_hash"] for item in cached})
+            self.assertEqual({word for kind, word in captures[-1]["selection_hits"][target_hash] if kind == -1},
+                             {"zx-742", "742"})
+            cached_records, truncated = loader._bounded_mail_header_groups(cached, limit=6)
+            self.assertFalse(truncated)
+            self.assertLessEqual(len(json.dumps(cached_records, ensure_ascii=False).encode()), 16384)
+            self.assertLessEqual(len(captures[-1]["selection_hits"]), 128)
+            self.assertEqual(scans.call_count, 1)
+            self.assertEqual(seen.count(child.observation_id), 1)
+            self.assertIn(target_hash, result["citations"])
+            paragraph = next(item for item in result["evidence"] if item["citation_hash"] == target_hash)
+            self.assertEqual(paragraph["snippet"], target)
+            self.assertEqual(paragraph["source_context"]["parent_attachment_observation_hash"], sha256_json(parent.to_dict()))
+            header = next(item for item in result["evidence"] if item["citation_hash"] == paragraph["mail_header_citation_hash"])
+            self.assertEqual(header["source_context"]["anchor_citation_hash"], target_hash)
+            display = compact_evidence_for_model(result)
+            self.assertEqual(set(evidence_citation_ids(result)), set(evidence_citation_ids(display)))
+            self.assertLessEqual(len(json.dumps(display, ensure_ascii=False, separators=(",", ":")).encode()), 16384)
+            self.assertEqual(result["query_agent"]["context_bundle"]["missing_field_hashes"],
+                             [sha256_json(field) for field in arguments["request_contract"]["requested_fields"]])
+            self.assertEqual(result["coverage"]["status"], "incomplete")
+
+    def test_identifier_and_whole_label_coverage_precede_fragmented_field_words(self):
+        staged = self.mail("fragmented", "clienta ZX-742 release window delivery.")
+        incoming = self.mail("covered", "clienta ZX-742 742 release date.", message="covered")
+        token_hits = {(0, "release"), (1, "window"), (1, "delivery")}
+        # Private hit namespaces encode distinct literal identifiers (-1) and
+        # complete field labels (-2); positive indices retain frozen field tokens.
+        for signals in (
+            ({(-1, "zx-742")}, {(-1, "zx-742"), (-1, "742")}),
+            (set(), {(-2, "release date")}),
+        ):
+            with self.subTest(signals=signals):
+                payload = self.payload([staged])
+                hits = {staged["citation_hash"]: token_hits | signals[0],
+                        incoming["citation_hash"]: {(0, "release"), (0, "date")} | signals[1]}
+                result = loader._admit_source_model_envelope(
+                    payload, staged_items=[staged], deferred_items=[incoming], limit=2,
+                    deadline=time.monotonic() + 2, selection_hits=hits,
+                    overflow_hashes={incoming["citation_hash"]})
+                self.assertIn(incoming["citation_hash"], result["citations"])
+                self.assertNotIn(staged["citation_hash"], result["citations"])
+                self.assertEqual(set(evidence_citation_ids(result)),
+                                 set(evidence_citation_ids(compact_evidence_for_model(result))))
 
     def test_attachment_overflow_replaces_earlier_body_as_one_bound_parent_unit_without_reread(self):
         with tempfile.TemporaryDirectory() as directory:
