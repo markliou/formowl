@@ -86,6 +86,77 @@ class CandidatePropertyMapping:
         return {"status": "candidate", "property_id": alias["property_id"],
                 "qualifiers": deepcopy(alias["qualifiers"])}
 
+    def contained_properties(self, text: str) -> frozenset[str]:
+        """Reviewed soft-ranking signals only, never field support or governance.
+
+        Preserve normalized source offsets while folding punctuation/whitespace:
+        ASCII aliases need word boundaries in that original normalized span.
+        This distinguishes ``PO Date:`` from ``prefixPODatesuffix`` even though
+        folding also joins neighboring words. Non-ASCII aliases use substrings.
+        Pending candidate mappings without the separate ranking review do not
+        participate; exact candidate ``match`` semantics remain unchanged.
+        """
+        if self.data.get("ranking_review_status") != "reviewed_for_soft_ranking_only":
+            return frozenset()
+        normalized = unicodedata.normalize("NFKC", text).casefold()
+        positions = [i for i, char in enumerate(normalized)
+                     if not char.isspace() and not unicodedata.category(char).startswith("P")]
+        folded = "".join(normalized[i] for i in positions)
+        properties = set()
+        for alias in self.data["aliases"]:
+            prop = alias["property_id"]
+            if prop in properties:
+                continue
+            label = fold_property_label(alias["label"])
+            start = folded.find(label)
+            while start >= 0:
+                before = normalized[positions[start] - 1] if positions[start] else ""
+                end = positions[start + len(label) - 1] + 1
+                after = normalized[end] if end < len(normalized) else ""
+                if (not label.isascii()
+                        or not any(char.isascii() and char.isalnum() for char in (before, after))):
+                    properties.add(prop)
+                    break
+                start = folded.find(label, start + 1)
+        return frozenset(properties)
+
+
+# Reviewed generic business vocabulary for bounded presentation ranking only.
+# Canonical ontology governance is still pending; these aliases prove neither
+# a native field binding nor a supported value, and never filter source units.
+REVIEWED_SOFT_RANKING_PROPERTY_MAPPING = CandidatePropertyMapping.from_dict({
+    "artifact_id": "formowl_candidate_property_mapping_v1",
+    "mapping_id": "reviewed_business_soft_ranking_v1",
+    "review_status": "pending_review",
+    "ranking_review_status": "reviewed_for_soft_ranking_only",
+    "properties": ["po_number", "po_issue_date", "delivery_date", "order_quantity", "country_of_origin"],
+    "aliases": [
+        {"label": label, "property_id": prop, "qualifiers": {}}
+        for prop, labels in {
+            "po_number": (
+                "PO number", "PO No", "P/O No", "purchase order number", "purchase order no",
+                "customer PO number", "PO號碼", "PO号码", "PO編號", "PO编号", "訂單號碼",
+                "訂單編號", "訂單單號", "採購單號", "采购单号",
+            ),
+            "po_issue_date": (
+                "P/O Date", "PO Date", "order date", "purchase order date", "issue date", "PO開立日期",
+                "開立日期", "下單日期", "下单日期", "採購日期", "采购日期", "訂購日期", "订购日期",
+            ),
+            "delivery_date": (
+                "delivery date", "ship date", "shipment date", "ETD", "ETA", "交貨日期", "交货日期",
+                "交期", "預計出貨時間", "预计出货时间",
+            ),
+            "order_quantity": (
+                "order qty", "order quantity", "purchase order qty", "PO qty", "Qty", "Q'ty", "quantity",
+                "訂單數量", "訂購數量", "订购数量", "採購數量", "采购数量",
+            ),
+            "country_of_origin": ("COO", "country of origin", "origin", "產地", "产地", "原產地", "原产地"),
+        }.items()
+        for label in labels
+    ],
+})
+
+
 _CORE_SUPERTYPE_PARENTS = {
     "Document": "Artifact",
 }

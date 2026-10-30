@@ -33,6 +33,7 @@ from formowl_contract import (
     stable_resource_contract_id,
     to_plain,
 )
+from formowl_graph.ontology import REVIEWED_SOFT_RANKING_PROPERTY_MAPPING
 from formowl_mail import build_mail_evidence_query_handler
 from formowl_mail.answer import build_authorized_candidate_table_lookup, interpret_authorized_candidate_table_query, render_governed_evidence_answer
 from formowl_mail.exact import (
@@ -2854,6 +2855,7 @@ def _build_source_start_semantic_handler(
         selection_hits: dict[str, set[tuple[int, str]]] = {}
         outer_dates: dict[tuple, str] = {}
         field_terms: list[set[str]] = []
+        field_properties: dict[str, frozenset[str]] = {}
         presentation_identifiers: tuple[str, ...] = ()
         annotation_ids: tuple[str, ...] = ()
         annotation_hashes: tuple[str, ...] = ()
@@ -2918,8 +2920,14 @@ def _build_source_start_semantic_handler(
                                            for word in terms.intersection(words)}
                     text = unicodedata.normalize("NFKC", entry.get("snippet", "")).casefold()
                     selection_hits[key].update((-1, term) for term in presentation_identifiers if term in text)
+                    properties = (REVIEWED_SOFT_RANKING_PROPERTY_MAPPING.contained_properties(text)
+                                  if field_properties else frozenset())
+                    # One boolean whole-label hit per original field, regardless
+                    # of alias count. Mapped fields use the boundary-aware match
+                    # exclusively; the literal fallback would revive ETA/beta.
                     selection_hits[key].update((-2, field) for field in requested_fields
-                                               if unicodedata.normalize("NFKC", field).casefold() in text)
+                                               if (bool(field_properties[field].intersection(properties)) if field in field_properties else
+                                                   unicodedata.normalize("NFKC", field).casefold() in text))
                 if score_descriptions and key in selection_hits:
                     if time.monotonic() >= source_budget["deadline"]:
                         return
@@ -3198,6 +3206,9 @@ def _build_source_start_semantic_handler(
                 for field in requested_fields:
                     check_source_evidence_deadline(deadline)
                     field_terms.append(set(tokenizer.analyze(field).tokens))
+                    mapped = REVIEWED_SOFT_RANKING_PROPERTY_MAPPING.contained_properties(field)
+                    if mapped:
+                        field_properties[field] = mapped
             preferred_terms: set[str] = set()
             for field in (
                 (*requested_fields, *(hint["text"] for hint in field_query_hints))

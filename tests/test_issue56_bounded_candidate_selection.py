@@ -603,6 +603,98 @@ class BoundedCandidateSelectionTests(unittest.TestCase):
                              [sha256_json(field) for field in arguments["request_contract"]["requested_fields"]])
             self.assertEqual(result["coverage"]["status"], "incomplete")
 
+    def soft_alias_selection(self, root, *, fields, body, attachment):
+        fixture, revision, handler, arguments, child, parent = self.attachment_source(
+            root, body_text=body, attachment_text=attachment)
+        arguments["request_contract"]["requested_fields"] = fields
+        original = deepcopy(arguments)
+        captures, seen = [], []
+        scan = revision.source_records.scan_authorized_observations
+        envelope = loader._admit_source_model_envelope
+
+        def observe_scan(**kwargs):
+            callback = kwargs["observation_callback"]
+            def observe(item, scope):
+                seen.append(item.observation_id)
+                return callback(item, scope)
+            return scan(**{**kwargs, "observation_callback": observe,
+                           "context_anchor_callback": lambda *_: False})
+
+        def capture(payload, **kwargs):
+            captures.append(deepcopy(kwargs))
+            return envelope(payload, **kwargs)
+
+        with (patch.object(revision.source_records, "scan_authorized_observations", side_effect=observe_scan) as scans,
+              patch.object(loader, "_admit_source_model_envelope", side_effect=capture),
+              patch.object(loader.time, "monotonic", return_value=time.monotonic())):
+            result = handler(arguments)
+        target_hash = sha256_json(child.to_dict())
+        body_observation = next(item for item in fixture.observations if item.observation_type == "email_body_segment")
+        body_hash = sha256_json(body_observation.to_dict())
+        hits = captures[-1]["selection_hits"]
+        self.assertEqual(scans.call_count, 1)
+        self.assertEqual(seen.count(child.observation_id), 1)
+        self.assertEqual(arguments, original)
+        self.assertEqual(result["coverage"]["status"], "incomplete")
+        self.assertIsNot(result["coverage"].get("absence_claim"), True)
+        self.assertEqual(result["query_agent"]["context_bundle"]["missing_field_hashes"],
+                         [sha256_json(field) for field in fields])
+        self.assertLessEqual(len(hits), 128)
+        display = compact_evidence_for_model(result)
+        self.assertEqual(set(evidence_citation_ids(result)), set(evidence_citation_ids(display)))
+        self.assertLessEqual(len(json.dumps(display, ensure_ascii=False, separators=(",", ":")).encode()), 16384)
+        if target_hash in result["citations"]:
+            paragraph = next(item for item in result["evidence"] if item["citation_hash"] == target_hash)
+            self.assertEqual(paragraph["snippet"], child.text)
+            self.assertEqual(paragraph["source_context"]["parent_attachment_observation_hash"], sha256_json(parent.to_dict()))
+            header = next(item for item in result["evidence"] if item["citation_hash"] == paragraph["mail_header_citation_hash"])
+            self.assertEqual(header["message_occurrence_id"], paragraph["message_occurrence_id"])
+            self.assertEqual(header["source_context"]["anchor_citation_hash"], target_hash)
+        return result, hits, target_hash, body_hash
+
+    def test_reviewed_chinese_fields_select_english_form_labels_as_whole_units(self):
+        for field, label in (("請提供訂單號碼", "P/O No."), ("請提供開立日期", "PO Date"),
+                             ("請提供交期", "ETD"), ("請提供訂購數量", "Q'ty"), ("請提供產地", "COO")):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                result, hits, target, body = self.soft_alias_selection(
+                    Path(directory), fields=[field], body="Clienta form remains pending.",
+                    attachment="Clienta " + label + ": fictional value.")
+                self.assertEqual({hit for hit in hits[target] if hit[0] == -2}, {(-2, field)})
+                self.assertIn(target, result["citations"])
+                self.assertNotIn(body, result["citations"])
+
+    def test_reviewed_ascii_collision_cannot_reenter_through_literal_label_scoring(self):
+        for field, collision, label in (("ETA", "beta", "delivery date"), ("COO", "cooler", "country of origin"),
+                                        ("PO Date", "prefixPODatesuffix", "P/O Date"),
+                                        ("訂單號碼", "PO # / po", "purchase order number")):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                result, hits, target, body = self.soft_alias_selection(
+                    Path(directory), fields=[field], body="Clienta " + collision + " pending.",
+                    attachment="Clienta " + label + ": fictional value.")
+                self.assertFalse({hit for hit in hits[body] if hit[0] == -2})
+                self.assertEqual({hit for hit in hits[target] if hit[0] == -2}, {(-2, field)})
+                self.assertIn(target, result["citations"])
+
+    def test_folded_aliases_and_repetitions_award_one_hit_per_original_field(self):
+        fields = ["請提供訂單號碼", "請提供Ｐ／Ｏ.\nＤａｔｅ", "請提供訂購數量"]
+        with tempfile.TemporaryDirectory() as directory:
+            result, hits, target, _ = self.soft_alias_selection(
+                Path(directory), fields=fields, body="Clienta form remains pending.",
+                attachment="Clienta P O No.; purchase-order-number; P.O Date; order_qty; Q'ty; quantity; quantity.")
+            self.assertEqual({hit for hit in hits[target] if hit[0] == -2}, {(-2, field) for field in fields})
+            self.assertIn(target, result["citations"])
+
+    def test_unmapped_fields_keep_literal_ranking_and_no_match_fallback(self):
+        for field, label, selected in (("release date", "release date", True),
+                                        ("opaque field", "opaque field", True),
+                                        ("unmapped request", "unknown label", False)):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                result, hits, target, body = self.soft_alias_selection(
+                    Path(directory), fields=[field], body="Clienta form remains pending.",
+                    attachment="Clienta " + label + ": fictional value.")
+                self.assertEqual({hit for hit in hits[target] if hit[0] == -2}, {(-2, field)} if selected else set())
+                self.assertIn(target if selected else body, result["citations"])
+
     def test_identifier_and_whole_label_coverage_precede_fragmented_field_words(self):
         staged = self.mail("fragmented", "clienta ZX-742 release window delivery.")
         incoming = self.mail("covered", "clienta ZX-742 742 release date.", message="covered")

@@ -46,6 +46,48 @@ class CandidatePropertyMappingTests(unittest.TestCase):
             ontology.CandidatePropertyMapping.from_dict(data)
 
 
+class ReviewedSoftPropertyAliasTests(unittest.TestCase):
+    def test_reviewed_aliases_remain_noncanonical_candidate_mapping(self):
+        mapping = ontology.REVIEWED_SOFT_RANKING_PROPERTY_MAPPING
+        self.assertIsInstance(mapping, ontology.CandidatePropertyMapping)
+        self.assertEqual(mapping.data["review_status"], "pending_review")
+        self.assertEqual(mapping.data["ranking_review_status"], "reviewed_for_soft_ranking_only")
+        self.assertEqual(set(mapping.data["properties"]), {
+            "po_number", "po_issue_date", "delivery_date", "order_quantity", "country_of_origin"})
+        self.assertEqual(mapping.match("PO Date")["property_id"], "po_issue_date")
+        self.assertEqual(mapping.match("Find PO Date please"), {"status": "unmapped"})
+        self.assertEqual(mapping.match("po"), {"status": "unmapped"})
+        self.assertEqual(mapping.contained_properties("PO # / po"), frozenset())
+
+    def test_contained_aliases_fold_formatting_and_resolve_embedded_fields(self):
+        mapping = ontology.REVIEWED_SOFT_RANKING_PROPERTY_MAPPING
+        for text, expected in (
+            ("請提供訂單號碼和開立日期", {"po_number", "po_issue_date"}),
+            ("Please supply Ｐ／Ｏ.\nＤａｔｅ: and order_qty", {"po_issue_date", "order_quantity"}),
+            ("Form: C.O.O: Northland; E T A: pending", {"country_of_origin", "delivery_date"}),
+            ("Header P/O No. and purchase-order-number", {"po_number"}),
+            ("交期／產地", {"delivery_date", "country_of_origin"}),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(mapping.contained_properties(text), frozenset(expected))
+        data = CandidatePropertyMappingTests.mapping()
+        generic = ontology.CandidatePropertyMapping.from_dict(data)
+        self.assertEqual(generic.contained_properties("Asset_Code"), frozenset())
+        data["ranking_review_status"] = "reviewed_for_soft_ranking_only"
+        generic = ontology.CandidatePropertyMapping.from_dict(data)
+        self.assertEqual(generic.contained_properties("Find Asset_Code: ZX-742"), frozenset({"asset_code"}))
+        self.assertEqual(generic.match("Find Asset_Code: ZX-742"), {"status": "unmapped"})
+
+    def test_ascii_alias_boundaries_survive_punctuation_folding(self):
+        mapping = ontology.REVIEWED_SOFT_RANKING_PROPERTY_MAPPING
+        for text in ("beta", "cooler", "prefixPODatesuffix", "disoriginated", "inequality"):
+            with self.subTest(text=text):
+                self.assertEqual(mapping.contained_properties(text), frozenset())
+        self.assertEqual(mapping.contained_properties("beta then ETA; cooler then COO"),
+                         frozenset({"delivery_date", "country_of_origin"}))
+        self.assertEqual(mapping.contained_properties("PO Date: pending"), frozenset({"po_issue_date"}))
+
+
 class OntologyContractTests(unittest.TestCase):
     def test_type_definitions_keep_core_extension_and_promoted_tiers_separate(self) -> None:
         core = _core_type("Organization")
