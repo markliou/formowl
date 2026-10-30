@@ -146,6 +146,7 @@ def _parallel_file_store(authority: CompletedIngestionJobAuthority) -> bool:
 
 def _authorized_ingestion_root_source_kinds(
     authority: CompletedIngestionJobAuthority,
+    attachment_replacement: Mapping[str, Any] | None = None,
 ) -> set[str]:
     """Derive native source kinds from the registered root extractor only."""
     source_ref = to_plain(authority.asset.source_ref) or {}
@@ -161,6 +162,9 @@ def _authorized_ingestion_root_source_kinds(
     for run in root_runs:
         if run.extractor_type in {"mail_archive", "mail_attachment_backfill"}:
             kinds.add(AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND)
+        elif attachment_replacement is not None and run.extractor_type == "document_structure":
+            # The caller validates the sealed parent/replacement record first.
+            kinds.add(AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND)
         elif (
             run.extractor_name == text_extractor.name()
             and run.extractor_type == text_extractor.extractor_type()
@@ -172,6 +176,64 @@ def _authorized_ingestion_root_source_kinds(
         else:
             raise ContractValidationError("ingestion source root family is unsupported")
     return kinds
+
+
+def _attachment_extractor_version(version: str) -> tuple[int, ...]:
+    if not isinstance(version, str) or re.fullmatch(r"[0-9]+(?:\.[0-9]+){2}", version) is None:
+        raise ContractValidationError("attachment replacement extractor version is invalid")
+    return tuple(int(part) for part in version.split("."))
+
+
+def _validate_attachment_replacement(binding, authority, authorities, store_bindings):
+    """Revalidate a sealed cross-job attachment grant; root type alone grants nothing."""
+    from formowl_ingestion.extractors.document.attachment import AttachmentDocumentExtractor
+    parent_ref = binding.get("parent_reference")
+    if (not isinstance(parent_ref, list) or len(parent_ref) != 3
+            or type(parent_ref[0]) is not int or not 0 <= parent_ref[0] < len(authorities)):
+        raise ContractValidationError("attachment replacement parent reference is invalid")
+    parent_authority = authorities[parent_ref[0]]
+    parent = parent_authority.load_indexed_observation(
+        parent_ref[1], expected_observation_hash=parent_ref[2],
+        expected_job_fingerprint=parent_authority.job_fingerprint,
+    )
+    runs = authority.runs
+    adapter = AttachmentDocumentExtractor()
+    if (len(runs) != 1 or runs[0].status != "succeeded"
+            or runs[0].asset_id != authority.asset.asset_id
+            or runs[0].extractor_type != adapter.extractor_type()
+            or runs[0].extractor_name != adapter.name()
+            or runs[0].input_hash != authority.asset.content_hash
+            or parent.modality != "mail" or parent.observation_type != "email_attachment_occurrence"
+            or parent.asset_id != parent_authority.asset.asset_id
+            or (parent.payload or {}).get("child_asset_id") != authority.asset.asset_id
+            or (parent.payload or {}).get("content_hash") != authority.asset.content_hash
+            or to_plain(parent.permission_scope) != dict(authority.permission_scope)
+            or binding.get("parent_job_fingerprint") != parent_authority.job_fingerprint
+            or binding.get("run_fingerprint") != sha256_json(runs[0].to_dict())
+            or binding.get("asset_fingerprint") != sha256_json(to_plain(authority.asset))
+            or _SHA256_RE.fullmatch(str(binding.get("base_preparation_sha256"))) is None):
+        raise ContractValidationError("attachment replacement parent/run/hash/permission binding mismatch")
+    source_ref = to_plain(authority.asset.source_ref) or {}
+    if (source_ref.get("source_system") != "formowl_mail_attachment"
+            or source_ref.get("source_type") != "email_attachment_occurrence"):
+        raise ContractValidationError("attachment replacement source occurrence is invalid")
+    previous = [(job, run) for job in authorities if job is not authority for run in job.runs
+                if run.asset_id == authority.asset.asset_id and run.extractor_type == "document_structure"]
+    if not previous or any(
+        run.extractor_name != runs[0].extractor_name
+        or run.input_hash != authority.asset.content_hash
+        or _attachment_extractor_version(run.extractor_version) >= _attachment_extractor_version(runs[0].extractor_version)
+        for _, run in previous
+    ):
+        raise ContractValidationError("attachment replacement extractor version is not newer")
+    # The original materialized Asset, including source and access provenance,
+    # must be byte-for-byte equivalent to the newly registered job root.
+    for job, _ in previous:
+        index = next(i for i, item in enumerate(authorities) if item is job)
+        original = AssetStore(Path(store_bindings[index]["store_directory"])).get(authority.asset.asset_id)
+        if to_plain(original) != to_plain(authority.asset):
+            raise ContractValidationError("attachment replacement original Asset changed")
+    return parent_authority, parent
 
 
 class Issue56SealedSourceLoadError(RuntimeError):
@@ -1616,6 +1678,7 @@ class IngestionRevisionSourceRecords:
         expected_seal: str | None = None,
         observation_references: list[list[Any]] | None = None,
         authorized_source: Any | None = None,
+        attachment_replacements: Mapping[str, Any] | None = None,
     ) -> None:
         self.runtime_store = runtime_store
         self.job_authorities = tuple(job_authorities)
@@ -1626,6 +1689,7 @@ class IngestionRevisionSourceRecords:
         self.requester_user_id = requester_user_id
         self.workspace_id = workspace_id
         self.authorized_source = authorized_source
+        self.attachment_replacements = dict(attachment_replacements or {})
         if not self.job_authorities or any(
             authority.asset.owner_user_id != requester_user_id
             or authority.asset.workspace_id != workspace_id
@@ -1904,7 +1968,10 @@ class IngestionRevisionSourceRecords:
         source_scope_by_job_index: dict[int, str] = {}
         for job_index, authority in enumerate(self.job_authorities):
             if source_family == "mail":
-                selector = _authorized_mail_selector_for_asset(authority.asset)
+                replacement = self.attachment_replacements.get(authority.job_fingerprint)
+                selector_asset = (self.job_authorities[replacement["parent_reference"][0]].asset
+                                  if replacement is not None else authority.asset)
+                selector = _authorized_mail_selector_for_asset(selector_asset)
                 if mail_import_session_id is not None:
                     if selector == mail_import_session_id:
                         source_scope_by_job_index[job_index] = selector
@@ -1917,7 +1984,8 @@ class IngestionRevisionSourceRecords:
                     source_scope_by_job_index[job_index] = selector or scope_id
             else:
                 if _complete_document_scope and AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND not in (
-                    _authorized_ingestion_root_source_kinds(authority)
+                    _authorized_ingestion_root_source_kinds(
+                        authority, self.attachment_replacements.get(authority.job_fingerprint))
                 ):
                     continue
                 scope_id = dict(authority.permission_scope).get("scope_id")
@@ -2065,8 +2133,23 @@ class IngestionRevisionSourceRecords:
             payload = observation.payload or {}
             attachment_key = None
             if source_family == "mail" and _is_attachment_text_observation(observation):
+                parent_authority = authority
+                replacement = self.attachment_replacements.get(authority.job_fingerprint)
                 parent_key = (authority.job_fingerprint, observation.asset_id)
                 parent = attachment_parents.get(parent_key)
+                if replacement is not None:
+                    reference = replacement["parent_reference"]
+                    parent_authority = self.job_authorities[reference[0]]
+                if replacement is not None and parent is None:
+                    if scanned >= max_observations:
+                        emit_stop_reason = "observation_limit"
+                        return False
+                    scanned += 1
+                    parent = guarded_read(
+                        parent_authority, reference[1], expected_observation_hash=reference[2],
+                        expected_job_fingerprint=parent_authority.job_fingerprint,
+                        cell=read_cell("attachment_parent", parent_authority, reference[1], reference[2], observed_scope),
+                    )
                 if parent is None and indexed_source:
                     if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                         emit_stop_reason = "deadline"
@@ -2092,7 +2175,7 @@ class IngestionRevisionSourceRecords:
                     return True
                 child_run = authority._runs_by_id.get(observation.extractor_run_id)
                 if (
-                    parent.asset_id != authority.asset.asset_id
+                    parent.asset_id != parent_authority.asset.asset_id
                     or parent.observation_type != "email_attachment_occurrence"
                     or parent.modality != "mail"
                     or (parent.payload or {}).get("child_asset_id") != observation.asset_id
@@ -2106,8 +2189,9 @@ class IngestionRevisionSourceRecords:
                 if parent_key not in attachment_parents:
                     # The attachment occurrence owns the outer-mail coordinates;
                     # the document child's asset/run must never select a header.
-                    if not emit(parent, observed_scope, authority):
+                    if not emit(parent, observed_scope, parent_authority):
                         return False
+                    attachment_parents[parent_key] = parent
                     if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                         emit_stop_reason = "deadline"
                         return False
@@ -3982,7 +4066,15 @@ def _load_issue56_source_start_preparation(
     ]
     if len(sealed_jobs) != len(authorities):
         raise ContractValidationError("ingestion source job scope is invalid")
-    scopes, kinds = {}, set()
+    scopes, kinds, replacements = {}, set(), {}
+    reference_by_id, references_by_job = {}, {}
+    if any(job.get("attachment_replacement") is not None for job in sealed_jobs):
+        for ref in references:
+            if isinstance(ref, list) and len(ref) == 3:
+                reference_by_id[ref[1]] = ref
+                references_by_job.setdefault(ref[0], []).append(ref)
+        if len(reference_by_id) != len(references):
+            raise ContractValidationError("attachment replacement source reference collision")
     for authority, job in zip(authorities, sealed_jobs):
         if (
             not isinstance(job, dict)
@@ -3996,7 +4088,31 @@ def _load_issue56_source_start_preparation(
         if scope.scope_id in scopes and scopes[scope.scope_id] != scope:
             raise ContractValidationError("ingestion source permission scope is ambiguous")
         scopes[scope.scope_id] = scope
-        kinds.update(_authorized_ingestion_root_source_kinds(authority))
+        replacement = job.get("attachment_replacement")
+        if replacement is not None:
+            _, parent = _validate_attachment_replacement(replacement, authority, authorities, bindings)
+            removed = replacement.get("removed_references")
+            if (not isinstance(removed, list)
+                    or any(not isinstance(ref, list) or len(ref) != 3 or ref[1] in reference_by_id for ref in removed)
+                    or reference_by_id.get(replacement["parent_reference"][1]) != replacement["parent_reference"]):
+                raise ContractValidationError("attachment replacement superseded reference remains active")
+            index = next(i for i, item in enumerate(authorities) if item is authority)
+            child_refs = references_by_job.get(index, [])
+            if {ref[1] for ref in child_refs} != set(authority.observation_ids):
+                raise ContractValidationError("attachment replacement content scope is incomplete")
+            for _, observation_id, observation_hash in child_refs:
+                child = authority.load_indexed_observation(
+                    observation_id, expected_observation_hash=observation_hash,
+                    expected_job_fingerprint=authority.job_fingerprint,
+                )
+                if not _is_attachment_text_observation(child):
+                    raise ContractValidationError("attachment replacement structured content is unsupported")
+                if child.observation_id not in _attachment_child_lineages({
+                    parent.observation_id: parent, child.observation_id: child,
+                }):
+                    raise ContractValidationError("attachment replacement child lineage is unavailable")
+            replacements[authority.job_fingerprint] = replacement
+        kinds.update(_authorized_ingestion_root_source_kinds(authority, replacement))
     for reference in references:
         if (
             not isinstance(reference, list)
@@ -4078,6 +4194,7 @@ def _load_issue56_source_start_preparation(
         workspace_id=WORKSPACE_ID,
         observation_references=references,
         authorized_source=source,
+        attachment_replacements=replacements,
     )
     return Issue56IngestionRevision(
         observations=(),

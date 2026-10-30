@@ -31,6 +31,7 @@ from formowl_mail.query import (
 )
 from formowl_retrieval.gateway import source_evidence_query_terms_scope
 from scripts import issue56_source_native_lookup as builder
+from scripts import issue56_uat_web as replacement_owner
 from scripts.issue56_source_identifier_candidates import SourceIdentifierCandidateError
 import test_issue56_uat_handler_composition as composition
 from test_issue56_uat_handler_composition import _source_start_preparation_fixture
@@ -42,6 +43,145 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return "sha256:" + digest.hexdigest()
+
+
+class AttachmentReplacementTests(unittest.TestCase):
+    def _fixture(self, root, *, version="0.7.5", bad_lineage=None, empty=False,
+                 old_table=False, new_table=False):
+        from formowl_ingestion.extractors.document.attachment import AttachmentDocumentExtractor
+        from formowl_ingestion.extraction import ExtractionResult
+        from formowl_ingestion.jobs import create_ingestion_job, run_ingestion_job
+        from formowl_ingestion.storage import AssetStore, JobStore, ExtractorRunStore, FileObjectStore, StorageBackendRegistry
+        with patch.object(AttachmentDocumentExtractor, "version", return_value="0.7.4"):
+            old = _source_start_preparation_fixture(
+                root, families=("mail",), attachment_content=(
+                    (b"Code,Value\namber,obsolete\n", "text/csv") if old_table else
+                    (b"amber obsolete evidence\n", "text/plain")))
+        store = Path(old.snapshot["job_store_bindings"][0]["store_directory"])
+        parent = next(item for item in old.observations if item.observation_type == "email_attachment_occurrence")
+        parent = replace(parent, payload={**parent.payload, "source_inventory_item_id": "synthetic-native-table"})
+        obs = ObservationStore(store)
+        obs._store._record_path(parent.observation_id).write_text(json.dumps(parent.to_dict()))
+        for ref in old.snapshot["observation_references"]:
+            if ref[1] == parent.observation_id:
+                ref[2] = sha256_json(parent.to_dict())
+        raw = json.dumps(old.snapshot, sort_keys=True).encode()
+        (old.directory / "observations.json").write_bytes(raw)
+        core = {**old.preparation_core, "snapshot_size_bytes": len(raw),
+                "snapshot_sha256": _sha256(old.directory / "observations.json")}
+        (old.directory / "preparation.json").write_text(json.dumps({**core, "preparation_fingerprint": sha256_json(core)}))
+        old.preparation_sha256 = _sha256(old.directory / "preparation.json")
+        lexical = root / "old-lookup"
+        builder.build_lookup(directory=old.directory, expected_revision_sha256=old.preparation_sha256, output_directory=lexical)
+        dates = root / "dated-lookup"
+        builder.build_lookup(directory=old.directory, expected_revision_sha256=old.preparation_sha256,
+                             output_directory=dates, base_lookup_directory=lexical, mail_message_dates_only=True)
+        for name in ("source-lookup.sqlite", "source-lookup-manifest.json"):
+            shutil.copyfile(dates / name, old.directory / name)
+        child = next(item for item in old.observations if item.modality == "document" and item.observation_type == (
+            "table_row" if old_table else "paragraph"))
+        asset = AssetStore(store).get(child.asset_id)
+        new_store = root / "new-store"
+        AssetStore(new_store).create(asset)
+        class ReplacementExtractor(AttachmentDocumentExtractor):
+            def version(self):
+                return version
+            def extract(self, extraction_input):
+                lineage = {**child.payload["lineage"], **(bad_lineage or {})}
+                return ExtractionResult(observations=[] if empty else [replace(
+                    child, observation_id="synthetic_replacement_paragraph", text="cobalt current evidence",
+                    observation_type="table_row" if new_table else "paragraph",
+                    extractor_run_id=extraction_input.extractor_run_id,
+                    payload={**child.payload, "lineage": lineage})])
+        adapter = ReplacementExtractor()
+        job = create_ingestion_job(asset=asset, job_store=JobStore(new_store),
+                                   requested_by=composition.loader.APPROVER_ACTOR, extractor_adapters=(adapter,))
+        completed = run_ingestion_job(
+            ingestion_job_id=job.ingestion_job_id, asset_store=AssetStore(new_store), job_store=JobStore(new_store),
+            observation_store=ObservationStore(new_store), extractor_run_store=ExtractorRunStore(new_store),
+            object_store=FileObjectStore(StorageBackendRegistry(store)), extractor_adapters=(adapter,))
+        return old, child, new_store, completed
+
+    def _compose(self, root, old, store, job, *, pin=None):
+        output = root / "replacement"
+        result = replacement_owner._compose_attachment_replacement_preparation(
+            output, base_preparation_directory=old.directory,
+            expected_base_preparation_sha256=pin or old.preparation_sha256,
+            jobs=[[str(store), job.ingestion_job_id]])
+        return output, result
+
+    def test_replacement_removes_old_content_preserves_parent_dates_and_unchanged_postings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, child, store, job = self._fixture(root)
+            output, result = self._compose(root, old, store, job)
+            self.assertEqual(result["removed_reference_count"], 1)
+            pin = _sha256(output / "preparation.json")
+            lookup_dir = root / "replacement-lookup"
+            builder.build_lookup(
+                directory=output, expected_revision_sha256=pin, output_directory=lookup_dir,
+                base_lookup_directory=old.directory, seed_preparation_directory=old.directory,
+                seed_expected_revision_sha256=old.preparation_sha256,
+                seed_job_prefix_count=1, seed_reference_subset=True)
+            for name in ("source-lookup.sqlite", "source-lookup-manifest.json"):
+                shutil.copyfile(lookup_dir / name, output / name)
+            revision = load_issue56_ingestion_revision(output, expected_revision_sha256=pin)
+            records, profile = revision.source_records, old.runtime.tokenizer_profile
+            try:
+                self.assertEqual(records.runtime_store.manifest["schema_version"], 2)
+                self.assertEqual(records.runtime_store.manifest["mail_date_count"], 1)
+                with sqlite3.connect(old.directory / "source-lookup.sqlite") as previous:
+                    current = records.runtime_store._connection
+                    self.assertEqual(previous.execute("SELECT * FROM mail_message_dates").fetchall(),
+                                     current.execute("SELECT * FROM mail_message_dates").fetchall())
+                    old_hash = sha256_json(child.to_dict())
+                    self.assertEqual(set(previous.execute("SELECT * FROM helpers WHERE observation_hash != ?", (old_hash,))),
+                                     set(current.execute("SELECT * FROM helpers WHERE job_index = 0")))
+                    self.assertEqual(set(previous.execute("SELECT * FROM postings WHERE observation_hash != ?", (old_hash,))),
+                                     set(current.execute("SELECT p.* FROM postings p JOIN helpers h USING(observation_hash) WHERE h.job_index = 0")))
+                self.assertFalse(records.runtime_store.source_family_lexical_lookup(
+                    profile.analyze("amber").tokens, source_family="mail", timeout_ms=500))
+                hits = records.runtime_store.source_family_lexical_lookup(
+                    profile.analyze("cobalt").tokens, source_family="mail", timeout_ms=500)
+                self.assertTrue(hits)
+                with self.assertRaises(ContractValidationError):
+                    records.get_observation(child.observation_id)
+                scan = records.scan_authorized_observations(source_family="mail", max_observations=100,
+                    preferred_observation_hashes=tuple(hits))
+                self.assertTrue(any(item.text == "cobalt current evidence" for item, _ in scan.observations), scan)
+                self.assertTrue(any(item.observation_type == "email_attachment_occurrence" for item, _ in scan.observations))
+                self.assertTrue(any(item.observation_type == "email_message" for item, _ in scan.observations))
+            finally:
+                records.runtime_store.close()
+
+    def test_replacement_rejects_stale_version_bad_parent_hash_and_revision(self):
+        for case in ("version", "parent", "hash", "revision", "permission", "empty"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                kwargs = {"version": "0.7.4"} if case == "version" else {}
+                if case in {"parent", "hash"}:
+                    kwargs["bad_lineage"] = {"parent_asset_id" if case == "parent" else "child_content_hash": "sha256:" + "0" * 64}
+                kwargs["empty"] = case == "empty"
+                old, _, store, job = self._fixture(root, **kwargs)
+                if case == "permission":
+                    from formowl_ingestion.storage import AssetStore
+                    path = AssetStore(store)._store._record_path(job.asset_id)
+                    asset = json.loads(path.read_text())
+                    asset["permission_scope"]["scope_id"] = "project_other"
+                    path.write_text(json.dumps(asset))
+                with self.assertRaises((ContractValidationError, ValueError, RuntimeError)):
+                    self._compose(root, old, store, job,
+                                  pin="sha256:" + "0" * 64 if case == "revision" else None)
+                self.assertFalse((root / "replacement").exists())
+
+    def test_replacement_rejects_structured_shapes_without_retaining_stale_exact_cells(self):
+        for old_table, new_table in ((False, True), (True, False)):
+            with self.subTest(old_table=old_table), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                old, _, store, job = self._fixture(root, old_table=old_table, new_table=new_table)
+                with self.assertRaisesRegex((ContractValidationError, ValueError), "structured|lineage"):
+                    self._compose(root, old, store, job)
+                self.assertFalse((root / "replacement").exists())
 
 
 def _write_lookup(root: Path, *, sqlite_hash_override: str | None = None) -> dict[str, str]:

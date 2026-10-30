@@ -311,6 +311,7 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
                  seed_preparation_directory: Path | None = None,
                  seed_expected_revision_sha256: str | None = None,
                  seed_job_prefix_count: int | None = None,
+                 seed_reference_subset: bool = False,
                  mail_message_dates_only: bool = False) -> dict:
     """Seed only an explicit unchanged job prefix; replace old suffix offline.
 
@@ -321,6 +322,8 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
     seeding = any(value is not None for value in (
         seed_preparation_directory, seed_expected_revision_sha256, seed_job_prefix_count,
     ))
+    if seed_reference_subset and not seeding:
+        raise ContractValidationError("source subset seed requires separately pinned source")
     if seeding and (base_lookup_directory is None or seed_preparation_directory is None
                     or seed_expected_revision_sha256 is None or seed_job_prefix_count is None):
         raise ContractValidationError("source seed requires preparation, pin, lookup and job prefix count")
@@ -365,7 +368,8 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
         authorities = records.job_authorities
         references = records.observation_references
         job_ids = {}
-        kinds = [_authorized_ingestion_root_source_kinds(authority) for authority in authorities]
+        kinds = [_authorized_ingestion_root_source_kinds(
+            authority, records.attachment_replacements.get(authority.job_fingerprint)) for authority in authorities]
         counts = {"references": len(references), "helpers": 0, "postings": 0,
                   "mail_helpers": 0, "document_text_helpers": 0}
         with tempfile.TemporaryDirectory(prefix=".source-lookup-", dir=output_directory.parent) as temp:
@@ -374,6 +378,7 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
             sqlite_path = staged / "source-lookup.sqlite"
             connection = sqlite3.connect(sqlite_path)
             base_fingerprint = None
+            base_date_metadata = {}
             retained = 0
             try:
                 if base_lookup_directory is None:
@@ -392,7 +397,27 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
                             raise ContractValidationError("source lexical lookup token surfaces are unverified")
                         with base._connection_lock:
                             if seeding:
-                                retained = _seed_prefix(base, seed_revision.source_records, records, seed_job_prefix_count)
+                                if seed_reference_subset:
+                                    old_records = seed_revision.source_records
+                                    if seed_job_prefix_count != len(old_records.job_authorities):
+                                        raise ContractValidationError("source subset seed requires every original job")
+                                    _seed_prefix(base, old_records, old_records, seed_job_prefix_count)
+                                    for old, new in zip(old_records.job_authorities, authorities):
+                                        if (old != new or old.observation_ids != new.observation_ids):
+                                            raise ContractValidationError("source subset immutable jobs changed")
+                                    removed = {tuple(ref) for replacement in records.attachment_replacements.values()
+                                               for ref in replacement["removed_references"]}
+                                    expected_refs = (ref for ref in old_records.observation_references if tuple(ref) not in removed)
+                                    retained = 0
+                                    for expected_ref in expected_refs:
+                                        if retained >= len(references) or references[retained] != expected_ref:
+                                            raise ContractValidationError("source subset unchanged reference binding mismatch")
+                                        retained += 1
+                                    if (len(removed) != len(old_records.observation_references) - retained
+                                            or any(ref[0] < seed_job_prefix_count for ref in references[retained:])):
+                                        raise ContractValidationError("source subset removal scope mismatch")
+                                else:
+                                    retained = _seed_prefix(base, seed_revision.source_records, records, seed_job_prefix_count)
                             base_counts = dict(base.manifest["counts"])
                             append_only_seed = seeding and retained == base_counts["references"]
                             if append_only_seed:
@@ -414,6 +439,9 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
                         if not seeding and counts.get("references") != len(references):
                             raise ContractValidationError("source lexical clone reference count mismatch")
                         base_fingerprint = base.manifest["manifest_fingerprint"]
+                        if base.has_mail_message_dates:
+                            base_date_metadata = {key: base.manifest[key] for key in (
+                                "mail_date_policy_id", "mail_date_count", "mail_date_status_counts")}
                         if seeding and (base_state != _sealed_lookup_state(base_lookup_directory)
                                 or _file_sha256(base_lookup_directory / "source-lookup.sqlite") != base.manifest["sqlite_sha256"]
                                 or append_only_seed and _file_sha256(sqlite_path) != base.manifest["sqlite_sha256"]):
@@ -428,7 +456,18 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
                         seed_revision = None
                     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS helpers_observation_id ON helpers(observation_id)")
                     connection.execute("CREATE TABLE IF NOT EXISTS attachment_parents (child_asset_id TEXT PRIMARY KEY, observation_hash TEXT NOT NULL UNIQUE)")
-                    if seeding and retained == counts["references"]:
+                    if seed_reference_subset:
+                        connection.execute("CREATE TEMP TABLE retained_refs (observation_hash TEXT PRIMARY KEY, position INTEGER NOT NULL)")
+                        connection.executemany("INSERT INTO retained_refs VALUES (?,?)",
+                                               ((ref[2], i) for i, ref in enumerate(islice(references, retained))))
+                        for table in ("postings", "attachment_parents", "occurrence_helpers", "helpers", "reference_locators"):
+                            connection.execute(f"DELETE FROM {table} WHERE observation_hash NOT IN (SELECT observation_hash FROM retained_refs)")
+                        # All original mail-message refs remain unchanged; date
+                        # metadata is copied byte-for-byte and validated below.
+                        connection.execute("UPDATE reference_locators SET position = -position - 1")
+                        connection.execute("UPDATE reference_locators SET position = (SELECT position FROM retained_refs r WHERE r.observation_hash = reference_locators.observation_hash)")
+                        counts = _lookup_counts(connection, len(references))
+                    elif seeding and retained == counts["references"]:
                         # _seed_prefix validated every old row/count before the
                         # unchanged-base backup: there is no old suffix to drop.
                         counts["references"] = len(references)
@@ -547,18 +586,21 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
                         "SELECT h.observation_id, h.observation_hash, h.job_index FROM attachment_parents p "
                         "JOIN helpers h USING(observation_hash) WHERE p.child_asset_id = ?", (child_asset_id,),
                     ).fetchone()
-                    if parent_ref is None or parent_ref[2] != job_index:
+                    replacement = records.attachment_replacements.get(authorities[job_index].job_fingerprint)
+                    expected_parent_index = replacement["parent_reference"][0] if replacement else job_index
+                    if parent_ref is None or parent_ref[2] != expected_parent_index:
                         raise ContractValidationError("source seed attachment parent job binding mismatch")
                     authority = authorities[job_index]
                     child = authority.load_indexed_observation(
                         observation_id, expected_observation_hash=observation_hash,
                         expected_job_fingerprint=authority.job_fingerprint,
                     )
-                    parent = authority.load_indexed_observation(
+                    parent_authority = authorities[expected_parent_index]
+                    parent = parent_authority.load_indexed_observation(
                         parent_ref[0], expected_observation_hash=parent_ref[1],
-                        expected_job_fingerprint=authority.job_fingerprint,
+                        expected_job_fingerprint=parent_authority.job_fingerprint,
                     )
-                    if (parent.asset_id != authority.asset.asset_id or parent.modality != "mail"
+                    if (parent.asset_id != parent_authority.asset.asset_id or parent.modality != "mail"
                             or authority._runs_by_id[child.extractor_run_id].input_hash != child.payload["lineage"].get("child_content_hash")):
                         raise ContractValidationError("source seed attachment run binding mismatch")
                     _attachment_child_lineages({child.observation_id: child, parent.observation_id: parent})
@@ -589,6 +631,8 @@ def build_lookup(*, directory: Path, expected_revision_sha256: str,
             if seeding:
                 core["seed_binding"] = {"source_revision_sha256": seed_expected_revision_sha256,
                                         "job_prefix_count": seed_job_prefix_count, "reference_prefix_count": retained}
+            if base_date_metadata:
+                core.update(schema_version=2, **base_date_metadata)
             with sqlite_path.open("rb") as stream:
                 os.fsync(stream.fileno())
             _write_file_exclusive(staged / "source-lookup-manifest.json", json.dumps({
@@ -616,6 +660,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed-preparation-directory", type=Path, help="Separately validated OLD source preparation for offline prefix seeding")
     parser.add_argument("--seed-expected-revision-sha256", help="Operator-pinned OLD preparation byte hash")
     parser.add_argument("--seed-job-prefix-count", type=int, help="Exact unchanged leading job count to retain; discard old suffix and tokenize new suffix offline")
+    parser.add_argument("--seed-reference-subset", action="store_true", help="Retain the proven unchanged reference subset for sealed attachment text replacement")
     parser.add_argument("--mail-message-dates-only", action="store_true", help="Copy a sealed same-revision base and read only email_message Observations for date schema v2")
     args = parser.parse_args(argv)
     try:
@@ -624,6 +669,7 @@ def main(argv: list[str] | None = None) -> int:
                               seed_preparation_directory=args.seed_preparation_directory,
                               seed_expected_revision_sha256=args.seed_expected_revision_sha256,
                               seed_job_prefix_count=args.seed_job_prefix_count,
+                              seed_reference_subset=args.seed_reference_subset,
                               mail_message_dates_only=args.mail_message_dates_only)
     except (ContractValidationError, Issue56SealedSourceLoadError,
             SourceIdentifierCandidateError, OSError, sqlite3.Error):

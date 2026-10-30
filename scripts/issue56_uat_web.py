@@ -844,6 +844,241 @@ def _open_ingestion_projection_connection(path: Path):
     return PsycopgOAuthConnection(connection)
 
 
+def _compose_attachment_replacement_preparation(
+    directory: Path, *, base_preparation_directory: Path,
+    expected_base_preparation_sha256: str, jobs: list[list[str]],
+) -> dict:
+    """Offline text-block replacement over a pinned source checkpoint, never a query rebuild.
+
+    Structured replacement and empty/failed jobs are unsupported and fail closed.
+    The old source, exact shards and lexical database are never mutated.
+    """
+    from formowl_contract import sha256_json, to_plain
+    from formowl_ingestion.storage import AssetStore, JobStore, ObservationStore, ExtractorRunStore
+    from formowl_mail.import_workflow import open_completed_ingestion_job_reader
+    from formowl_mail.issue56_sealed_source import (
+        APPROVER_ACTOR, WORKSPACE_ID, load_issue56_ingestion_revision,
+        _validate_attachment_replacement, _MAX_INGESTION_REVISION_SOURCE_BYTES,
+    )
+    from formowl_mail.hybrid import _is_attachment_text_observation
+    from formowl_mail.query import _attachment_child_lineages
+    from scripts.issue56_source_native_lookup import _seed_prefix
+
+    if directory.exists() or directory.is_symlink() or not jobs:
+        raise ValueError("attachment replacement requires new output and completed jobs")
+    base = load_issue56_ingestion_revision(
+        base_preparation_directory, expected_revision_sha256=expected_base_preparation_sha256,
+    )
+    records = base.source_records
+    lookup = records.runtime_store
+    try:
+        if lookup is None:
+            raise ValueError("attachment replacement requires sealed keyed source lookup")
+        # Prove every locator and helper belongs to the pinned source before
+        # using occurrence metadata to skip unchanged mail-source hydration.
+        _seed_prefix(lookup, records, records, len(records.job_authorities))
+        preparation = json.loads((base_preparation_directory / "preparation.json").read_bytes())
+        preparation.pop("preparation_fingerprint")
+        snapshot = json.loads((base_preparation_directory / "observations.json").read_bytes())
+        bindings = list(snapshot["job_store_bindings"])
+        authorities = list(records.job_authorities)
+        additions, replacement_by_asset = [], {}
+        for store, job_id in jobs:
+            reader = open_completed_ingestion_job_reader(
+                job_id, job_store=JobStore(Path(store)), asset_store=AssetStore(Path(store)),
+                observation_store=ObservationStore(Path(store)), extractor_run_store=ExtractorRunStore(Path(store)),
+                requester_user_id=APPROVER_ACTOR, workspace_id=WORKSPACE_ID,
+            )
+            authority = reader.authority
+            asset_id = authority.asset.asset_id
+            if (asset_id in replacement_by_asset
+                    or any(a.ingestion_job_id == job_id for a in authorities)):
+                raise ValueError("attachment replacement job/asset is ambiguous")
+            helper = lookup.helper_for_attachment_asset(asset_id)
+            if helper is None:
+                raise ValueError("attachment replacement genuine parent is unavailable")
+            parent_index = helper["reference"]["job_index"]
+            parent_ref = [parent_index, helper["observation_id"], helper["observation_hash"]]
+            # _seed_prefix already proved helper -> locator -> source membership.
+            index = len(authorities)
+            binding = {
+                "job_index": index, "store_directory": str(Path(store).resolve()),
+                "ingestion_job_id": job_id, "job_fingerprint": authority.job_fingerprint,
+                "observation_count": authority.observation_count,
+            }
+            authorities.append(authority)
+            bindings.append(binding)
+            replacement = {
+                "base_preparation_sha256": expected_base_preparation_sha256,
+                "parent_reference": parent_ref,
+                "parent_job_fingerprint": helper["reference"]["job_fingerprint"],
+                "run_fingerprint": sha256_json(authority.runs[0].to_dict()),
+                "asset_fingerprint": sha256_json(to_plain(authority.asset)),
+                "removed_references": [],
+            }
+            _, parent = _validate_attachment_replacement(replacement, authority, authorities, bindings)
+            references = []
+            for child in reader.iter_observations():
+                if not _is_attachment_text_observation(child):
+                    raise ValueError("attachment replacement structured content is unsupported")
+                if child.observation_id not in _attachment_child_lineages({
+                    parent.observation_id: parent, child.observation_id: child,
+                }):
+                    raise ValueError("attachment replacement child lineage is unavailable")
+                references.append([index, child.observation_id, sha256_json(child.to_dict())])
+            if len(references) != authority.observation_count:
+                raise ValueError("attachment replacement content scope is incomplete")
+            replacement_by_asset[asset_id] = replacement
+            additions.append((authority, replacement, references))
+        # Helpers with native occurrence coordinates belong to the unchanged
+        # registered mail root. Every other snapshot ref is checked by its own
+        # job reader; this reads retained source refs, never all native cells.
+        unchanged = set()
+        for observation_id, job_index, asset_id in lookup._connection.execute(
+            "SELECT h.observation_id,o.job_index,o.asset_id FROM occurrence_helpers o "
+            "JOIN helpers h USING(observation_hash)"
+        ):
+            if asset_id == authorities[job_index].asset.asset_id and asset_id not in replacement_by_asset:
+                unchanged.add(observation_id)
+        retained, removed_ids, row_bindings = [], set(), {}
+        memberships = {}
+        hydrated = 0
+        for reference in records.observation_references:
+            index, observation_id, observation_hash = reference
+            if observation_id in unchanged:
+                retained.append(reference)
+                continue
+            authority = authorities[index]
+            if index not in memberships:
+                memberships[index] = set(authority.observation_ids)
+            if observation_id not in memberships[index]:
+                raise ValueError("attachment replacement source reference is outside owning job")
+            observation = authority.load_indexed_observation(
+                observation_id, expected_observation_hash=observation_hash,
+                expected_job_fingerprint=authority.job_fingerprint,
+            )
+            hydrated += 1
+            if observation.observation_type == "table_row":
+                row_bindings[observation_id] = [index, observation_hash, sha256_json([
+                    observation.asset_id, observation.location.get("parent_message_observation_id"),
+                    observation.location.get("mime_ordinal"), observation.location.get("sheet_name"),
+                    observation.location.get("table_index"), observation.location.get("row_index"),
+                ])]
+            replacement = replacement_by_asset.get(observation.asset_id)
+            if replacement is not None:
+                if not _is_attachment_text_observation(observation):
+                    raise ValueError("attachment replacement old structured content is unsupported")
+                replacement["removed_references"].append(reference)
+                removed_ids.add(observation_id)
+            else:
+                retained.append(reference)
+            if hydrated % 10000 == 0:
+                print(json.dumps({"phase": "attachment_replacement_source_validation", "source_reads": hydrated}), flush=True)
+        exact_path = base_preparation_directory / "exact-cells"
+        exact = json.loads((exact_path / "manifest.json").read_bytes())
+        fingerprint = exact.pop("manifest_fingerprint")
+        if fingerprint != sha256_json(exact):
+            raise ValueError("attachment replacement exact manifest changed")
+        # Every exact cell must share a key with an active, hydrated table row.
+        # Thus preserved shards cannot refer to a replaced text-only asset.
+        exact_row_keys, exact_cell_keys = set(), set()
+        for shard in exact["shards"]:
+            if shard["kind"] != "row":
+                continue
+            path = exact_path / "rows" / f"{shard['shard']}.jsonl"
+            digest, size, count = hashlib.sha256(), 0, 0
+            with path.open("rb") as stream:
+                for raw in stream:
+                    digest.update(raw)
+                    size += len(raw)
+                    count += 1
+                    item = json.loads(raw)
+                    if item[0] == "row":
+                        if row_bindings.get(item[3]) != [item[2], item[4], item[1]] or item[3] in removed_ids:
+                            raise ValueError("attachment replacement exact row is outside active source")
+                        exact_row_keys.add(item[1])
+                    elif item[0] == "cell":
+                        exact_cell_keys.add(item[1])
+                    else:
+                        raise ValueError("attachment replacement exact shape is unsupported")
+            if (shard["sha256"] != "sha256:" + digest.hexdigest()
+                    or shard["size_bytes"] != size or shard["record_count"] != count):
+                raise ValueError("attachment replacement exact shard changed")
+        if not exact_cell_keys <= exact_row_keys:
+            raise ValueError("attachment replacement orphan exact cells are unsupported")
+        source = dict(snapshot["source_binding"])
+        source["jobs"] = [*source["jobs"], *({
+            "root_asset_hash": authority.asset.content_hash,
+            "job_fingerprint": authority.job_fingerprint,
+            "run_fingerprints": [sha256_json(run.to_dict()) for run in authority.runs],
+            "observation_count": authority.observation_count, "excluded_child_runs": [],
+            "attachment_replacement": replacement,
+        } for authority, replacement, _ in additions)]
+        source["source_authority_fingerprint"] = sha256_json({
+            "artifact_id": "formowl_completed_ingestion_job_authority_v1",
+            "requester_user_id": APPROVER_ACTOR, "workspace_id": WORKSPACE_ID, "jobs": source["jobs"],
+        })
+        exact.update(source_authority_fingerprint=source["source_authority_fingerprint"], job_count=len(bindings))
+        exact_bytes = json.dumps({**exact, "manifest_fingerprint": sha256_json(exact)}, sort_keys=True, separators=(",", ":")).encode()
+        source["exact_lookup_manifest_sha256"] = "sha256:" + hashlib.sha256(exact_bytes).hexdigest()
+        coverage = dict(source["extraction_coverage"])
+        warnings = dict(coverage["warning_code_counts"])
+        counts = dict(preparation["observation_type_counts"])
+        for authority, _, refs in additions:
+            for run in authority.runs:
+                for warning in run.warnings:
+                    warnings[warning] = warnings.get(warning, 0) + 1
+            for _, observation_id, observation_hash in refs:
+                item = authority.load_indexed_observation(
+                    observation_id, expected_observation_hash=observation_hash,
+                    expected_job_fingerprint=authority.job_fingerprint)
+                counts[item.observation_type] = counts.get(item.observation_type, 0) + 1
+        source["extraction_coverage"] = {
+            **coverage, "root_count": len(source["jobs"]), "warning_code_counts": warnings,
+            "warning_count": sum(warnings.values()), "source_completeness_certified": False,
+            "active_replacement_asset_count": len(additions), "superseded_reference_count": len(removed_ids),
+            "replacement_reference_count": sum(len(refs) for _, _, refs in additions),
+        }
+        snapshot.update(source_binding=source, job_store_bindings=bindings,
+                        observation_references=[*retained, *(ref for _, _, refs in additions for ref in refs)])
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(prefix=f".{directory.name}.", dir=directory.parent))
+        try:
+            _copytree_atomic(exact_path, temporary / "exact-cells", copy_function=_link_or_copy_file_atomic,
+                             ignore=shutil.ignore_patterns("manifest.json"))
+            (temporary / "exact-cells" / "manifest.json").write_bytes(exact_bytes)
+            for name in ("sidecar-parent-binding.json", "bound-child-failure-exclusions.json"):
+                if (base_preparation_directory / name).exists():
+                    _link_or_copy_file_atomic(base_preparation_directory / name, temporary / name)
+            raw = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+            if len(raw) > _MAX_INGESTION_REVISION_SOURCE_BYTES:
+                raise ValueError("attachment replacement source exceeds size cap")
+            (temporary / "observations.json").write_bytes(raw)
+            preparation.update(
+                requested_jobs=[[b["store_directory"], b["ingestion_job_id"]] for b in bindings],
+                job_count=len(source["jobs"]), job_authority_count=len(bindings),
+                source_observation_count=sum(a.observation_count for a in authorities),
+                observation_type_counts=counts,
+                snapshot_size_bytes=len(raw), snapshot_sha256="sha256:" + hashlib.sha256(raw).hexdigest(),
+                exact_lookup_manifest_sha256=source["exact_lookup_manifest_sha256"],
+            )
+            (temporary / "preparation.json").write_text(json.dumps(
+                {**preparation, "preparation_fingerprint": sha256_json(preparation)}, sort_keys=True, separators=(",", ":"),
+            ))
+            # Same-filesystem publication; caller supplied a fresh output name.
+            from scripts.issue56_source_identifier_candidates import _rename_directory_no_replace
+            _rename_directory_no_replace(temporary, directory)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+        return {"phase": "source_preparation_checkpoint_ready", "preparation_directory": str(directory),
+                "replaced_asset_count": len(additions), "removed_reference_count": len(removed_ids),
+                "added_reference_count": sum(len(refs) for _, _, refs in additions), "source_reads": hydrated}
+    finally:
+        if lookup is not None:
+            lookup.close()
+
+
 def _compose_independent_root_preparation(
     directory: Path,
     *,
