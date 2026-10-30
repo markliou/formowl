@@ -1600,7 +1600,7 @@ def _soft_unit_utility(hits):
     # and whole-label coverage outrank fragmented field tokens; none proves support.
     tokens = {(field, word) for field, word in hits if field >= 0}
     return (sum(field == -1 for field, _ in hits), sum(field == -2 for field, _ in hits),
-            len({field for field, _ in tokens}), len(tokens))
+            len({field for field, _ in tokens}), len(tokens), sum(field == -3 for field, _ in hits))
 
 
 def _presentation_unit_identity(item):
@@ -2174,12 +2174,18 @@ def _server_annotation_hint_source_match(
     tokenizer,
 ):
     """Reuse ordinary source matching, then independently check reviewed identity."""
-    if _source_mail_observation_match(
-        observation,
-        query_terms=set(),
-        required_terms=tuple(required_terms),
-        protected_query_tokens=set(protected_terms),
-        tokenizer_profile=tokenizer,
+    if _is_attachment_text_observation(observation):
+        # Native attachment text uses document modality, which the ordinary
+        # mail/text matcher does not accept. This is only a relevance check;
+        # the projector keeps the original guarded Observation and lineage.
+        text = observation.text or observation.caption or ""
+        normalized_text = unicodedata.normalize("NFKC", text).casefold()
+        if (not all(term in normalized_text for term in required_terms)
+                or (protected_terms and not set(protected_terms).issubset(tokenizer.analyze(text).tokens))):
+            return False
+    elif _source_mail_observation_match(
+        observation, query_terms=set(), required_terms=tuple(required_terms),
+        protected_query_tokens=set(protected_terms), tokenizer_profile=tokenizer,
     ) is None:
         return False
     identity_texts = [observation.text or observation.caption or ""]
@@ -2461,6 +2467,23 @@ def _reviewed_annotation_literals_match(observation, *, required_terms, target, 
             and (not protected or protected.issubset(tokenizer.analyze(text).tokens)))
 
 
+def _attachment_hard_literal_terms(required_terms, tokenizer):
+    """Classify relevance only; never rewrite the validated request's terms.
+
+    Whitespace phrases are descriptive unless one protected span covers the
+    whole term. Single tokens retain digit-bearing/protected identifier and
+    separator-shape rules. Plain casefolded words remain descriptive.
+    """
+    return tuple(term for term in required_terms if (
+        any(span.start == 0 and span.end == len(term)
+            for span in tokenizer.analyze(term).protected_identifiers)
+        or (not any(char.isspace() for char in term) and (
+            any(char.isdigit() for char in term)
+            or re.fullmatch(r"[a-z0-9]+(?:[._-][a-z0-9]+)+", term) is not None
+        ))
+    ))
+
+
 # User-authorized whole-document recovery; both limits are required.
 SMALL_SCOPE_DOCUMENT_MAX_PARAGRAPHS: Final = 200
 SMALL_SCOPE_DOCUMENT_MAX_NFC_CHARACTERS: Final = 60_000
@@ -2735,6 +2758,13 @@ def _build_source_start_semantic_handler(
             native_locator is None and placement is None and query_class == "evidence_lookup" and bool(requested_fields) and len(identifier_terms) == 1
             and any(normalize_source_occurrence_structured_surface(field) in applicable_fields for field in requested_fields)
         )
+        attachment_hard_terms = required_terms
+        attachment_soft_terms: tuple[str, ...] = ()
+        attachment_softening = query_class == "evidence_lookup" and placement is None
+        if attachment_softening:
+            attachment_hard_terms = _attachment_hard_literal_terms(required_terms, tokenizer)
+            attachment_soft_terms = tuple(term for term in required_terms if term not in attachment_hard_terms)
+        attachment_policy_applied = False
         if auto_exact:
             date_priority = False  # Preserve the existing primary native/exact route.
         presentation_recency = bool(date_binding is not None and date_binding.mode == "presentation_tiebreak"
@@ -2769,6 +2799,7 @@ def _build_source_start_semantic_handler(
                 return exact_payload
         query_terms: set[str] = set()
         protected_terms: set[str] = set()
+        attachment_protected_terms: set[str] = set()
         active_family: str | None = None
         full_read_projection = False
         active_selector: str | None = selector
@@ -2839,7 +2870,11 @@ def _build_source_start_semantic_handler(
             standalone, truncated = _bounded_mail_header_groups([item], limit=limit)
             if truncated or len(json.dumps(standalone, ensure_ascii=False).encode("utf-8")) > 16 * 1024:
                 return
-            for entry in (*admitted_items, *presentation_cache, item):
+            entries = (*admitted_items, *presentation_cache, item)
+            soft_hits = {}
+            score_descriptions = attachment_policy_applied and any(
+                entry.get("source_type") == "mail_attachment_text" for entry in entries)
+            for entry in entries:
                 key = entry["citation_hash"]
                 if key not in selection_hits and _ordinary_presentation_unit(entry):
                     if time.monotonic() >= source_budget["deadline"]:
@@ -2851,6 +2886,20 @@ def _build_source_start_semantic_handler(
                     selection_hits[key].update((-1, term) for term in presentation_identifiers if term in text)
                     selection_hits[key].update((-2, field) for field in requested_fields
                                                if unicodedata.normalize("NFKC", field).casefold() in text)
+                if score_descriptions and key in selection_hits:
+                    if time.monotonic() >= source_budget["deadline"]:
+                        return
+                    text = entry.get("snippet", "")
+                    if entry.get("source_type") != "mail_attachment_text":
+                        text += "\n" + entry.get("_mail_parent_header", {}).get("snippet", "")
+                    text = unicodedata.normalize("NFKC", text).casefold()
+                    soft_hits[key] = {term for term in attachment_soft_terms if term in text}
+            # Common literals add no ranking information. Comparable accounting
+            # also preserves strict mail/document priorities and recency ties.
+            common = set.intersection(*soft_hits.values()) if soft_hits else set()
+            for key, terms in soft_hits.items():
+                selection_hits[key] = {hit for hit in selection_hits[key] if hit[0] != -3}
+                selection_hits[key].update((-3, term) for term in terms - common)
             pool = list(presentation_cache)
             if item["citation_hash"] not in {entry["citation_hash"] for entry in pool}:
                 pool.append(item)
@@ -2989,11 +3038,13 @@ def _build_source_start_semantic_handler(
                 annotation_target
             nonlocal annotation_identity_hints, annotation_identity_reads_cell
             nonlocal presentation_identifiers
+            nonlocal attachment_protected_terms
             check_source_evidence_deadline(deadline)
 
             analysis = tokenizer.analyze(query_text)
             query_terms = set(analysis.tokens)
-            protected_terms = {item.exact_token for item in analysis.protected_identifiers}
+            query_protected_terms = {item.exact_token for item in analysis.protected_identifiers}
+            protected_terms = query_protected_terms
             # The UAT agent may enter a multi-identifier mail occurrence with
             # one validated PO anchor so that the source reader can expand its
             # same-occurrence siblings.  Keep the anchor's protected-token
@@ -3002,6 +3053,24 @@ def _build_source_start_semantic_handler(
             # the governed context walk.
             if required_terms and len(required_terms) == 1 and len(protected_terms) > 1:
                 protected_terms = set(required_terms)
+            attachment_protected_terms = protected_terms
+            if attachment_soft_terms:
+                normalized_query = unicodedata.normalize("NFKC", query_text).casefold()
+                soft_ranges = [match.span() for term in attachment_soft_terms
+                               if any(char.isspace() for char in term)
+                               for match in re.finditer(re.escape(term), normalized_query)]
+                spans = tokenizer.analyze(normalized_query).protected_identifiers if soft_ranges else ()
+                inside = {span.exact_token for span in spans
+                          if any(start <= span.start and span.end <= end for start, end in soft_ranges)}
+                if inside:
+                    outside = {span.exact_token for span in spans
+                               if not any(start <= span.start and span.end <= end for start, end in soft_ranges)}
+                    # Only phrase-internal protected tokens soften. Independent
+                    # query occurrences and hard required terms remain guarded.
+                    # A sole soft phrase must also avoid the legacy anchor override.
+                    attachment_protected_terms = (query_protected_terms - inside) | outside | {
+                        span.exact_token for term in attachment_hard_terms
+                        for span in tokenizer.analyze(term).protected_identifiers}
             if date_priority:
                 project.source_lookup_token_groups = tuple(tuple(sorted(set(tokenizer.analyze(term).tokens)))
                                                           for term in required_terms)
@@ -3168,7 +3237,7 @@ def _build_source_start_semantic_handler(
                     _trace(cell, "finish")
 
         def project(observation: Observation, scope_id: str, deadline: float):
-            nonlocal unresolved_parent_binding, last_anchor
+            nonlocal unresolved_parent_binding, last_anchor, attachment_policy_applied
             check_source_evidence_deadline(deadline)
             observe_required_terms(observation)
             last_anchor = None
@@ -3186,9 +3255,11 @@ def _build_source_start_semantic_handler(
                 # than repeated in a child paragraph. ALL other literals survive.
                 if not _reviewed_annotation_literals_match(
                     observation,
-                    required_terms=required_terms,
+                    required_terms=(attachment_hard_terms if active_family == "mail"
+                                    and _is_attachment_text_observation(observation) else required_terms),
                     target=annotation_target,
-                    protected_terms=protected_terms,
+                    protected_terms=(attachment_protected_terms if active_family == "mail"
+                                     and _is_attachment_text_observation(observation) else protected_terms),
                     tokenizer=tokenizer,
                     deadline=deadline,
                 ):
@@ -3256,6 +3327,17 @@ def _build_source_start_semantic_handler(
                         return None
                     text = observation.text or observation.caption or ""
                     normalized = unicodedata.normalize("NFKC", text).casefold()
+                    attachment_policy_applied |= bool(attachment_soft_terms)
+                    # Reviewed identity may link descriptive names, but cannot
+                    # waive an attachment's complete required identifier literal.
+                    # ASCII words and code separators cannot extend numeric or
+                    # code terms. Sentence-final punctuation remains permitted.
+                    if attachment_softening and not all(
+                        re.search(r"(?<![a-z0-9])(?<![a-z0-9][._-])" + re.escape(term)
+                                  + r"(?![a-z0-9]|[._-][a-z0-9])", normalized)
+                        for term in attachment_hard_terms
+                    ):
+                        return None
                     if semantic_match:
                         pass  # Reviewed identity/field binding; source guards above still apply.
                     elif annotation_hint_match:
@@ -3263,8 +3345,8 @@ def _build_source_start_semantic_handler(
                         parent_text = parent.text or parent.caption or ""
                         if not _server_annotation_hint_source_match(
                             observation,
-                            required_terms=required_terms,
-                            protected_terms=protected_terms,
+                            required_terms=attachment_hard_terms,
+                            protected_terms=attachment_protected_terms,
                             identity_surfaces=annotation_hint_surfaces,
                             identity_context_texts=(parent_text, parent_payload.get("subject")),
                             tokenizer=tokenizer,
@@ -3274,15 +3356,15 @@ def _build_source_start_semantic_handler(
                             return None
                         annotation_hint_counts["predicate_passed"] += 1
                     elif required_terms:
-                        if not all(term in normalized for term in required_terms):
+                        if not attachment_softening and not all(term in normalized for term in required_terms):
                             return None
                     elif not query_terms.issubset(set(tokenizer.analyze(text).tokens)):
                         return None
                     if (
                         not semantic_match
                         and not annotation_hint_match
-                        and protected_terms
-                        and not protected_terms.issubset(set(tokenizer.analyze(text).tokens))
+                        and attachment_protected_terms
+                        and not attachment_protected_terms.issubset(set(tokenizer.analyze(text).tokens))
                     ):
                         return None
                     parent_payload = parent.payload or {}
@@ -4344,6 +4426,12 @@ def _build_source_start_semantic_handler(
         if overflow_hashes and double_check.scan is not None and time.monotonic() < presentation_deadline:
             presentation_deferred = tuple(presentation_cache)
         prune_outer_dates()
+        attachment_policy = ({"attachment_literal_policy": {
+            "source_type": "mail_attachment_text",
+            "softened_required_terms": [term for term in raw_terms
+                if unicodedata.normalize("NFKC", term.strip()).casefold() in attachment_soft_terms],
+            "soft_terms_mode": "ranking_only",
+        }} if attachment_policy_applied else {})
         if mail_tool:
             mail_evidence = []
             citations = []
@@ -4354,6 +4442,7 @@ def _build_source_start_semantic_handler(
                 citations.append(_citation_for_snippet(item))
             payload = {
                 "status": status,
+                **attachment_policy,
                 **({"presentation_truncated": True} if header_groups_truncated else {}),
                 "mail_import_session_id": selector,
                 "query_hash": sha256_json(query_text),
@@ -4379,6 +4468,7 @@ def _build_source_start_semantic_handler(
             return _finalize_mail_date_presentation(payload, date_metadata) if date_priority else payload
         payload = {
             "status": status,
+            **attachment_policy,
             **({"presentation_truncated": True} if header_groups_truncated else {}),
             "answer": {
                 "status": status,

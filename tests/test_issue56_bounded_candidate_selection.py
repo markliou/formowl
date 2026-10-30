@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -20,6 +21,264 @@ import test_issue56_uat_handler_composition as source_fixture
 
 
 class BoundedCandidateSelectionTests(unittest.TestCase):
+    def test_attachment_numeric_multiword_phrase_stays_soft_without_weakening_separate_identifiers(self):
+        phrase = "clienta rb3 gen2 frame"
+        with tempfile.TemporaryDirectory() as directory:
+            _, revision, _, arguments, child, _ = self.attachment_source(
+                Path(directory), body_text="Cover note.",
+                attachment_text="Clienta ZX-742 release date 2036-02-03.")
+            target = sha256_json(child.to_dict())
+            with patch.object(source_fixture.issue56_sealed_source, "issue56_reviewed_annotation_catalog",
+                              return_value={"catalog_pin": sha256_json("Clienta fictional projection catalog")}):
+                handler = loader._build_source_start_semantic_handler(revision, mail_tool=False)
+            hint = ({target: ("clienta",)}, {"scanned_atom_count": 1, "matched_atom_count": 1,
+                    "candidate_hash_count": 1, "term_hashes": (), "cap_reached": False,
+                    "atom_scan_truncated": False})
+            scan_source = revision.source_records.scan_authorized_observations
+            def scan(**kwargs):
+                kwargs.pop("additive_observation_hashes", None)
+                kwargs.pop("preferred_observation_hashes", None)
+                return scan_source(**{**kwargs, "context_anchor_callback": lambda *_: False})
+            cases = (
+                (["zx-742", phrase], "", True),
+                (["zx-743", phrase], "", False),
+                (["zx-742", phrase, "rb3"], "", False),
+                (["zx-742", phrase], " rb3", False),
+                # This whitespace term is one complete protected amount span.
+                (["zx-742", phrase, "usd 742"], "", False),
+                ([phrase], "", True),
+            )
+            for route in ("ordinary", "hinted", "reviewed"):
+                for required, extra, expected in cases:
+                    with self.subTest(route=route, required=required, extra=extra):
+                        arguments["required_terms"] = required
+                        arguments["query_text"] = "Find " + " ".join(required) + extra + " release date"
+                        arguments["request_contract"]["original_query_hash"] = sha256_json(arguments["query_text"])
+                        arguments["reviewed_annotation_ids"] = ["candidate_synthetic"] if route == "reviewed" else []
+                        original = deepcopy(arguments)
+                        with (patch.object(loader, "_server_reviewed_identity_source_hints", return_value=hint if route == "hinted" else ({}, hint[1])),
+                              patch.object(loader, "_select_reviewed_annotation_sources", return_value=(("candidate_synthetic",), (target,), "clienta")),
+                              patch.object(revision.source_records, "scan_authorized_observations", side_effect=scan),
+                              patch.object(loader.time, "monotonic", return_value=time.monotonic())):
+                            result = handler(arguments)
+                        self.assertEqual(target in result["citations"], expected)
+                        if "attachment_literal_policy" in result:
+                            self.assertNotIn("usd 742", result["attachment_literal_policy"]["softened_required_terms"])
+                        if expected:
+                            self.assertEqual(result["attachment_literal_policy"]["softened_required_terms"], [phrase])
+                            self.assertEqual(compact_evidence_for_model(result)["attachment_literal_policy"],
+                                             result["attachment_literal_policy"])
+                            paragraph = next(item for item in result["evidence"] if item["citation_hash"] == target)
+                            self.assertEqual(paragraph["snippet"], child.text)
+                        self.assertEqual(arguments, original)
+
+    def test_attachment_descriptions_are_disclosed_soft_terms_without_rewriting_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, revision, _, arguments, child, parent = self.attachment_source(
+                Path(directory), attachment_text="Clienta 甲社專案 ZX-742 release date 2036-02-03.")
+            arguments["required_terms"] = ["ZX-742", "Clienta", "planned shipping date", "甲社專案"]
+            arguments["query_text"] = "Find ZX-742 Clienta 甲社專案 planned shipping date"
+            arguments["request_contract"]["original_query_hash"] = sha256_json(arguments["query_text"])
+            original = deepcopy(arguments)
+            for mail_tool in (False, True):
+                with self.subTest(mail_tool=mail_tool):
+                    handler = loader._build_source_start_semantic_handler(revision, mail_tool=mail_tool)
+                    if mail_tool:
+                        arguments["mail_import_session_id"] = revision.source_records.authorized_mail_import_session_ids[0]
+                    with patch.object(loader.time, "monotonic", return_value=time.monotonic()):
+                        result = handler(arguments)
+                    self.assertIn(sha256_json(child.to_dict()), evidence_citation_ids(result))
+                    policy = result["attachment_literal_policy"]
+                    self.assertEqual(policy, {"source_type": "mail_attachment_text",
+                                             "softened_required_terms": ["Clienta", "planned shipping date", "甲社專案"],
+                                             "soft_terms_mode": "ranking_only"})
+                    display = compact_evidence_for_model(result)
+                    self.assertEqual(display["attachment_literal_policy"], policy)
+                    self.assertLessEqual(len(json.dumps(display, ensure_ascii=False, separators=(",", ":")).encode()), 16384)
+                    records = result.get("evidence", result.get("evidence_snippets"))
+                    paragraph = next(item for item in records if item["citation_hash"] == sha256_json(child.to_dict()))
+                    self.assertEqual(paragraph["snippet"], child.text)
+                    self.assertEqual(paragraph["source_context"]["parent_attachment_observation_hash"], sha256_json(parent.to_dict()))
+                    self.assertEqual(arguments["required_terms"], original["required_terms"])
+                    self.assertEqual(arguments["request_contract"], original["request_contract"])
+
+    def test_attachment_without_identifier_uses_descriptions_as_soft_signals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, _, handler, arguments, child, _ = self.attachment_source(Path(directory))
+            arguments["required_terms"] = ["clienta", "planned shipping date"]
+            arguments["query_text"] = "Find clienta planned shipping date"
+            arguments["request_contract"]["original_query_hash"] = sha256_json(arguments["query_text"])
+            with patch.object(loader.time, "monotonic", return_value=time.monotonic()):
+                result = handler(arguments)
+            self.assertIn(sha256_json(child.to_dict()), result["citations"])
+            self.assertEqual(result["attachment_literal_policy"]["softened_required_terms"], arguments["required_terms"])
+
+    def test_attachment_soft_terms_do_not_relax_complete_identifier_literals_or_hints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, revision, handler, arguments, child, _ = self.attachment_source(
+                Path(directory), attachment_text="Clienta ZX-742 ZX-ALPHA 742 release date 2036-02-03.")
+            with patch.object(source_fixture.issue56_sealed_source, "issue56_reviewed_annotation_catalog",
+                              return_value={"catalog_pin": sha256_json("Clienta fictional projection catalog")}):
+                handler = loader._build_source_start_semantic_handler(revision, mail_tool=False)
+            target = sha256_json(child.to_dict())
+            # A reviewed identity hint remains independently source-validated.
+            hint = ({target: ("clienta",)}, {"scanned_atom_count": 1, "matched_atom_count": 1,
+                    "candidate_hash_count": 1, "term_hashes": (), "cap_reached": False,
+                    "atom_scan_truncated": False})
+            scan_source = revision.source_records.scan_authorized_observations
+            def scan(**kwargs):
+                # This fictional reader has no runtime SQL helper. Inject only
+                # projection hints, retaining its normal guarded hydration.
+                kwargs.pop("additive_observation_hashes", None)
+                kwargs.pop("preferred_observation_hashes", None)
+                return scan_source(**kwargs)
+            for route in ("ordinary", "hinted", "reviewed"):
+                arguments["reviewed_annotation_ids"] = ["candidate_synthetic"] if route == "reviewed" else []
+                for code in ("zx-742", "zx-74", "zx-7429", "zx-743", "7429", "zx-alpha", "zx-alph", "742", "74"):
+                    with self.subTest(route=route, code=code):
+                        arguments["query_text"] = f"Find Clienta {code} planned shipping date"
+                        arguments["required_terms"] = [code, "planned shipping date"]
+                        arguments["request_contract"]["original_query_hash"] = sha256_json(arguments["query_text"])
+                        with (patch.object(loader, "_server_reviewed_identity_source_hints", return_value=hint if route == "hinted" else ({}, hint[1])),
+                              # Exercise projection after reviewed source selection;
+                              # this synthetic nomination does not prove governance.
+                              patch.object(loader, "_select_reviewed_annotation_sources", return_value=(("candidate_synthetic",), (target,), code)),
+                              patch.object(revision.source_records, "scan_authorized_observations", side_effect=scan),
+                              patch.object(loader.time, "monotonic", return_value=time.monotonic())):
+                            result = handler(arguments)
+                        self.assertEqual(target in result["citations"], code in {"zx-742", "zx-alpha", "742"})
+                        self.assertIn("attachment_literal_policy", result)
+                        self.assertEqual(result["attachment_literal_policy"]["softened_required_terms"], ["planned shipping date"])
+            arguments.pop("reviewed_annotation_ids")
+            # The ordinary reader still has its original bounded read/time arguments.
+            clock = time.monotonic()
+            with (patch.object(revision.source_records, "scan_authorized_observations", wraps=revision.source_records.scan_authorized_observations) as scan_call,
+                  patch.object(loader.time, "monotonic", return_value=clock)):
+                handler(arguments)
+            self.assertLessEqual(scan_call.call_args.kwargs["max_observations"], 8192)
+            self.assertLessEqual(scan_call.call_args.kwargs["deadline_monotonic"] - clock,
+                                 loader.SOURCE_START_EVIDENCE_TIME_BUDGET_MS / 1000)
+            self.assertEqual(loader.SOURCE_EVIDENCE_TIME_BUDGET_MS, 500)
+
+    def test_hinted_attachment_rejects_separator_extended_codes_but_accepts_terminal_period(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, revision, handler, arguments, _, _ = self.attachment_source(
+                Path(directory), body_text="Cover note.",
+                attachment_text="Clienta ZX-742-ALPHA release date.\n\nClienta ZX-742.ALPHA release date.\n\n"
+                                "Clienta ZX-742_ALPHA release date.\n\nClienta ZX-742. release date.")
+            with patch.object(source_fixture.issue56_sealed_source, "issue56_reviewed_annotation_catalog",
+                              return_value={"catalog_pin": sha256_json("Clienta fictional projection catalog")}):
+                handler = loader._build_source_start_semantic_handler(revision, mail_tool=False)
+            children = [item for item in fixture.observations if item.observation_type == "paragraph"]
+            hashes = {sha256_json(item.to_dict()) for item in children}
+            arguments["query_text"] = "Find Clienta ZX-742 planned shipping date"
+            arguments["required_terms"] = ["zx-742", "planned shipping date"]
+            arguments["request_contract"]["original_query_hash"] = sha256_json(arguments["query_text"])
+            hint = ({key: ("clienta",) for key in hashes}, {"scanned_atom_count": 4, "matched_atom_count": 4,
+                    "candidate_hash_count": 4, "term_hashes": (), "cap_reached": False,
+                    "atom_scan_truncated": False})
+            scan_source = revision.source_records.scan_authorized_observations
+            def scan(**kwargs):
+                kwargs.pop("additive_observation_hashes", None)
+                kwargs.pop("preferred_observation_hashes", None)
+                return scan_source(**{**kwargs, "context_anchor_callback": lambda *_: False})
+            literal = next(item for item in children if "ZX-742. release" in item.text)
+            for route in ("hinted", "reviewed"):
+                with self.subTest(route=route):
+                    arguments["reviewed_annotation_ids"] = ["candidate_synthetic"] if route == "reviewed" else []
+                    with (patch.object(loader, "_server_reviewed_identity_source_hints", return_value=hint),
+                          patch.object(loader, "_select_reviewed_annotation_sources", return_value=(("candidate_synthetic",), tuple(hashes), "zx-742")),
+                          patch.object(revision.source_records, "scan_authorized_observations", side_effect=scan),
+                          patch.object(loader.time, "monotonic", return_value=time.monotonic())):
+                        result = handler(arguments)
+                    self.assertEqual(set(result["citations"]) & hashes, {sha256_json(literal.to_dict())})
+
+    def test_all_fields_missing_auto_exact_keeps_ordinary_attachment_soft_gate_and_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, revision, _, arguments, child, _ = self.attachment_source(
+                Path(directory), attachment_text="Clienta ZX-742 release date 2036-02-03.")
+            arguments["query_text"] = "Find Clienta ZX-742 planned shipping date"
+            arguments["required_terms"] = ["zx-742", "planned shipping date"]
+            arguments["request_contract"]["original_query_hash"] = sha256_json(arguments["query_text"])
+            # Isolate the existing exact-first/fallback seam; source hydration
+            # below stays real and sealed. Native row semantics are not mocked
+            # into a claim of table support.
+            exact_lookup = SimpleNamespace(_columns=[{"field": "release date", "inline_table": True}],
+                                           capability_fields=(), capability_providers=())
+            budgets = []
+            def exact(_revision, **kwargs):
+                self.assertEqual(kwargs["required_terms"], tuple(sorted(arguments["required_terms"])))
+                budgets.append(kwargs["source_budget"])
+                kwargs["source_budget"]["reads"] += 1
+                return {"status": "pending_review", "requested_field_coverage": {"supported_fields": []}}
+            clock = time.monotonic()
+            with (patch.object(loader, "_IngestionExactCellLookup", return_value=exact_lookup),
+                  patch.object(loader, "_exact_column_applicable", return_value=True)):
+                handler = loader._build_source_start_semantic_handler(revision, mail_tool=False)
+                with (patch.object(loader, "_execute_source_start_table", side_effect=exact) as native,
+                      patch.object(revision.source_records, "scan_authorized_observations", wraps=revision.source_records.scan_authorized_observations) as scan,
+                      patch.object(loader.time, "monotonic", return_value=clock)):
+                    result = handler(arguments)
+            self.assertEqual(native.call_count, 1)
+            self.assertEqual(scan.call_count, 1)
+            self.assertIn(sha256_json(child.to_dict()), result["citations"])
+            self.assertEqual(result["attachment_literal_policy"]["softened_required_terms"], ["planned shipping date"])
+            self.assertTrue(result["query_agent"]["exact_first"]["all_requested_fields_missing"])
+            self.assertEqual(scan.call_args.kwargs["max_observations"], 8191)
+            self.assertLessEqual(scan.call_args.kwargs["deadline_monotonic"], budgets[0]["deadline"])
+
+    def test_attachment_descriptive_phrase_changes_bounded_selection_without_new_reads(self):
+        weak = "Clienta ZX-742 release date 2036-02-03." + " quartz" * 1150
+        strong = "Clienta ZX-742 release date 2036-02-03. planned shipping detail." + " quartz" * 1150
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, revision, handler, arguments, _, _ = self.attachment_source(
+                Path(directory), body_text="Cover note.", attachment_text=weak + "\n\n" + strong)
+            weak_child = next(item for item in fixture.observations if item.text == weak)
+            strong_child = next(item for item in fixture.observations if item.text == strong)
+            arguments["required_terms"] = ["zx-742", "clienta"]
+            scan_source = revision.source_records.scan_authorized_observations
+            def scan(**kwargs):
+                return scan_source(**{**kwargs, "context_anchor_callback": lambda *_: False})
+            for descriptive, fields in ((False, ["release date"]), (True, ["release date"])):
+                with self.subTest(descriptive=descriptive, fields=fields):
+                    arguments["required_terms"] = ["zx-742", "clienta"]
+                    arguments["request_contract"]["requested_fields"] = fields
+                    if descriptive:
+                        arguments["required_terms"].append("planned shipping detail")
+                    arguments["query_text"] = "Find " + " ".join(arguments["required_terms"]) + " release date"
+                    arguments["request_contract"]["original_query_hash"] = sha256_json(arguments["query_text"])
+                    trace = _SourcePhaseTrace({})
+                    with (patch.object(revision.source_records, "scan_authorized_observations", side_effect=scan) as scans,
+                          patch.object(loader.time, "monotonic", return_value=time.monotonic()),
+                          _source_phase_trace_scope(trace)):
+                        result = handler(arguments)
+                    self.assertEqual(scans.call_count, 1)
+                    target = strong_child if descriptive else weak_child
+                    self.assertIn(sha256_json(target.to_dict()), result["citations"])
+                    self.assertEqual(len(result["evidence"]), 2)
+                    events = json.loads(trace.snapshot())["details"]
+                    self.assertTrue(any(event.get("name") == "admitted" and event.get("observation_hash") == sha256_json(weak_child.to_dict())
+                                        for event in events))
+
+    def test_descriptive_softening_does_not_change_plain_mail_or_document_gates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = _source_start_preparation_fixture(
+                Path(directory), families=("mail", "document_text"),
+                mail_text="Clienta ZX-742 release date 2036-02-03.",
+                document_text="Clienta ZX-742 release date 2036-02-03.")
+            revision = load_issue56_ingestion_revision(fixture.directory, expected_revision_sha256=fixture.preparation_sha256)
+            handler = loader._build_source_start_semantic_handler(revision, mail_tool=False)
+            arguments = {"query_text": "Find Clienta ZX-742 planned shipping date", "required_terms": ["zx-742", "planned shipping date"],
+                         "requester_user_id": loader.APPROVER_ACTOR, "workspace_id": loader.WORKSPACE_ID,
+                         "session_id": "synthetic-strict-description", "request_contract": {
+                             "original_query_hash": sha256_json("Find Clienta ZX-742 planned shipping date"),
+                             "query_class": "evidence_lookup", "source_family_scope": ["mail", "document_text"],
+                             "requested_fields": ["release date"], "maximum_claim_strength": "cited_evidence"}}
+            with patch.object(loader.time, "monotonic", return_value=time.monotonic()):
+                result = handler(arguments)
+            self.assertEqual(result["citations"], [])
+            self.assertNotIn("attachment_literal_policy", result)
+
     @staticmethod
     def attachment_source(root, *, oversized=False, dated=False, body_text=None, attachment_text=None):
         # Fill the synthetic extractor's inventory identity before ingestion

@@ -11652,7 +11652,7 @@ def compact_evidence_for_model(
         return finish({**compact, "presentation_truncated": True})
 
     for key in (
-        "mail_import_session_id", "query_agent", "answer", "source_structure_statuses",
+        "attachment_literal_policy", "mail_import_session_id", "query_agent", "answer", "source_structure_statuses",
         "requested_field_coverage",
     ):
         if key in result:
