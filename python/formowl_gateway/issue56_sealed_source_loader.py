@@ -1676,7 +1676,8 @@ def _presentation_replaceable_indices(items, incoming, fields):
 
 
 def _admit_source_model_envelope(payload, *, staged_items, limit, deadline, deferred_items=(),
-                                 selection_hits=None, overflow_hashes=(), outer_dates=None):
+                                 selection_hits=None, overflow_hashes=(), outer_dates=None,
+                                 presentation_request=None):
     """Re-admit cached validated units against the unchanged complete presentation."""
     trace = _SOURCE_PHASE_TRACE.get()
     envelope_cell = _trace(trace, "phase", "envelope", before=len(payload.get("evidence_snippets", payload.get("evidence", ()))))
@@ -1695,9 +1696,17 @@ def _admit_source_model_envelope(payload, *, staged_items, limit, deadline, defe
                     or any(metadata.get(key) not in (None, "") for key in ("failure_reason", "reason_code"))
                     or metadata.get("stop_reason") == "provider_error"):
                 return observed(payload)
+    contract = payload.get("query_agent", {}).get("request_contract", {})
+    if contract.get("query_class") == "exact_set_or_inventory" and presentation_request is not None:
+        from formowl_mail.human_uat_orchestrator import _bounded_exact_downgrade_bound
+
+        # Only the server-owned request can bind the weaker executed ceiling.
+        # Keep the original contract in the result for authority/disclosure.
+        if _bounded_exact_downgrade_bound(presentation_request, payload):
+            contract = payload["execution_downgrade"]["executed_request_contract"]
     if (payload.get("deterministic_exact") or payload.get("exact_result") is not None
             or "exact_inventory" in payload
-            or payload.get("query_agent", {}).get("request_contract", {}).get("query_class") == "exact_set_or_inventory"
+            or contract.get("query_class") == "exact_set_or_inventory"
             or time.monotonic() >= deadline):
         return observed(payload)
     from formowl_mail.human_uat_orchestrator import compact_evidence_for_model, evidence_citation_ids
@@ -2676,7 +2685,7 @@ def _build_source_start_semantic_handler(
         if len(required_terms) == 1 and len(query_identifiers) > 1:
             native_required_terms = tuple(sorted(set(query_identifiers)))
         from formowl_mail.human_uat_orchestrator import (
-            _BOUNDED_EXACT_DOWNGRADE_DISCLOSURE, validated_field_query_hints,
+            _BOUNDED_EXACT_DOWNGRADE_DISCLOSURE, UatEvidenceToolRequest, validated_field_query_hints,
         )
 
         field_query_hints = validated_field_query_hints(
@@ -4544,6 +4553,13 @@ def _build_source_start_semantic_handler(
             limit=max(0, limit - source_budget["evidence"]), deadline=presentation_deadline,
                 selection_hits=selection_hits, overflow_hashes=overflow_hashes,
                 outer_dates=outer_dates,
+            presentation_request=(UatEvidenceToolRequest(
+                query_text=query_text, request_contract=request_contract,
+                required_terms=tuple(raw_terms) if raw_terms is not None else None, table_query=table_query,
+                exact_inventory_kind=arguments.get("exact_inventory_kind"),
+                exact_field=arguments.get("exact_field"), cursor=arguments.get("cursor"),
+                required_term_placement=placement,
+            ) if execution_downgrade is not None else None),
         )
         return _finalize_mail_date_presentation(payload, date_metadata) if date_priority else payload
 

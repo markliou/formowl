@@ -23,6 +23,94 @@ import test_issue56_uat_handler_composition as source_fixture
 
 
 class BoundedCandidateSelectionTests(unittest.TestCase):
+    def test_exact_downgrade_presents_cached_overflow_without_rewriting_original_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            weak = "Clienta 甲社專案 ZX-742 pending."
+            target_text = "Clienta 甲社專案 ZX-742 State approved."
+            fixture, revision, handler = self.exact_attachment_source(
+                Path(directory), body_text=weak + "\n\n" + target_text,
+                attachment_text="Code,State\nClienta,pending\n")
+            arguments = self.exact_attachment_arguments()
+            arguments["page_size"] = 2
+            arguments["required_terms"] = [" ZX-742 ", "ClIeNtA"]
+            original = deepcopy(arguments)
+            target = next(item for item in fixture.observations if item.text == target_text)
+            target_hash = sha256_json(target.to_dict())
+            weak_hash = sha256_json(next(item for item in fixture.observations if item.text == weak).to_dict())
+            captures, seen = [], []
+            original_scan = revision.source_records.scan_authorized_observations
+            original_envelope = loader._admit_source_model_envelope
+
+            def scan(**kwargs):
+                callback = kwargs["observation_callback"]
+                def observe(item, scope):
+                    seen.append(item.observation_id)
+                    return callback(item, scope)
+                # Fix only fictional source order; hydration and authority
+                # checks still run through the real sealed reader.
+                return original_scan(**{**kwargs, "preferred_observation_hashes": (weak_hash,), "observation_callback": observe,
+                                        "context_anchor_callback": lambda *_: False})
+
+            def envelope(payload, **kwargs):
+                captures.append(deepcopy((payload, kwargs)))
+                return original_envelope(payload, **kwargs)
+
+            with (patch.object(revision.source_records, "scan_authorized_observations", side_effect=scan) as scans,
+                  patch.object(loader, "_admit_source_model_envelope", side_effect=envelope),
+                  patch.object(loader.time, "monotonic", return_value=time.monotonic())):
+                result = handler(arguments)
+            before, presentation = captures[-1]
+            self.assertNotIn(target_hash, evidence_citation_ids(before))
+            self.assertNotIn(target_hash, {item["citation_hash"] for item in presentation["staged_items"]})
+            self.assertIn(target_hash, {item["citation_hash"] for item in presentation["deferred_items"]})
+            self.assertIn(target_hash, presentation["overflow_hashes"])
+            self.assertEqual(scans.call_count, 1)
+            self.assertEqual(seen.count(target.observation_id), 1)
+            self.assertIn(target_hash, evidence_citation_ids(result))
+            self.assertEqual(arguments, original)
+            self.assertEqual(result["query_agent"]["request_contract"], original["request_contract"])
+            self.assertEqual(result["execution_downgrade"], before["execution_downgrade"])
+            request = orchestrator.UatEvidenceToolRequest(
+                query_text=arguments["query_text"], required_terms=tuple(arguments["required_terms"]),
+                request_contract=arguments["request_contract"])
+            self.assertTrue(orchestrator._bounded_exact_downgrade_bound(request, result))
+            body = next(item for item in result["evidence"] if item["citation_hash"] == target_hash)
+            self.assertEqual(body["snippet"], target_text)
+            header = next(item for item in result["evidence"] if item["citation_hash"] == body["mail_header_citation_hash"])
+            self.assertEqual(header["message_occurrence_id"], body["message_occurrence_id"])
+            self.assertEqual(header["source_context"]["anchor_citation_hash"], target_hash)
+            self.assertTrue(body["occurrence_lineage_fingerprint"])
+            self.assertEqual(result["coverage"]["status"], "incomplete")
+            self.assertFalse(result["coverage"]["absence_claim"])
+            self.assertFalse(result["deterministic_exact"])
+            self.assertIsNone(result["exact_result"])
+            self.assertNotIn("exact_inventory", result)
+            self.assertLessEqual(len(result["evidence"]), arguments["page_size"])
+            display = compact_evidence_for_model(result)
+            self.assertIn(target_hash, evidence_citation_ids(display))
+            self.assertEqual(display["execution_downgrade"], result["execution_downgrade"])
+            self.assertEqual(set(evidence_citation_ids(display)), set(evidence_citation_ids(result)))
+            self.assertLessEqual(len(json.dumps(display, ensure_ascii=False, separators=(",", ":")).encode()), 16384)
+            self.assertLessEqual(result["query_agent"]["context_bundle"]["source_recovery"]["scan"]["scanned_observation_count"], 8192)
+            decision = {"coverage_status": "incomplete", "coverage_note": "Bounded synthetic evidence."}
+            disclosed = orchestrator._disclose_bounded_exact_downgrade(decision, ((request, result),))
+            self.assertTrue(disclosed["coverage_note"].startswith(orchestrator._BOUNDED_EXACT_DOWNGRADE_DISCLOSURE))
+
+            # Reuse the actual guarded units and request. Payload claims alone
+            # cannot authorize a weaker presentation contract.
+            for exclusion in ("ordinary_exact", "unbound", "widened"):
+                with self.subTest(exclusion=exclusion):
+                    payload, kwargs = deepcopy((before, presentation))
+                    if exclusion == "ordinary_exact":
+                        payload.pop("execution_downgrade")
+                    elif exclusion == "unbound":
+                        kwargs.pop("presentation_request", None)
+                    else:
+                        payload["execution_downgrade"]["executed_request_contract"]["source_family_scope"].append("document_text")
+                    unchanged = deepcopy(payload)
+                    kwargs["deadline"] = time.monotonic() + 2
+                    self.assertEqual(original_envelope(payload, **kwargs), unchanged)
+
     def test_exact_attachment_request_retrieves_bounded_citations_without_rewriting_intent(self):
         with tempfile.TemporaryDirectory() as directory:
             fixture, revision, handler = self.exact_attachment_source(Path(directory))
@@ -131,13 +219,13 @@ class BoundedCandidateSelectionTests(unittest.TestCase):
                     "source_family_scope": ["attachment_table", "mail"], "requested_fields": ["State"],
                     "maximum_claim_strength": "complete_authorized_scope"}}
 
-    def exact_attachment_source(self, root):
+    def exact_attachment_source(self, root, *, body_text=None, attachment_text=None):
         # The native reader requires the same revision-bound parent helpers as
         # its existing table fixtures. Build only this ephemeral fictional index.
         from scripts.issue56_source_native_lookup import build_lookup
         fixture, _, _, _, _, _ = self.attachment_source(
-            root, body_text="Cover note.", attachment_mime="text/csv",
-            attachment_text="Code,State\nZX-742,Clienta approved\n")
+            root, body_text=body_text or "Cover note.", attachment_mime="text/csv",
+            attachment_text=attachment_text or "Code,State\nZX-742,Clienta approved\n")
         lookup = root / "lookup"
         build_lookup(directory=fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
                      output_directory=lookup)
