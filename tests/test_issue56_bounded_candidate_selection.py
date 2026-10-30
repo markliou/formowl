@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import replace
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import time
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from unittest.mock import patch
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError, sha256_json
 from formowl_gateway import issue56_sealed_source_loader as loader
+from formowl_mail import human_uat_orchestrator as orchestrator
 from formowl_mail.human_uat_orchestrator import compact_evidence_for_model, evidence_citation_ids
 from formowl_mail.issue56_sealed_source import load_issue56_ingestion_revision
 from formowl_retrieval.gateway import _SourcePhaseTrace, _source_phase_trace_scope
@@ -21,6 +23,129 @@ import test_issue56_uat_handler_composition as source_fixture
 
 
 class BoundedCandidateSelectionTests(unittest.TestCase):
+    def test_exact_attachment_request_retrieves_bounded_citations_without_rewriting_intent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, revision, handler = self.exact_attachment_source(Path(directory))
+            arguments = self.exact_attachment_arguments()
+            arguments["required_terms"] = [" ZX-742 ", "ClIeNtA"]
+            original = deepcopy(arguments)
+            clock = time.monotonic()
+            double_check = loader.source_evidence_double_check
+            with (patch.object(loader, "_execute_source_start_table", side_effect=AssertionError("no exact reentry")),
+                  patch.object(loader, "_exact_column_applicable", return_value=True),
+                  patch.object(loader, "source_evidence_double_check", wraps=double_check) as checked,
+                  patch.object(loader.time, "monotonic", return_value=clock)):
+                result = handler(arguments)
+            self.assertTrue(evidence_citation_ids(result))
+            row = next(item for item in fixture.observations if item.observation_type == "table_row"
+                       and "ZX-742" in json.dumps(item.to_dict()))
+            self.assertIn(sha256_json(row.to_dict()), evidence_citation_ids(result))
+            self.assertEqual(arguments, original)
+            self.assertEqual(result["query_agent"]["request_contract"], original["request_contract"])
+            downgrade = result["execution_downgrade"]
+            self.assertEqual(downgrade["executed_request_contract"], {
+                **original["request_contract"], "query_class": "evidence_lookup", "maximum_claim_strength": "cited_evidence"})
+            self.assertEqual(downgrade["request_contract_fingerprint"], sha256_json(original["request_contract"]))
+            request = orchestrator.UatEvidenceToolRequest(
+                query_text=arguments["query_text"], required_terms=tuple(arguments["required_terms"]),
+                request_contract=arguments["request_contract"], page_size=arguments["page_size"])
+            self.assertTrue(orchestrator._bounded_exact_downgrade_bound(request, result))
+            altered = deepcopy(result)
+            altered["execution_downgrade"]["executed_request_contract"]["source_family_scope"].append("document_text")
+            self.assertFalse(orchestrator._bounded_exact_downgrade_bound(request, altered))
+            self.assertEqual(result["status"], "partial")
+            self.assertFalse(result["deterministic_exact"])
+            self.assertIsNone(result["exact_result"])
+            self.assertNotIn("exact_inventory", result)
+            self.assertEqual(result["coverage"]["status"], "incomplete")
+            call = checked.call_args.kwargs
+            self.assertEqual(call["query_class"], "evidence_lookup")
+            self.assertFalse(call["sealed_coverage_complete"])
+            self.assertLessEqual(call["deadline_monotonic"] - clock, 2)
+            self.assertEqual(call["time_budget_ms"], loader.SOURCE_START_EVIDENCE_TIME_BUDGET_MS)
+            self.assertEqual(loader.SOURCE_EVIDENCE_TIME_BUDGET_MS, 500)
+            display = compact_evidence_for_model(result)
+            self.assertEqual(display["execution_downgrade"], downgrade)
+            self.assertEqual(set(evidence_citation_ids(display)), set(evidence_citation_ids(result)))
+            self.assertLessEqual(len(json.dumps(display, ensure_ascii=False, separators=(",", ":")).encode()), 16384)
+            self.assertLessEqual(len(result["evidence"]), arguments["page_size"])
+            self.assertLessEqual(result["query_agent"]["context_bundle"]["source_recovery"]["scan"]["scanned_observation_count"], 8192)
+            for item in result["evidence"]:
+                self.assertTrue(item["occurrence_lineage_fingerprint"])
+
+    def test_exact_attachment_downgrade_miss_never_certifies_a_complete_negative(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, revision, handler = self.exact_attachment_source(Path(directory))
+            # Even an independently complete fixture cannot turn this lookup into an inventory.
+            revision = replace(revision, safe_binding={**revision.safe_binding,
+                "extraction_coverage": {"source_completeness_certified": True}, "bounded_canary_candidate_count": 0})
+            handler = loader._build_source_start_semantic_handler(revision, mail_tool=False)
+            arguments = self.exact_attachment_arguments()
+            arguments["query_text"] = "List all Clienta ZX-743 states"
+            arguments["required_terms"] = ["zx-743"]
+            arguments["request_contract"]["original_query_hash"] = sha256_json(arguments["query_text"])
+            with patch.object(loader.time, "monotonic", return_value=time.monotonic()):
+                result = handler(arguments)
+            self.assertEqual(result["status"], "pending_review")
+            self.assertFalse(evidence_citation_ids(result))
+            self.assertIn("execution_downgrade", result)
+            self.assertNotIn("complete_no_match", json.dumps(result))
+            recovery = result["query_agent"]["context_bundle"]["source_recovery"]
+            self.assertFalse(recovery["joint_candidate_count_complete"])
+            self.assertNotEqual(recovery["lookup"]["status"], "not_found")
+            self.assertFalse(result["coverage"]["absence_claim"])
+
+    def test_exact_attachment_downgrade_keeps_explicit_table_and_missing_eligibility_exclusions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, revision, handler = self.exact_attachment_source(Path(directory))
+            handler = loader._build_source_start_semantic_handler(revision, mail_tool=False)
+            for exclusion in ("cursor", "exact_inventory_kind", "exact_field"):
+                with self.subTest(exclusion=exclusion):
+                    arguments = self.exact_attachment_arguments()
+                    arguments[exclusion] = "synthetic-exact"
+                    with patch.object(loader, "source_evidence_double_check", side_effect=AssertionError("excluded lookup")):
+                        result = handler(arguments)
+                    self.assertEqual(result["status"], "pending_review")
+                    self.assertNotIn("execution_downgrade", result)
+            arguments = self.exact_attachment_arguments()
+            arguments["request_contract"]["requested_fields"] = []
+            with patch.object(loader.time, "monotonic", return_value=time.monotonic()):
+                result = handler(arguments)
+            self.assertTrue(evidence_citation_ids(result))
+            self.assertEqual(result["execution_downgrade"]["executed_request_contract"]["requested_fields"], [])
+            arguments = self.exact_attachment_arguments()
+            arguments["table_query"] = {"synthetic": "explicit native plan"}
+            expected = {"status": "synthetic-native-owner"}
+            with patch.object(loader, "_execute_source_start_table", return_value=expected) as native:
+                self.assertEqual(handler(arguments), expected)
+            self.assertEqual(native.call_count, 1)
+            self.assertEqual(native.call_args.kwargs["request_contract"], arguments["request_contract"])
+
+    @staticmethod
+    def exact_attachment_arguments():
+        query = "List all Clienta ZX-742 states"
+        return {"query_text": query, "required_terms": ["zx-742"], "page_size": 4,
+                "requester_user_id": loader.APPROVER_ACTOR, "workspace_id": loader.WORKSPACE_ID,
+                "session_id": "synthetic-exact-downgrade", "request_contract": {
+                    "original_query_hash": sha256_json(query), "query_class": "exact_set_or_inventory",
+                    "source_family_scope": ["attachment_table", "mail"], "requested_fields": ["State"],
+                    "maximum_claim_strength": "complete_authorized_scope"}}
+
+    def exact_attachment_source(self, root):
+        # The native reader requires the same revision-bound parent helpers as
+        # its existing table fixtures. Build only this ephemeral fictional index.
+        from scripts.issue56_source_native_lookup import build_lookup
+        fixture, _, _, _, _, _ = self.attachment_source(
+            root, body_text="Cover note.", attachment_mime="text/csv",
+            attachment_text="Code,State\nZX-742,Clienta approved\n")
+        lookup = root / "lookup"
+        build_lookup(directory=fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
+                     output_directory=lookup)
+        for name in ("source-lookup-manifest.json", "source-lookup.sqlite"):
+            shutil.copyfile(lookup / name, fixture.directory / name)
+        revision = load_issue56_ingestion_revision(fixture.directory, expected_revision_sha256=fixture.preparation_sha256)
+        return fixture, revision, loader._build_source_start_semantic_handler(revision, mail_tool=False)
+
     def test_attachment_numeric_multiword_phrase_stays_soft_without_weakening_separate_identifiers(self):
         phrase = "clienta rb3 gen2 frame"
         with tempfile.TemporaryDirectory() as directory:
@@ -280,7 +405,7 @@ class BoundedCandidateSelectionTests(unittest.TestCase):
             self.assertNotIn("attachment_literal_policy", result)
 
     @staticmethod
-    def attachment_source(root, *, oversized=False, dated=False, body_text=None, attachment_text=None):
+    def attachment_source(root, *, oversized=False, dated=False, body_text=None, attachment_text=None, attachment_mime="text/plain"):
         # Fill the synthetic extractor's inventory identity before ingestion
         # writes/seals it. The text parser and source guards remain real.
         run = source_fixture.run_ingestion_job
@@ -318,7 +443,7 @@ class BoundedCandidateSelectionTests(unittest.TestCase):
               patch.object(source_fixture.json, "dumps", side_effect=archive)):
             fixture = _source_start_preparation_fixture(
                 root, families=("mail",), mail_text=body_text or "Clienta request is pending.",
-                attachment_content=(text.encode(), "text/plain"),
+                attachment_content=(text.encode(), attachment_mime),
             )
         revision = load_issue56_ingestion_revision(fixture.directory, expected_revision_sha256=fixture.preparation_sha256)
         handler = loader._build_source_start_semantic_handler(revision, mail_tool=False)
@@ -328,7 +453,7 @@ class BoundedCandidateSelectionTests(unittest.TestCase):
                          "original_query_hash": sha256_json("Find Clienta release date"),
                          "query_class": "evidence_lookup", "source_family_scope": ["mail"],
                          "requested_fields": ["release date"], "maximum_claim_strength": "cited_evidence"}}
-        child = next(item for item in fixture.observations if item.observation_type == "paragraph")
+        child = next(item for item in fixture.observations if item.observation_type in {"paragraph", "table_row"})
         parent = next(item for item in fixture.observations if item.observation_type == "email_attachment_occurrence")
         return fixture, revision, handler, arguments, child, parent
 

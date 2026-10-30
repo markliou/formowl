@@ -5318,8 +5318,26 @@ class ProjectionIndependentSourceMcpTests(unittest.IsolatedAsyncioTestCase):
                 **arguments["request_contract"], "query_class": "exact_set_or_inventory",
                 "maximum_claim_strength": "complete_authorized_scope",
             }})
-            self.assertEqual(exact["status"], "pending_review")
-            self.assertFalse(exact["citations"])
+            self.assertEqual(exact["status"], "partial")
+            self.assertTrue(exact["citations"])
+            self.assertEqual(exact["citations"], [item["citation_hash"] for item in exact["evidence"]])
+            validate_public_gateway_payload(exact)
+            original_contract = {
+                **arguments["request_contract"], "query_class": "exact_set_or_inventory",
+                "maximum_claim_strength": "complete_authorized_scope",
+            }
+            self.assertEqual(exact["query_agent"]["request_contract"], original_contract)
+            downgrade = exact["execution_downgrade"]
+            self.assertEqual(downgrade["request_contract_fingerprint"], sha256_json(original_contract))
+            self.assertEqual(downgrade["executed_request_contract"], {
+                **original_contract, "query_class": "evidence_lookup", "maximum_claim_strength": "cited_evidence",
+            })
+            self.assertEqual(downgrade["disclosure"], "無法做完整清單／確定性計算，以下為引用證據")
+            self.assertEqual(exact["coverage"]["status"], "incomplete")
+            self.assertFalse(exact["coverage"]["absence_claim"])
+            self.assertFalse(exact["deterministic_exact"])
+            self.assertIsNone(exact["exact_result"])
+            self.assertNotIn("exact_inventory", exact)
 
     def test_attachment_shard_and_native_cell_tampering_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

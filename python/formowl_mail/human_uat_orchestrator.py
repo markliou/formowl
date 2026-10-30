@@ -361,6 +361,10 @@ When calling FormOwl:
 - if the bounded answer or citation budget cannot support every requested row
   and field, return an explicitly scoped partial answer with incomplete
   coverage; never mark a silently reduced answer complete;
+- when execution_downgrade records an executed_request_contract, retain the
+  original request but obey that lower claim ceiling: cited evidence only,
+  never a complete list, deterministic calculation, or definitive absence.
+  Include its disclosure and keep coverage incomplete;
 - make at most three tool calls in one turn, including the initial call;
 - for deterministic structured execution, use only authorized, non-redacted,
   source_provided exact field labels;
@@ -3876,6 +3880,7 @@ class CodexAppServerConversationModel:
                         decision,
                         evidence_results=evidence_results,
                     )
+                    decision = _disclose_bounded_exact_downgrade(decision, evidence_records)
                 except _CodexAppServerContractFailure:
                     self._discard_thread(safety_identifier, thread.thread_id)
                     raise
@@ -7494,6 +7499,7 @@ class CodexResponsesConversationModel:
                         prior_evidence=presented_prior_evidence,
                         required_prior_citations=required_prior_citations,
                     )
+                    parsed_decision = _disclose_bounded_exact_downgrade(parsed_decision, evidence_records)
                     if (
                         supplied_transform_identity_tokens
                         and parsed_decision.get("response_kind") == "answer"
@@ -7877,6 +7883,12 @@ class CodexResponsesConversationModel:
                                     presented_evidence_results.append(presented_result)
                                     comparison_progress = request_contract_binder.record_comparison_result(request, result)
                                     comparison_pending = request_contract_binder.comparison_pending
+                                    if _bounded_exact_downgrade_bound(request, result) and not comparison_pending:
+                                        # The original intent remains exact, but this tool
+                                        # executed only bounded evidence. Finalize with no
+                                        # further tools under the reduced claim ceiling.
+                                        formowl_halted = True
+                                        force_final = True
                                     if (not comparison_pending
                                             and _exact_capability_terminal(evidence_records, authorized_capability_summary)):
                                         return _safe_stop_outcome(
@@ -10459,6 +10471,55 @@ def _source_evidence_fallback_text(
     )
 
 
+_BOUNDED_EXACT_DOWNGRADE_DISCLOSURE = "無法做完整清單／確定性計算，以下為引用證據"
+
+
+def _bounded_exact_downgrade_bound(
+    request: UatEvidenceToolRequest, result: Mapping[str, Any],
+) -> bool:
+    """Recognize only the trusted executed ceiling bound to the original intent."""
+    contract = request.request_contract
+    metadata = result.get("execution_downgrade")
+    if (not isinstance(contract, Mapping) or not isinstance(metadata, Mapping)
+            or contract.get("query_class") != "exact_set_or_inventory"
+            or "attachment_table" not in contract.get("source_family_scope", ())
+            or "native_locator" in contract
+            or any(getattr(request, key) is not None for key in (
+                "table_query", "exact_inventory_kind", "exact_field", "cursor", "required_term_placement"))
+            or result.get("status") not in {"partial", "pending_review", "incomplete"}
+            or result.get("deterministic_exact") is not False
+            or result.get("exact_result") is not None or "exact_inventory" in result
+            or not _exact_capability_result_bindings_clean(((request, result),))):
+        return False
+    terms = tuple(sorted(unicodedata.normalize("NFKC", term.strip()).casefold()
+                         for term in request.required_terms or ()))
+    return metadata == {
+        "reason": "exact_table_plan_unavailable", "query_hash": sha256_json(request.query_text),
+        "request_contract_fingerprint": sha256_json(contract),
+        "required_terms_fingerprint": sha256_json(terms),
+        "executed_request_contract": {**contract, "query_class": "evidence_lookup",
+                                      "maximum_claim_strength": "cited_evidence"},
+        "disclosure": _BOUNDED_EXACT_DOWNGRADE_DISCLOSURE,
+    }
+
+
+def _disclose_bounded_exact_downgrade(
+    decision: Mapping[str, Any],
+    evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    """Add the visible limitation only after normal citation/coverage validation."""
+    downgraded = [(request, result) for request, result in evidence_records
+                  if "execution_downgrade" in result]
+    if not downgraded:
+        return dict(decision)
+    if (decision["coverage_status"] != "incomplete"
+            or not all(_bounded_exact_downgrade_bound(request, result) for request, result in downgraded)):
+        raise RuntimeError("Codex source-backed answer hid incomplete coverage")
+    note = decision["coverage_note"]
+    return {**decision, "coverage_note": (note if note.startswith(_BOUNDED_EXACT_DOWNGRADE_DISCLOSURE)
+        else _BOUNDED_EXACT_DOWNGRADE_DISCLOSURE + "。 " + note)}
+
+
 def _exact_inventory_capability_limited(
     evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
     capabilities: Mapping[str, Any] | None,
@@ -10658,6 +10719,8 @@ def _safe_stop_outcome(
             "已嘗試在本次授權範圍內重新查核來源，但查核因時間限制或涵蓋不足而未完成；"
             "目前結果待確認，無法安全回答。這不代表資料不存在。"
         )
+    if any(_bounded_exact_downgrade_bound(request, result) for request, result in evidence_records):
+        message = _BOUNDED_EXACT_DOWNGRADE_DISCLOSURE + "。 " + message
     retained_citation_ids = tuple(
         dict.fromkeys(
             citation_id
@@ -11638,14 +11701,14 @@ def compact_evidence_for_model(
 
     compact = {
         key: result[key]
-        for key in ("status", "query_hash", "coverage")
+        for key in ("status", "query_hash", "coverage", "execution_downgrade")
         if key in result
     }
     base_fits = fits(compact, "base_byte_budget")
     counts["base_bytes"] = last_bytes
     if not base_fits:
         compact = {}
-        for key in ("status", "query_hash", "coverage"):
+        for key in ("status", "query_hash", "coverage", "execution_downgrade"):
             candidate = {**compact, key: result[key]} if key in result else compact
             if fits(candidate):
                 compact = candidate

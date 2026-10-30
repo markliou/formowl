@@ -4,6 +4,7 @@ import hashlib
 import copy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import tempfile
 import threading
 import unittest
 import unicodedata
@@ -54,6 +55,83 @@ class Issue56ProviderFinalizationTests(unittest.TestCase):
     def setUp(self):
         from test_issue56_codex_provider_bridge import _use_short_citation_fixtures
         _use_short_citation_fixtures(self)
+
+    def test_exact_downgrade_disclosure_reaches_both_visible_provider_outcomes(self):
+        for provider_kind in ("responses", "app_server"):
+            for complete in (False, True):
+                with self.subTest(provider=provider_kind, complete=complete):
+                    outcome, projected, requests = self._exact_downgrade_turn(provider_kind, complete=complete)
+                    self.assertEqual(outcome.coverage_status, "incomplete")
+                    self.assertIn("無法做完整清單／確定性計算，以下為引用證據", outcome.coverage_note)
+                    self.assertIn("無法做完整清單／確定性計算，以下為引用證據", projected["clarification"])
+                    self.assertEqual(projected["citations"], ["sha256:" + "a" * 64])
+                    if complete:
+                        self.assertEqual(outcome.response_kind, "clarification")
+                        self.assertNotEqual(outcome.answer_text, "Clienta ZX-742 is approved.")
+                    else:
+                        self.assertEqual(outcome.response_kind, "answer")
+                        self.assertIn("Clienta ZX-742 is approved.", outcome.answer_text)
+                    if provider_kind == "responses":
+                        self.assertEqual(len(requests), 3 if complete else 2)
+                        self.assertEqual(requests[1]["tool_choice"], "none")
+                        wire = next(item["output"] for item in requests[1]["input"] if item.get("type") == "function_call_output")
+                        self.assertEqual(json.loads(wire)["data"]["execution_downgrade"]["executed_request_contract"]["maximum_claim_strength"], "cited_evidence")
+                        self.assertIn("無法做完整清單／確定性計算，以下為引用證據", wire)
+
+    def _exact_downgrade_turn(self, provider_kind, *, complete):
+        from test_issue56_codex_provider_bridge import _RecordingTransport
+        user_text = "請列出附件表格中 Clienta ZX-742 的所有 State"
+        _, descriptor, arguments, capabilities = self._field_plan(
+            family="attachment_table", user_text=user_text, field="State", terms=("zx-742",))
+        arguments["query_text"] = "Enumerate source records mentioning Clienta ZX-742."
+        citation = "sha256:" + "a" * 64
+        disclosure = "無法做完整清單／確定性計算，以下為引用證據"
+        results = []
+        def evidence_tool(request):
+            original = request.request_contract
+            result = {
+                "status": "partial", "query_hash": orchestrator.sha256_json(request.query_text),
+                "coverage": {"status": "incomplete", "absence_claim": False},
+                "deterministic_exact": False, "exact_result": None,
+                "evidence": [{"citation_hash": citation, "snippet": "Clienta ZX-742 State: approved."}],
+                "citations": [citation], "query_agent": {"request_contract": original},
+                "execution_downgrade": {
+                    "reason": "exact_table_plan_unavailable",
+                    "query_hash": orchestrator.sha256_json(request.query_text),
+                    "request_contract_fingerprint": orchestrator.sha256_json(original),
+                    "required_terms_fingerprint": orchestrator.sha256_json(request.required_terms),
+                    "executed_request_contract": {**original, "query_class": "evidence_lookup", "maximum_claim_strength": "cited_evidence"},
+                    "disclosure": disclosure,
+                },
+            }
+            results.append(result)
+            return result
+        draft = {**json.loads(_decision(citation=citation)), "answer_text": "Clienta ZX-742 is approved."}
+        if complete:
+            draft.update(coverage_status="complete", coverage_note="")
+        requests = []
+        with tempfile.TemporaryDirectory() as workspace:
+            if provider_kind == "app_server":
+                transport = _RecordingTransport(calls=[arguments], final_message=json.dumps(draft))
+                provider = orchestrator.CodexAppServerConversationModel(transport, workspace_dir=workspace)
+                outcome = provider.respond(history=(), user_text=user_text, latest_evidence=None,
+                    safety_identifier="synthetic-clienta-downgrade", evidence_tool=evidence_tool,
+                    formowl_tool_descriptor=descriptor, authorized_capability_summary=capabilities)
+            else:
+                provider = CodexResponsesConversationModel(base_url="https://provider.example.test/v1", api_key="synthetic")
+                def response(payload):
+                    requests.append(copy.deepcopy(payload))
+                    if len(requests) == 1:
+                        return {"status": "completed", "output": [{"type": "function_call", "call_id": "clienta",
+                            "name": "query_effective_graph_view", "arguments": json.dumps(arguments)}]}
+                    return {"status": "completed", "output_text": json.dumps(draft)}
+                with mock.patch.object(provider, "_request_response", side_effect=response):
+                    outcome = provider.respond(history=(), user_text=user_text, latest_evidence=None,
+                        safety_identifier="synthetic-clienta-downgrade", evidence_tool=evidence_tool,
+                        formowl_tool_descriptor=descriptor, authorized_capability_summary=capabilities)
+        self.assertEqual(len(results), 1, repr(outcome))
+        self.assertEqual(results[0]["query_agent"]["request_contract"], outcome.tool_request.request_contract)
+        return outcome, _browser_projection(outcome, tuple(results), latest_evidence=None), requests
 
     @staticmethod
     def _split_recovery(request, *, variant=None):

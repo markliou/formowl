@@ -2675,7 +2675,9 @@ def _build_source_start_semantic_handler(
         )
         if len(required_terms) == 1 and len(query_identifiers) > 1:
             native_required_terms = tuple(sorted(set(query_identifiers)))
-        from formowl_mail.human_uat_orchestrator import validated_field_query_hints
+        from formowl_mail.human_uat_orchestrator import (
+            _BOUNDED_EXACT_DOWNGRADE_DISCLOSURE, validated_field_query_hints,
+        )
 
         field_query_hints = validated_field_query_hints(
             {**arguments, "request_contract": request_contract, "required_terms": required_terms},
@@ -2702,6 +2704,28 @@ def _build_source_start_semantic_handler(
             if term in unicodedata.normalize("NFKC", query_text).casefold()
             and (term.isdecimal() or tokenizer.analyze(term).protected_identifiers)
         )
+        # Preserve the frozen user intent. This trusted primary execution is
+        # weaker than an inventory, not an automatic ALL-fields recheck grant.
+        # Explicit native/exact bindings retain their original owner/exclusions.
+        execution_downgrade = None
+        if (query_class == "exact_set_or_inventory" and table_query is None
+                and "attachment_table" in request_contract["source_family_scope"]
+                and native_locator is None and placement is None
+                and all(arguments.get(key) is None for key in (
+                    "cursor", "exact_inventory_kind", "exact_field"))):
+            executed_contract = validate_semantic_request_contract({
+                **request_contract, "query_class": "evidence_lookup",
+                "maximum_claim_strength": "cited_evidence",
+            }, available_source_families=available_families)
+            execution_downgrade = {
+                "reason": "exact_table_plan_unavailable",
+                "query_hash": sha256_json(query_text),
+                "request_contract_fingerprint": sha256_json(request_contract),
+                "required_terms_fingerprint": sha256_json(required_terms),
+                "executed_request_contract": executed_contract,
+                "disclosure": _BOUNDED_EXACT_DOWNGRADE_DISCLOSURE,
+            }
+            query_class = executed_contract["query_class"]
         if query_class == "exact_set_or_inventory" and table_query is None and (
             request_contract["source_family_scope"] != ["mail"]
             or len(set(identifier_terms)) != 1
@@ -2725,7 +2749,7 @@ def _build_source_start_semantic_handler(
             "reads": 0, "evidence": 0, "context_bytes": 0,
         }
         from formowl_mail.issue56_sealed_source import _MAIL_DATE_PRIORITY, MailDatePriorityBinding, _mail_message_date_value
-        date_binding = _MAIL_DATE_PRIORITY.get()
+        date_binding = _MAIL_DATE_PRIORITY.get() if execution_downgrade is None else None
         date_metadata = {}
         date_priority = False
         if date_binding is not None:
@@ -2755,7 +2779,8 @@ def _build_source_start_semantic_handler(
             and ("mail" if item["inline_table"] else "attachment_table") in request_contract["source_family_scope"]
         }
         auto_exact = (
-            native_locator is None and placement is None and query_class == "evidence_lookup" and bool(requested_fields) and len(identifier_terms) == 1
+            execution_downgrade is None
+            and native_locator is None and placement is None and query_class == "evidence_lookup" and bool(requested_fields) and len(identifier_terms) == 1
             and any(normalize_source_occurrence_structured_surface(field) in applicable_fields for field in requested_fields)
         )
         attachment_hard_terms = required_terms
@@ -4165,7 +4190,7 @@ def _build_source_start_semantic_handler(
             ),
             verified_evidence_count=0,
             evidence_limit=max(0, limit - source_budget["evidence"]),
-            sealed_coverage_complete=coverage_complete,
+            sealed_coverage_complete=coverage_complete and execution_downgrade is None,
             read_source=read_source,
             project_observation=project,
             begin=begin,
@@ -4174,6 +4199,13 @@ def _build_source_start_semantic_handler(
             deadline_monotonic=source_budget["deadline"],
             time_budget_ms=500 if date_priority else SOURCE_START_EVIDENCE_TIME_BUDGET_MS,
         )
+        if execution_downgrade is not None:
+            # Preserve physical scan diagnostics; a finished bounded reader
+            # still cannot establish complete inventory or a negative.
+            double_check = replace(
+                double_check, status="partial" if double_check.evidence else "pending_review",
+                warnings=tuple(sorted(set((*double_check.warnings, "incomplete", "exact_lookup_downgraded")))),
+            )
         full_read_metadata = None
         full_read_skip = None
         provenance = _SOURCE_DOCUMENT_FULL_READ_REQUEST.get()
@@ -4342,6 +4374,10 @@ def _build_source_start_semantic_handler(
         if date_priority:
             recovery["mode"] = "mail_date_priority"
             recovery["mail_date_priority"] = dict(date_metadata)
+        if execution_downgrade is not None:
+            recovery.update(joint_candidate_count_complete=False, joint_candidate_count_state="unknown")
+            if not evidence:
+                recovery["lookup"]["status"] = "incomplete"
         recovery.pop("recovery_fingerprint", None)
         recovery["recovery_fingerprint"] = sha256_json(recovery)
         replan_required = recovery["replan_required"]
@@ -4469,6 +4505,8 @@ def _build_source_start_semantic_handler(
         payload = {
             "status": status,
             **attachment_policy,
+            **({"execution_downgrade": execution_downgrade,
+                "query_hash": sha256_json(query_text)} if execution_downgrade is not None else {}),
             **({"presentation_truncated": True} if header_groups_truncated else {}),
             "answer": {
                 "status": status,
@@ -4493,6 +4531,7 @@ def _build_source_start_semantic_handler(
                 "scope": "declared_completed_ingestion_jobs",
                 "reason": "retrieval_projection_unavailable",
                 **(dict(coverage) if isinstance(coverage, Mapping) else {}),
+                **({"status": "incomplete", "absence_claim": False} if execution_downgrade is not None else {}),
             },
         }
         if full_read_metadata is not None:
