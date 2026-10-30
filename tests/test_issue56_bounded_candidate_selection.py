@@ -889,6 +889,126 @@ class BoundedCandidateSelectionTests(unittest.TestCase):
                 else:
                     self.assertEqual(result, payload)
 
+    def mixed_selection(self, staged, incoming, hits, *, limit, **options):
+        payload = self.payload(staged)
+        payload.update(options.pop("payload_changes", {}))
+        original = deepcopy((payload, staged, incoming, hits))
+        result = loader._admit_source_model_envelope(
+            payload, staged_items=staged, deferred_items=[incoming], limit=limit,
+            deadline=options.pop("deadline", time.monotonic() + 2), selection_hits=hits,
+            overflow_hashes=options.pop("overflow_hashes", {incoming["citation_hash"]}), **options,
+        )
+        self.assertEqual((payload, staged, incoming, hits), original)
+        displayed = compact_evidence_for_model(result)
+        self.assertEqual(set(evidence_citation_ids(result)), set(evidence_citation_ids(displayed)))
+        self.assertLessEqual(len(json.dumps(displayed, ensure_ascii=False, separators=(",", ":")).encode()), 16384)
+        self.assertLessEqual(len(result["evidence"]), limit)
+        self.assertEqual(result["requested_field_coverage"]["supported_fields"], [])
+        self.assertEqual(result["requested_field_coverage"]["missing_fields"], ["Origin", "Window"])
+        return result, payload
+
+    def test_mixed_native_rows_allow_strictly_better_ordinary_slot_without_native_scoring(self):
+        rows = [self.row("fixed-a", "Northland", "2035-04-09"),
+                self.row("fixed-b", "Southland", "2035-05-12")]
+        weak = self.mail("weak", "Clienta source.", message="weak")
+        sibling = self.mail("sibling", "Clienta context.", message="sibling")
+        neighbor = {"citation_hash": sha256_json("neighbor"), "snippet": "Adjacent source context.",
+                    "occurrence_lineage_fingerprint": sha256_json("neighbor-lineage"),
+                    "source_context": {"relationship": "same_source_neighbor",
+                                       "anchor_citation_hash": sibling["citation_hash"]}}
+        for shared_header in (False, True):
+            with self.subTest(shared_header=shared_header):
+                incoming = self.mail("better", "Clienta origin and window.", message="better")
+                if shared_header:
+                    incoming.update({key: sibling[key] for key in (
+                        "email_message_id", "message_occurrence_id", "source_scope_fingerprint")})
+                    incoming["_mail_parent_header"] = deepcopy(sibling["_mail_parent_header"])
+                    incoming["_mail_parent_header"]["source_context"]["anchor_citation_hash"] = incoming["citation_hash"]
+                staged = [rows[0], weak, rows[1], sibling, neighbor]
+                hits = {weak["citation_hash"]: {(0, "source")},
+                        sibling["citation_hash"]: {(-1, "clienta"), (-2, "context")},
+                        incoming["citation_hash"]: {(0, "origin"), (1, "window")}}
+                result, _ = self.mixed_selection(staged, incoming, hits, limit=7)
+                expected = self.payload([rows[0], incoming, rows[1], sibling, neighbor])["evidence"]
+                self.assertEqual(result["evidence"], expected)
+                self.assertTrue(result["presentation_truncated"])
+                self.assertEqual([entry for entry in result["evidence"] if "table_row" in entry], rows)
+                for row in rows:
+                    self.assertTrue(set(evidence_citation_ids(row)).issubset(evidence_citation_ids(result)))
+                self.assertEqual(result["coverage"]["status"], "incomplete")
+
+    def test_mixed_ordinary_replacement_cannot_reduce_packet_coverage_or_use_recency_ties(self):
+        row = self.row("fixed", "Northland", "2035-04-09")
+        weak = self.mail("weak", "Clienta source.", message="weak")
+        retained = self.mail("retained", "Clienta context.", message="retained")
+        incoming = self.mail("incoming", "Clienta origin window.", message="incoming")
+        for variant in ("redundant", "tie", "unknown_incoming", "unknown_victim"):
+            with self.subTest(variant=variant):
+                hits = {weak["citation_hash"]: {(0, "source")},
+                        retained["citation_hash"]: {(0, "origin"), (0, "window")},
+                        incoming["citation_hash"]: {(0, "origin"), (0, "window")}}
+                if variant == "tie":
+                    hits[incoming["citation_hash"]] = hits[weak["citation_hash"]]
+                if variant == "unknown_incoming":
+                    del hits[incoming["citation_hash"]]
+                if variant == "unknown_victim":
+                    del hits[weak["citation_hash"]]
+                dates = {loader._presentation_unit_identity(incoming): "2040-01-01T00:00:00+00:00"}
+                result, payload = self.mixed_selection([row, weak, retained], incoming, hits, limit=5,
+                                                       outer_dates=dates)
+                self.assertEqual(result, payload)
+
+    def test_mixed_ordinary_slot_trials_do_not_accumulate_failed_evictions(self):
+        row = self.row("fixed", "Northland", "2035-04-09")
+        small = self.mail("small", "Clienta " + "a" * 1000, message="small")
+        large = self.mail("large", "Clienta " + "b" * 6500, message="large")
+        incoming = self.mail("incoming", "Clienta origin window " + "c" * 10000, message="incoming")
+        hits = {entry["citation_hash"]: {(0, "clienta")} for entry in (small, large)}
+        hits[incoming["citation_hash"]] = {(0, "origin"), (1, "window")}
+        result, _ = self.mixed_selection([row, small, large], incoming, hits, limit=5)
+        self.assertEqual(result["evidence"], self.payload([row, small, incoming])["evidence"])
+        self.assertIn(small["citation_hash"], result["citations"])
+        self.assertNotIn(large["citation_hash"], result["citations"])
+
+    def test_mixed_ordinary_replacement_preserves_dependency_closure_and_exclusions(self):
+        row = self.row("fixed", "Northland", "2035-04-09")
+        weak = self.mail("weak", "Clienta source.", message="weak")
+        incoming = self.mail("incoming", "Clienta origin window.", message="incoming")
+        hits = {weak["citation_hash"]: set(), incoming["citation_hash"]: {(0, "origin"), (1, "window")}}
+        for variant in ("neighbor", "shared_header_cap", "reordered_native", "oversized", "expired", "exact",
+                        "deterministic", "exact_result", "error", "no_overflow"):
+            with self.subTest(variant=variant):
+                staged, candidate, options = [row, weak], deepcopy(incoming), {}
+                if variant == "neighbor":
+                    staged.append({"citation_hash": sha256_json("neighbor"), "snippet": "Adjacent source context.",
+                                   "occurrence_lineage_fingerprint": sha256_json("neighbor-lineage"),
+                                   "source_context": {"relationship": "same_source_neighbor",
+                                                      "anchor_citation_hash": weak["citation_hash"]}})
+                if variant == "shared_header_cap":
+                    sibling = deepcopy(weak)
+                    sibling["citation_hash"] = sha256_json("sibling")
+                    sibling["snippet"] = "Shared occurrence context."
+                    sibling["_mail_parent_header"]["source_context"]["anchor_citation_hash"] = sibling["citation_hash"]
+                    staged.append(sibling)
+                if variant == "reordered_native":
+                    other = self.row("other", "Southland", "2035-05-12")
+                    staged.append(other)
+                    options["payload_changes"] = {"evidence": self.payload([other, weak, row])["evidence"]}
+                if variant == "oversized":
+                    candidate["snippet"] += "x" * 17000
+                if variant == "expired":
+                    options["deadline"] = time.monotonic() - 1
+                if variant == "exact":
+                    options["payload_changes"] = {"query_agent": {"request_contract": {"query_class": "exact_set_or_inventory"}}}
+                if variant in {"deterministic", "exact_result", "error"}:
+                    options["payload_changes"] = ({"deterministic_exact": True} if variant == "deterministic" else
+                                                  {"exact_result": {}} if variant == "exact_result" else {"status": "error"})
+                if variant == "no_overflow":
+                    options["overflow_hashes"] = ()
+                limit = len(self.payload(staged)["evidence"])
+                result, payload = self.mixed_selection(staged, candidate, hits, limit=limit, **options)
+                self.assertEqual(result, payload)
+
     @staticmethod
     def mail(name, text, *, message="quoted-message", order="REQ-104"):
         body_hash, header_hash = (sha256_json(name + suffix) for suffix in ("-body", "-header"))

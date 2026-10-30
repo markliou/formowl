@@ -1895,7 +1895,35 @@ def _admit_source_model_envelope(payload, *, staged_items, limit, deadline, defe
             original, original_truncated = _bounded_mail_header_groups(units, limit=limit)
             if (not original_truncated and Counter(json.dumps(entry, sort_keys=True) for entry in original)
                     == Counter(json.dumps(entry, sort_keys=True) for entry in content)):
-                for index in _presentation_replaceable_indices(units, item, fields):
+                if (not reselect and fields and selection_hits
+                        and (byte_loss or item["citation_hash"] in overflow)
+                        and item["citation_hash"] in selection_hits and _ordinary_presentation_unit(item)
+                        and any(not _ordinary_presentation_unit(unit) for unit in units)):
+                    old_hits = set().union(*(selection_hits.get(entry["citation_hash"], set())
+                                             for entry in content if _ordinary_presentation_unit(entry)))
+                    fixed_hashes = {entry["citation_hash"] for unit in units
+                                    if not _ordinary_presentation_unit(unit)
+                                    for entry in (unit, unit.get("_mail_parent_header", unit))}
+                    fixed = [entry for entry in content if entry["citation_hash"] in fixed_hashes]
+                    for index, unit in enumerate(units):
+                        if time.monotonic() >= deadline:
+                            break
+                        if (not _ordinary_presentation_unit(unit) or unit["citation_hash"] not in selection_hits
+                                or _soft_unit_utility(selection_hits[item["citation_hash"]])
+                                <= _soft_unit_utility(selection_hits[unit["citation_hash"]])):
+                            continue
+                        trial_units = list(units)
+                        trial_units[index] = item
+                        records, truncated = _bounded_mail_header_groups(trial_units, limit=limit)
+                        if truncated or [entry for entry in records if entry["citation_hash"] in fixed_hashes] != fixed:
+                            continue
+                        hits = set().union(*(selection_hits.get(entry["citation_hash"], set())
+                                             for entry in records if _ordinary_presentation_unit(entry)))
+                        candidate = compose(records)
+                        accepted = _soft_unit_utility(hits) > _soft_unit_utility(old_hits) and fits(candidate)
+                        if accepted:
+                            break
+                for index in () if accepted else _presentation_replaceable_indices(units, item, fields):
                     if time.monotonic() >= deadline:
                         break
                     units.pop(index)
