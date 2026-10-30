@@ -2271,6 +2271,14 @@ class CodexAppServerTurn:
     tool_invocations: tuple[CodexDynamicToolInvocation, ...]
 
 
+@dataclass(frozen=True)
+class _CodexCompletedTools:
+    thread_id: str
+    turn_id: str
+    tool_invocations: tuple[CodexDynamicToolInvocation, ...]
+    deadline_monotonic: float
+
+
 class _CodexAppServerProviderFailure(RuntimeError):
     def __init__(
         self,
@@ -2278,9 +2286,11 @@ class _CodexAppServerProviderFailure(RuntimeError):
         message: str,
         *,
         provider_diagnostic: Mapping[str, Any] | None = None,
+        completed_tools: _CodexCompletedTools | None = None,
     ) -> None:
         super().__init__(message)
         self.reason = reason
+        self.completed_tools = completed_tools
         self.provider_diagnostic = (
             dict(provider_diagnostic) if provider_diagnostic is not None else None
         )
@@ -2353,6 +2363,8 @@ class CodexAppServerTransport(Protocol):
         reasoning_effort: str,
         client_metadata: Mapping[str, str],
         tool_handler: Callable[[str, Mapping[str, Any]], Mapping[str, Any]],
+        tools_allowed: bool = True,
+        deadline_monotonic: float | None = None,
     ) -> CodexAppServerTurn: ...
 
     def inject_split_refinement(self, thread_id: str) -> None: ...
@@ -2380,6 +2392,10 @@ class _ActiveTurn:
     completed_items: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     tool_invocations: list[CodexDynamicToolInvocation] = field(default_factory=list)
     call_ids: set[str] = field(default_factory=set)
+    completed_call_ids: set[str] = field(default_factory=set)
+    tools_allowed: bool = True
+    closed: bool = False
+    retry_eligible: bool = True
     tool_error: str | None = None
     tool_error_kind: str | None = None
     tool_error_diagnostic: dict[str, str] | None = None
@@ -2824,18 +2840,46 @@ class CodexAppServerStdioTransport:
         reasoning_effort: str,
         client_metadata: Mapping[str, str],
         tool_handler: Callable[[str, Mapping[str, Any]], Mapping[str, Any]],
+        tools_allowed: bool = True,
+        deadline_monotonic: float | None = None,
     ) -> CodexAppServerTurn:
         if not isinstance(thread_id, str) or not thread_id:
             raise ContractValidationError("Codex thread id is invalid")
+        deadline = time.monotonic() + self._timeout_seconds
+        if deadline_monotonic is not None:
+            if type(deadline_monotonic) not in (int, float) or not math.isfinite(deadline_monotonic):
+                raise ContractValidationError("Codex turn deadline is invalid")
+            deadline = min(deadline, deadline_monotonic)
         with self._state_lock:
             turn_lock = self._thread_locks.setdefault(thread_id, threading.Lock())
         with turn_lock:
-            context = _ActiveTurn(thread_id=thread_id, tool_handler=tool_handler)
+            context = _ActiveTurn(thread_id=thread_id, tool_handler=tool_handler, tools_allowed=tools_allowed)
             with self._state_lock:
                 if thread_id in self._active_turns:
                     raise RuntimeError("Codex thread already has an active turn")
                 self._active_turns[thread_id] = context
             turn_id: str | None = None
+
+            def terminal_failure(error: Any) -> _CodexAppServerProviderFailure:
+                # Completion means the original tool result was actually sent,
+                # not merely that a source callback returned some evidence.
+                with context.lock:
+                    context.closed = True
+                    invocations = tuple(context.tool_invocations)
+                    complete = (
+                        context.tools_allowed and context.retry_eligible and turn_id is not None
+                        and context.tool_error is None and bool(context.call_ids)
+                        and context.call_ids == context.completed_call_ids
+                        == {invocation.call_id for invocation in invocations}
+                        and len(invocations) == len(context.call_ids)
+                    )
+                return _CodexAppServerProviderFailure(
+                    "provider_incomplete", "Codex app-server turn failed",
+                    provider_diagnostic=_codex_app_server_error_diagnostic(error),
+                    completed_tools=(_CodexCompletedTools(thread_id, turn_id, invocations, deadline)
+                                     if complete else None),
+                )
+
             try:
                 params: dict[str, Any] = {
                     "threadId": thread_id,
@@ -2852,7 +2896,11 @@ class CodexAppServerStdioTransport:
                         "networkAccess": False,
                     },
                 }
-                result = self._request("turn/start", params)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise _CodexAppServerProviderFailure("provider_timeout", "Codex turn deadline expired")
+                result = (self._request("turn/start", params) if deadline_monotonic is None
+                          else self._request("turn/start", params, timeout_seconds=remaining))
                 turn = result.get("turn")
                 if (
                     not isinstance(turn, Mapping)
@@ -2864,7 +2912,7 @@ class CodexAppServerStdioTransport:
                 with context.lock:
                     context.turn_id = turn_id
                 context.turn_ready.set()
-                if not context.event.wait(self._timeout_seconds):
+                if not context.event.wait(max(0.0, deadline - time.monotonic())):
                     self._interrupt_turn(thread_id, turn_id)
                     raise _CodexAppServerProviderFailure(
                         "provider_timeout",
@@ -2893,13 +2941,7 @@ class CodexAppServerStdioTransport:
                             "provider_incomplete",
                             "Codex app-server error turn mismatch",
                         )
-                    raise _CodexAppServerProviderFailure(
-                        "provider_incomplete",
-                        "Codex app-server turn failed",
-                        provider_diagnostic=_codex_app_server_error_diagnostic(
-                            error_event.get("error"),
-                        ),
-                    )
+                    raise terminal_failure(error_event.get("error"))
                 completion = context.completion
                 if not isinstance(completion, Mapping):
                     raise _CodexAppServerProviderFailure(
@@ -2918,13 +2960,7 @@ class CodexAppServerStdioTransport:
                         "Codex app-server completion turn mismatch",
                     )
                 if completed_turn.get("status") != "completed" or completed_turn.get("error"):
-                    raise _CodexAppServerProviderFailure(
-                        "provider_incomplete",
-                        "Codex app-server turn failed",
-                        provider_diagnostic=_codex_app_server_error_diagnostic(
-                            completed_turn.get("error"),
-                        ),
-                    )
+                    raise terminal_failure(completed_turn.get("error"))
                 with context.lock:
                     completed_items = tuple(
                         item
@@ -2948,6 +2984,8 @@ class CodexAppServerStdioTransport:
                     tool_invocations=tuple(context.tool_invocations),
                 )
             finally:
+                with context.lock:
+                    context.closed = True
                 context.turn_ready.set()
                 with self._state_lock:
                     self._active_turns.pop(thread_id, None)
@@ -3256,6 +3294,13 @@ class CodexAppServerStdioTransport:
             or not tool_name
             or not isinstance(arguments, Mapping)
         ):
+            # A recognizable rejected callback must not certify that only final
+            # answering remains. Keep the existing rejection/normal-turn policy.
+            with self._state_lock:
+                rejected_context = self._active_turns.get(thread_id) if isinstance(thread_id, str) else None
+            if rejected_context is not None:
+                with rejected_context.lock:
+                    rejected_context.retry_eligible = False
             self._send_tool_result(request_id, success=False, payload={"error": "rejected"})
             return
         with self._state_lock:
@@ -3273,7 +3318,14 @@ class CodexAppServerStdioTransport:
             self._send_tool_result(request_id, success=False, payload={"error": "rejected"})
             return
         with context.lock:
-            if context.turn_id != turn_id:
+            if context.closed or not context.tools_allowed:
+                context.tool_error = "Codex tool dispatch is closed"
+                context.tool_error_kind = "contract"
+                context.tool_error_diagnostic = _app_server_tool_failure_diagnostic(
+                    RuntimeError("dispatch closed"), reason_code="tool_handler_failure",
+                )
+                protocol_error = True
+            elif context.turn_id != turn_id:
                 context.tool_error = "Codex dynamic tool request does not match active turn"
                 context.tool_error_kind = "contract"
                 context.tool_error_diagnostic = _app_server_tool_failure_diagnostic(
@@ -3308,6 +3360,8 @@ class CodexAppServerStdioTransport:
             with context.lock:
                 context.tool_invocations.append(invocation)
             self._send_tool_result(request_id, success=True, payload=result)
+            with context.lock:
+                context.completed_call_ids.add(call_id)
         except Exception as exc:
             with context.lock:
                 context.tool_error = "Codex FormOwl tool call failed"
@@ -3469,6 +3523,7 @@ class CodexAppServerConversationModel:
         for message in history[-_MAX_HISTORY_MESSAGES:]:
             if not isinstance(message, UatConversationMessage):
                 raise ContractValidationError("UAT conversation history is invalid")
+        turn_deadline = time.monotonic() + _MAX_UAT_TURN_SECONDS - _UAT_TURN_RETURN_MARGIN_SECONDS
         formowl_tool = _validated_formowl_tool_descriptor(formowl_tool_descriptor)
         formowl_tool_name = formowl_tool["name"]
         if authorized_capability_summary is not None and not isinstance(
@@ -3520,6 +3575,7 @@ class CodexAppServerConversationModel:
                 mcp_citation_stages: list[dict[str, Any]] = []
                 finalization_validation: list[dict[str, Any]] = []
                 split_guidance_injection: dict[str, Any] = {}
+                finalization_retry: dict[str, Any] = {}
 
                 def attach_citation_diagnostics(
                     diagnostic: Mapping[str, Any] | None = None,
@@ -3531,6 +3587,8 @@ class CodexAppServerConversationModel:
                         merged["finalization_validation"] = list(finalization_validation)
                     if split_guidance_injection:
                         merged["split_guidance_injection"] = dict(split_guidance_injection)
+                    if finalization_retry:
+                        merged["finalization_retry"] = dict(finalization_retry)
                     return merged or None
 
                 def rejected_tool_result(
@@ -3760,19 +3818,85 @@ class CodexAppServerConversationModel:
                             separators=(",", ":"),
                         ),
                     }
+                completed_tool_turn: _CodexCompletedTools | None = None
+
+                def deny_retry_tool(_name: str, _arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+                    raise _CodexAppServerContractFailure("Codex finalization cannot dispatch tools")
+
                 try:
-                    turn = self._transport.run_turn(
-                        thread_id=thread.thread_id,
-                        user_text=user_text,
-                        additional_context=additional_context,
-                        output_schema=_DECISION_SCHEMA,
-                        reasoning_effort=self._reasoning_effort,
-                        client_metadata={
-                            "surface": "formowl_uat",
-                            "safety_identifier": safety_identifier,
-                        },
-                        tool_handler=handle_tool,
-                    )
+                    try:
+                        turn = self._transport.run_turn(
+                            thread_id=thread.thread_id,
+                            user_text=user_text,
+                            additional_context=additional_context,
+                            output_schema=_DECISION_SCHEMA,
+                            reasoning_effort=self._reasoning_effort,
+                            client_metadata={
+                                "surface": "formowl_uat",
+                                "safety_identifier": safety_identifier,
+                            },
+                            tool_handler=handle_tool,
+                        )
+                    except _CodexAppServerProviderFailure as original:
+                        receipt = original.completed_tools
+                        with self._lock:
+                            current_thread = self._threads.get(safety_identifier) is thread
+                        if not (
+                            (original.provider_diagnostic or {}).get("codex_error_kind") == "serverOverloaded"
+                            and original.reason == "provider_incomplete"
+                            and isinstance(receipt, _CodexCompletedTools)
+                            and receipt.thread_id == thread.thread_id and receipt.turn_id
+                            and current_thread
+                            and time.monotonic() < min(turn_deadline, receipt.deadline_monotonic)
+                            and not tool_budget_exhausted and not rejected_tool_attempt_count
+                            and not presentation_failed and not request_contract_binder.comparison_pending
+                            and not request_contract_binder._split_refinement_armed
+                            and len(receipt.tool_invocations) == len(evidence_records) == tool_attempt_count > 0
+                            and len(presented_evidence_by_record) == len(evidence_records)
+                            and all(
+                                invocation.thread_id == receipt.thread_id
+                                and invocation.turn_id == receipt.turn_id
+                                and invocation.tool_name == formowl_tool_name
+                                and invocation.result.get("trust") == "untrusted_evidence"
+                                for invocation in receipt.tool_invocations
+                            )
+                            and all(
+                                evidence_citation_ids(result)
+                                and result.get("status") not in {"error", "failed", "permission_denied", "rejected", "unavailable"}
+                                and not result.get("isError") and not result.get("error")
+                                and not _evidence_requires_replan(result)
+                                for _, result in evidence_records
+                            )
+                        ):
+                            raise
+                        completed_tool_turn = receipt
+                        finalization_retry.update(
+                            status="started", reason_code="serverOverloaded", attempt_count=1,
+                            original_tool_count=len(receipt.tool_invocations), retry_tool_count=0,
+                            thread_sha256=sha256_json(receipt.thread_id),
+                            original_turn_sha256=sha256_json(receipt.turn_id),
+                        )
+                        retry_context = {**additional_context, "formowl_finalization": {
+                            "kind": "application", "value": (
+                                "All accepted FormOwl tools have completed. Finish only the final answer using "
+                                "the already presented evidence and citation handles. Do not call any tools. "
+                                "Preserve all existing citation, coverage and public-output rules."
+                            ),
+                        }}
+                        try:
+                            turn = self._transport.run_turn(
+                                thread_id=thread.thread_id,
+                                user_text="Finish the pending final answer without calling tools.",
+                                additional_context=retry_context, output_schema=_DECISION_SCHEMA,
+                                reasoning_effort=self._reasoning_effort,
+                                client_metadata={"surface": "formowl_uat", "safety_identifier": safety_identifier},
+                                tool_handler=deny_retry_tool, tools_allowed=False,
+                                deadline_monotonic=min(turn_deadline, receipt.deadline_monotonic),
+                            )
+                        except Exception:
+                            finalization_retry["status"] = "failed"
+                            raise
+                        finalization_retry.update(status="completed", retry_turn_sha256=sha256_json(turn.turn_id))
                 except _CodexAppServerProviderFailure as exc:
                     self._discard_thread(safety_identifier, thread.thread_id)
                     provider_diagnostic = exc.provider_diagnostic
@@ -3804,26 +3928,41 @@ class CodexAppServerConversationModel:
                         evidence_records=evidence_records,
                         provider_diagnostic=attach_citation_diagnostics(),
                     )
-                except (_CodexAppServerContractFailure, ContractValidationError):
+                except (_CodexAppServerContractFailure, ContractValidationError) as exc:
                     self._discard_thread(safety_identifier, thread.thread_id)
+                    if finalization_retry:
+                        prior_diagnostic = getattr(exc, "provider_diagnostic", None)
+                        exc.provider_diagnostic = attach_citation_diagnostics(
+                            prior_diagnostic if isinstance(prior_diagnostic, Mapping) else None,
+                        )
                     raise
-                except Exception:
+                except Exception as exc:
                     self._discard_thread(safety_identifier, thread.thread_id)
+                    if finalization_retry:
+                        prior_diagnostic = getattr(exc, "provider_diagnostic", None)
+                        exc.provider_diagnostic = attach_citation_diagnostics(
+                            prior_diagnostic if isinstance(prior_diagnostic, Mapping) else None,
+                        )
                     raise
                 decision = None
                 finalization_started = False
                 available_citation_ids: tuple[str, ...] = ()
                 try:
+                    execution_turn = completed_tool_turn or turn
+                    if (turn.thread_id != thread.thread_id or not turn.turn_id
+                            or completed_tool_turn is not None and (
+                                turn.turn_id == completed_tool_turn.turn_id or turn.tool_invocations)):
+                        raise _CodexAppServerContractFailure("Codex finalization turn is inconsistent")
                     accepted_invocation_count = sum(
                         invocation.result.get("trust") == "untrusted_evidence"
-                        for invocation in turn.tool_invocations
+                        for invocation in execution_turn.tool_invocations
                         if isinstance(invocation.result, Mapping)
                     )
                     if accepted_invocation_count != len(evidence_records) or any(
-                        invocation.thread_id != turn.thread_id
-                        or invocation.turn_id != turn.turn_id
+                        invocation.thread_id != execution_turn.thread_id
+                        or invocation.turn_id != execution_turn.turn_id
                         or invocation.tool_name != formowl_tool_name
-                        for invocation in turn.tool_invocations
+                        for invocation in execution_turn.tool_invocations
                     ):
                         raise _CodexAppServerContractFailure(
                             "Codex tool execution record is inconsistent"
@@ -3881,8 +4020,11 @@ class CodexAppServerConversationModel:
                         evidence_results=evidence_results,
                     )
                     decision = _disclose_bounded_exact_downgrade(decision, evidence_records)
-                except _CodexAppServerContractFailure:
+                except _CodexAppServerContractFailure as exc:
                     self._discard_thread(safety_identifier, thread.thread_id)
+                    if finalization_retry:
+                        finalization_retry["status"] = "failed"
+                        exc.provider_diagnostic = attach_citation_diagnostics(exc.provider_diagnostic)
                     raise
                 except Exception as exc:
                     self._discard_thread(safety_identifier, thread.thread_id)
@@ -4043,6 +4185,24 @@ _PROVIDER_TRANSPORT_TYPE_NAMES = frozenset(
 def safe_provider_transport_diagnostics(value: Mapping[str, Any]) -> dict[str, Any]:
     """One strict projection shared by the existing HTTP, gateway and trace owners."""
     safe: dict[str, Any] = {}
+    retry = value.get("finalization_retry")
+    if (isinstance(retry, Mapping)
+            and retry.get("status") in {"started", "completed", "failed"}
+            and retry.get("reason_code") == "serverOverloaded"
+            and type(retry.get("attempt_count")) is int and retry["attempt_count"] == 1
+            and type(retry.get("original_tool_count")) is int
+            and 1 <= retry["original_tool_count"] <= _MAX_TOOL_CALLS_PER_TURN
+            and type(retry.get("retry_tool_count")) is int and retry["retry_tool_count"] == 0
+            and all(_safe_diagnostic_fingerprint(retry.get(key)) is not None
+                    for key in ("thread_sha256", "original_turn_sha256"))):
+        projected = {key: retry[key] for key in (
+            "status", "reason_code", "attempt_count", "original_tool_count", "retry_tool_count",
+            "thread_sha256", "original_turn_sha256",
+        )}
+        retry_turn = _safe_diagnostic_fingerprint(retry.get("retry_turn_sha256"))
+        if retry_turn is not None:
+            projected["retry_turn_sha256"] = retry_turn
+        safe["finalization_retry"] = projected
     injection = value.get("split_guidance_injection")
     if isinstance(injection, Mapping):
         status, reason = injection.get("status"), injection.get("reason_code")
@@ -10692,14 +10852,27 @@ def _safe_stop_outcome(
     authorized_capability_summary: Mapping[str, Any] | None = None,
     repair_attempted: bool = False,
 ) -> UatConversationOutcome:
-    message = _source_evidence_fallback_text(
+    source_fallback = _source_evidence_fallback_text(
         reason, evidence_records,
-    ) or _safe_stop_message(
+    )
+    message = source_fallback or _safe_stop_message(
         "incomplete_status" if reason == "provider_incomplete"
         and provider_diagnostic is not None
         and provider_diagnostic.get("reason_code") == "incomplete_status" else reason,
         repair_attempted=repair_attempted,
     )
+    if (reason in {"provider_incomplete", "provider_unavailable"}
+            and (provider_diagnostic or {}).get("codex_error_kind") == "serverOverloaded"):
+        busy_message = "模型服務目前忙碌，請稍後再試"
+        if source_fallback:
+            parse_failure = _safe_stop_message("provider_incomplete")
+            message = (
+                source_fallback.replace(parse_failure, busy_message, 1)
+                if parse_failure in source_fallback
+                else busy_message + "\n" + source_fallback
+            )
+        else:
+            message = busy_message
     # Presentation only: preserve the loop stop reason, budgets and error priority.
     if (reason in {"no_evidence", "no_progress"} and not citation_ids
             and not (provider_diagnostic or {}).get("reason_code")

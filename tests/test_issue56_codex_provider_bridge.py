@@ -7319,6 +7319,219 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class AppServerOverloadFinalizationTests(unittest.TestCase):
+    def _run(self, *, errors=("serverOverloaded", None), calls=True, result=None,
+             bad_citation=False, send_failure=False, expire=False, retire=False, inflight=False, malformed=False,
+             forbidden_retry=False, invalid_retry=False):
+        wire = object.__new__(CodexAppServerStdioTransport)
+        wire._state_lock = threading.RLock()
+        wire._thread_locks = {}
+        wire._active_turns = {}
+        wire._timeout_seconds = 10.0
+        wire._fatal_error = False
+        wire._send = mock.Mock()
+        wire.start_thread = mock.Mock(return_value=CodexAppServerThread("fictional-thread", "fictional-model"))
+        wire.delete_thread = mock.Mock()
+        starts, workers, source_calls, worker_errors = [], [], [], []
+        expired = []
+        inflight_started, release_inflight = threading.Event(), threading.Event()
+        original_monotonic = time.monotonic
+        citation = sha256_json("fictional source authority")
+        supplied = result or {"status": "partial", "citations": [citation],
+                              "evidence": [{"citation_hash": citation, "snippet": "Clienta status: reviewed."}]}
+        def evidence(request):
+            source_calls.append(request)
+            if inflight and len(source_calls) == 2:
+                inflight_started.set()
+                self.assertTrue(release_inflight.wait(2))
+            return supplied
+        provider = CodexAppServerConversationModel(wire, workspace_dir="/tmp", model="fictional-model", reasoning_effort="high")
+        def request(method, params, **kwargs):
+            self.assertEqual(method, "turn/start")
+            starts.append((copy.deepcopy(params), kwargs))
+            index = len(starts) - 1
+            turn_id = f"fictional-turn-{index}"
+            if index == 1 and invalid_retry:
+                return {"turn": {}}
+            context = wire._active_turns["fictional-thread"]
+            def finish():
+                try:
+                    self.assertTrue(context.turn_ready.wait(1))
+                    if index == 0 and calls:
+                        if send_failure:
+                            wire._send.side_effect = [OSError("fictional-private-send"), None]
+                        wire._handle_server_request({"id": "fictional-rpc", "method": "item/tool/call", "params": {
+                            "threadId": "fictional-thread", "turnId": turn_id, "callId": "fictional-call",
+                            "tool": "query_effective_graph_view", "arguments": {"query_text": "clienta lookup"}}})
+                        wire._send.side_effect = None
+                        if malformed:
+                            wire._handle_server_request({"id": "fictional-malformed-rpc", "method": "item/tool/call", "params": {
+                                "threadId": "fictional-thread", "turnId": turn_id, "callId": "fictional-malformed-call",
+                                "tool": "query_effective_graph_view", "arguments": []}})
+                        if inflight:
+                            pending = threading.Thread(target=wire._handle_server_request, args=({
+                                "id": "fictional-pending-rpc", "method": "item/tool/call", "params": {
+                                    "threadId": "fictional-thread", "turnId": turn_id, "callId": "fictional-pending-call",
+                                    "tool": "query_effective_graph_view", "arguments": {"query_text": "clienta lookup"}}},))
+                            workers.append(pending)
+                            pending.start()
+                            self.assertTrue(inflight_started.wait(1))
+                    if expire:
+                        # Move the original deadline into the past without sleeping.
+                        expired.append(True)
+                    if retire:
+                        with provider._lock:
+                            provider._threads.pop("fictional-session", None)
+                    if index == 1 and forbidden_retry:
+                        wire._handle_server_request({"id": "fictional-forbidden-rpc", "method": "item/tool/call", "params": {
+                            "threadId": "fictional-thread", "turnId": turn_id, "callId": "fictional-forbidden-call",
+                            "tool": "query_effective_graph_view", "arguments": {"query_text": "clienta lookup"}}})
+                    kind = errors[index]
+                    if kind:
+                        wire._deliver_turn_error({"threadId": "fictional-thread", "turnId": turn_id,
+                            "error": {"codexErrorInfo": kind, "message": "fictional-private-provider"}})
+                    else:
+                        handle = json.loads(wire._send.call_args_list[0].args[0]["result"]["contentItems"][0]["text"])["data"]["citations"][0]
+                        final = _decision(citations=("Czzzz.99" if bad_citation else handle,),
+                                          coverage_status="incomplete", coverage_note="Bounded evidence.")
+                        wire._deliver_turn_completion({"threadId": "fictional-thread", "turn": {
+                            "id": turn_id, "status": "completed", "items": [{"type": "agentMessage", "text": final}]}})
+                except Exception as exc:
+                    worker_errors.append(exc)
+                    context.event.set()
+            worker = threading.Thread(target=finish)
+            workers.append(worker)
+            worker.start()
+            return {"turn": {"id": turn_id}}
+        wire._request = request
+        outcome = None
+        try:
+            with mock.patch.object(orchestrator.time, "monotonic", side_effect=lambda: original_monotonic() + (1000 if expired else 0)):
+                outcome = provider.respond(history=(), user_text="authorized lookup", latest_evidence=None,
+                    safety_identifier="fictional-session", evidence_tool=evidence)
+        except _CodexAppServerContractFailure as exc:
+            if forbidden_retry:
+                outcome = exc
+            elif not send_failure:
+                raise
+        except RuntimeError as exc:
+            if not invalid_retry:
+                raise
+            outcome = exc
+        finally:
+            release_inflight.set()
+            for worker in workers:
+                worker.join(2)
+        self.assertFalse(worker_errors, repr(worker_errors))
+        return outcome, starts, source_calls, wire, citation
+
+    def test_completed_tools_overload_retries_final_only_with_original_authority(self):
+        outcome, starts, calls, wire, citation = self._run()
+        self.assertEqual(outcome.response_kind, "answer")
+        self.assertEqual(outcome.citation_ids, (citation,))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(wire._send.call_count, 1)
+        for key in ("threadId", "effort", "outputSchema", "personality", "approvalPolicy", "sandboxPolicy"):
+            self.assertEqual(starts[0][0][key], starts[1][0][key])
+        self.assertNotIn("timeout_seconds", starts[0][1])
+        self.assertLessEqual(starts[1][1]["timeout_seconds"], 10.0)
+        retry = outcome.provider_diagnostic["finalization_retry"]
+        self.assertEqual(retry["status"], "completed")
+        self.assertEqual(retry["attempt_count"], 1)
+        self.assertEqual(retry["original_tool_count"], 1)
+        self.assertEqual(retry["retry_tool_count"], 0)
+        self.assertNotEqual(retry["original_turn_sha256"], retry["retry_turn_sha256"])
+        self.assertEqual(outcome.provider_diagnostic["finalization_validation"][-1]["validation_result"], "passed")
+
+    def test_retry_second_failure_keeps_actual_error_and_never_third_attempt(self):
+        for second in ("serverOverloaded", "rateLimitExceeded"):
+            with self.subTest(second=second):
+                outcome, starts, calls, _, _ = self._run(errors=("serverOverloaded", second))
+                self.assertEqual(len(starts), 2)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(outcome.provider_diagnostic["codex_error_kind"], second)
+                self.assertEqual(outcome.provider_diagnostic["finalization_retry"]["status"], "failed")
+                self.assertEqual(outcome.answer_text == "模型服務目前忙碌，請稍後再試", second == "serverOverloaded")
+
+    def test_no_retry_without_completed_eligible_work_or_live_budget_binding(self):
+        cases = [dict(errors=("rateLimitExceeded",)), dict(calls=False), dict(send_failure=True), dict(malformed=True),
+                 dict(expire=True), dict(retire=True),
+                 dict(result={"status": "error", "citations": [sha256_json("fictional error citation")]}),
+                 dict(result={"status": "replan_required", "citations": [sha256_json("fictional replan citation")]})]
+        for case in cases:
+            with self.subTest(case=case):
+                outcome, starts, _, _, _ = self._run(**case)
+                self.assertEqual(len(starts), 1)
+                if case.get("send_failure"):
+                    self.assertIsNone(outcome)
+                else:
+                    self.assertNotIn("finalization_retry", outcome.provider_diagnostic or {})
+
+    def test_retry_final_citation_still_must_resolve_presented_authority(self):
+        outcome, starts, calls, _, citation = self._run(bad_citation=True)
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(outcome.response_kind, "clarification")
+        self.assertEqual(outcome.citation_ids, (citation,))
+        self.assertEqual(outcome.provider_diagnostic["finalization_validation"][-1]["validation_result"], "citation_rejected")
+
+    def test_completed_first_tool_does_not_authorize_retry_while_second_is_inflight(self):
+        outcome, starts, calls, wire, citation = self._run(inflight=True)
+        self.assertEqual(len(starts), 1)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(wire._send.call_count, 2)
+        self.assertEqual(outcome.citation_ids, (citation,))
+        self.assertNotIn("finalization_retry", outcome.provider_diagnostic)
+
+    def test_final_only_transport_rejects_current_delayed_and_duplicate_callbacks(self):
+        for turn_id, call_id in (("retry-turn", "new-call"), ("old-turn", "old-call"), ("retry-turn", "old-call")):
+            with self.subTest(turn_id=turn_id, call_id=call_id):
+                wire = object.__new__(CodexAppServerStdioTransport)
+                wire._state_lock = threading.RLock()
+                wire._timeout_seconds = 1.0
+                wire._send = mock.Mock()
+                handler = mock.Mock(return_value={"trust": "untrusted_evidence"})
+                context = _ActiveTurn(thread_id="fictional-thread", tool_handler=handler)
+                context.tools_allowed = False
+                context.turn_id = "retry-turn"
+                context.turn_ready.set()
+                wire._active_turns = {context.thread_id: context}
+                wire._handle_server_request({"id": 1, "method": "item/tool/call", "params": {
+                    "threadId": context.thread_id, "turnId": turn_id, "callId": call_id,
+                    "tool": "query_effective_graph_view", "arguments": {}}})
+                handler.assert_not_called()
+                self.assertFalse(wire._send.call_args.args[0]["result"]["success"])
+                self.assertEqual(context.tool_invocations, [])
+
+    def test_forbidden_retry_callback_stops_without_source_dispatch(self):
+        failure, starts, calls, wire, _ = self._run(forbidden_retry=True)
+        self.assertIsInstance(failure, _CodexAppServerContractFailure)
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(wire._send.call_args.args[0]["result"]["success"])
+        self.assertEqual(failure.provider_diagnostic["finalization_retry"]["status"], "failed")
+
+    def test_invalid_retry_turn_preserves_exception_class_and_retry_diagnostic(self):
+        failure, starts, calls, _, _ = self._run(invalid_retry=True)
+        self.assertIs(type(failure), RuntimeError)
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(failure.provider_diagnostic["finalization_retry"]["status"], "failed")
+
+    def test_retry_diagnostic_survives_all_projections_without_raw_data(self):
+        from formowl_mail.human_uat_http import _safe_provider_diagnostic as http_project
+        outcome, _, _, _, _ = self._run()
+        diagnostic = {**outcome.provider_diagnostic, "message": "fictional-private-provider"}
+        for project in (orchestrator.safe_provider_transport_diagnostics, runtime_project, http_project):
+            safe = project(diagnostic)
+            self.assertIn("finalization_retry", safe)
+            self.assertEqual(safe["finalization_retry"], diagnostic["finalization_retry"])
+            self.assertNotIn("fictional-private-provider", json.dumps(safe))
+            self.assertNotIn("finalization_retry", project({"finalization_retry": {
+                **diagnostic["finalization_retry"], "status": "fictional-private-provider"}}))
+
+
 class ShortCitationProviderTests(unittest.TestCase):
     def test_app_server_wire_handles_outcome_and_browser_originals(self):
         citation = "sha256:" + "a" * 64

@@ -2977,7 +2977,9 @@ def _browser_projection(
             {
                 "status": "error",
                 "answer": (
-                    "目前模型與帳戶設定不相容，請聯絡管理員檢查模型、帳戶及供應商路由設定。"
+                    "模型服務目前忙碌，請稍後再試"
+                    if safe_diagnostic.get("codex_error_kind") == "serverOverloaded"
+                    else "目前模型與帳戶設定不相容，請聯絡管理員檢查模型、帳戶及供應商路由設定。"
                     "本回合無法提供可驗證的回答。"
                     if safe_diagnostic.get("provider_error_message_class") == "model_account_unsupported"
                     else "模型供應商目前容量不足，本回合未完成回答；這不是來源資料不存在。"

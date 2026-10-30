@@ -56,6 +56,73 @@ class Issue56ProviderFinalizationTests(unittest.TestCase):
         from test_issue56_codex_provider_bridge import _use_short_citation_fixtures
         _use_short_citation_fixtures(self)
 
+    def test_only_exact_overload_changes_failed_finalization_message(self):
+        busy = "模型服務目前忙碌，請稍後再試"
+        parse_failure = "GPT provider 回應未能完成安全解析或結構化驗證；這次最終答案未完成。"
+        source_text = "Fictional preserved source explanation."
+        fallbacks = (
+            (None, busy),
+            ("", busy),
+            (source_text, busy + "\n" + source_text),
+            (source_text + "\n" + parse_failure, source_text + "\n" + busy),
+        )
+        for kind in ("serverOverloaded", "rateLimitExceeded", "httpConnectionFailed", "unknown"):
+            for source_fallback, overload_message in fallbacks:
+                with self.subTest(kind=kind, fallback=source_fallback):
+                    diagnostic = {"reason_code": "provider_incomplete", "codex_error_kind": kind}
+                    with mock.patch.object(orchestrator, "_source_evidence_fallback_text", return_value=source_fallback):
+                        outcome = orchestrator._safe_stop_outcome(reason="provider_incomplete", model_name="fictional",
+                            evidence_records=(), provider_diagnostic=diagnostic)
+                    expected = overload_message if kind == "serverOverloaded" else (
+                        source_fallback or orchestrator._safe_stop_message("provider_incomplete"))
+                    self.assertEqual(outcome.answer_text, expected)
+                    # The existing source table and citations survive; replace only its failure explanation.
+                    citation = "sha256:" + "a" * 64
+                    response = {"status": "partial", "citations": [citation], "query_agent": {
+                        "context_bundle": {"successful_subqueries": [{"evidence": [{
+                            "citation_hash": citation, "snippet": "Fictional verified source text."}]}]}}}
+                    projected = _browser_projection(outcome, (response,), latest_evidence=None)
+                    self.assertIn("Fictional verified source text.", projected["answer"])
+                    self.assertEqual(projected["citations"], [citation])
+                    self.assertTrue(projected["clarification"].startswith(expected + "\n"))
+                    self.assertIn("涵蓋限制：本畫面直接呈現 1 筆本回合可引用資料", projected["clarification"])
+
+    def test_overload_keeps_native_fallback_fields_citations_and_coverage_visible(self):
+        citation = "sha256:" + "b" * 64
+        request = orchestrator.UatEvidenceToolRequest(query_text="Retrieve the fictional Clienta record.")
+        result = {
+            "status": "partial",
+            "citations": [citation],
+            "evidence": [{
+                "citation_hash": citation,
+                "snippet": "Fictional same-row source; native values are in its cells.",
+                "table_row": {"cells": [
+                    {"field": "Ticket", "value": "Clienta-Q17", "citation_hash": citation,
+                     "structure_status": "candidate_only"},
+                    {"field": "State", "value": "reviewed", "citation_hash": citation,
+                     "structure_status": "candidate_only"},
+                ]},
+            }],
+        }
+        records = ((request, result),)
+        outcome = orchestrator._safe_stop_outcome(
+            reason="provider_incomplete", model_name="fictional", evidence_records=records,
+            provider_diagnostic={"reason_code": "provider_incomplete", "codex_error_kind": "serverOverloaded"},
+        )
+        projected = _browser_projection(outcome, (result,), latest_evidence=None)
+        for text in (outcome.answer_text, outcome.coverage_note, projected["clarification"]):
+            self.assertIn("模型服務目前忙碌，請稍後再試", text)
+            self.assertIn("Ticket：Clienta-Q17", text)
+            self.assertIn("State：reviewed", text)
+            self.assertIn("欄位結構待完整驗證", text)
+            self.assertIn("本回合涵蓋仍未完成", text)
+            self.assertIn("未列出的欄位不代表來源不存在", text)
+            self.assertNotIn("GPT provider 回應未能完成安全解析或結構化驗證", text)
+        self.assertEqual(outcome.citation_ids, (citation,))
+        self.assertEqual(projected["citations"], [citation])
+        self.assertEqual(outcome.coverage_status, "incomplete")
+        self.assertEqual(outcome.tool_results, (result,))
+
     def test_exact_downgrade_disclosure_reaches_both_visible_provider_outcomes(self):
         for provider_kind in ("responses", "app_server"):
             for complete in (False, True):
