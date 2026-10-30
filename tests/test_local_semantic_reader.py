@@ -215,6 +215,123 @@ class AtomValidationTests(unittest.TestCase):
         self.assertEqual((span["start"], span["end"]), (12, 13))
         self.assertEqual(result.read_ledger.value["annotation_status"], "annotated")
 
+    def test_distant_same_row_quotes_keep_original_identity_time_and_offsets(self):
+        for separator in ("\n", "\r\n", "\r"):
+            with self.subTest(separator=repr(separator)):
+                text = "Other qty 9 due 2031-04-06" + separator + "Part-Z " + "x" * 180 + " qty 9 due 2031-04-06"
+                record = self.record("9", subject="Part-Z", subject_quote={
+                    "observation_id": "obs_body", "quote": "Part-Z"}, times=[{
+                    "role": "due", "raw": "2031-04-06", "normalized": "2031-04-06",
+                    "precision": "day", "quote": {"observation_id": "obs_body", "quote": "2031-04-06"}}])
+                result = self.read(text, [record])
+                self.assertEqual(result.read_ledger.value["annotation_status"], "annotated")
+                atom = result.candidate_atoms[0]
+                self.assertEqual(atom.status, "pending_review")
+                self.assertEqual(atom.properties["target_identity"]["value_surface"], "Part-Z")
+                self.assertEqual(atom.properties["times"][0]["property"], "交期")
+                spans = [atom.properties["evidence_spans"][0],
+                         atom.properties["times"][0]["evidence_spans"][0]]
+                source = _observation("obs_body", text).to_dict()
+                for span, quote in zip(spans, ("9", "2031-04-06")):
+                    start = text.rindex(quote)
+                    self.assertEqual((span["start"], span["end"], span["occurrence_index"]),
+                                     (start, start + len(quote), 1))
+                    self.assertEqual(text[span["start"]:span["end"]], quote)
+                    self.assertEqual(span["observation_hash"], sha256_json(source))
+                    self.assertEqual(span["native_locator"], source["location"])
+                    self.assertEqual(span["source_extractor_run_id"], source["extractor_run_id"])
+                self.assertNotEqual(result.read_ledger.value["pins"]["validation_policy_id"],
+                                    "atom_subset_exact_anchors_segments_v1")
+
+    def test_same_row_multiple_hits_reject_locally_and_reject_dependent_relation(self):
+        text = "Part-Z qty 9; spare 9\nOther qty 9"
+        bad = self.record("9", subject="Part-Z", subject_quote={
+            "observation_id": "obs_body", "quote": "Part-Z"})
+        result = self.read(text, [self.record("Other qty 9"), bad], relations=[{
+            "source_record": 0, "target_record": 1, "relation_type": "updates",
+            "evidence": [{"observation_id": "obs_body", "quote": "Other qty 9"}], "confidence": 0.9}])
+        self.assertEqual(result.read_ledger.value["validation_status"], "partial")
+        self.assertEqual(result.read_ledger.value["rejected_reasons"],
+                         {"exact_span_mismatch": 1, "dependent_atom_rejected": 1})
+        self.assertEqual(len(result.candidate_atoms), 1)
+        self.assertEqual(result.candidate_relations, [])
+
+    def test_repeated_identity_uses_its_independent_same_row_anchor(self):
+        text = "Other Widget-Blue\nSlot-B " + "x" * 180 + " Widget-Blue"
+        result = self.read(text, [self.record("Slot-B", subject="Widget-Blue", subject_quote={
+            "observation_id": "obs_body", "quote": "Widget-Blue"})])
+        self.assertEqual(result.read_ledger.value["annotation_status"], "annotated")
+        atom = result.candidate_atoms[0]
+        self.assertEqual(atom.properties["assertion"]["target"], "Widget-Blue")
+        target = atom.properties["target_identity"]
+        binding = atom.properties["identity_bindings"][0]
+        self.assertEqual(binding["scope_role"], "primary")
+        for identity in (target, binding):
+            self.assertEqual(identity["value_surface"], "Widget-Blue")
+            span = identity["evidence_spans"][0]
+            self.assertEqual((span["quote"], span["start"], span["end"], span["occurrence_index"]),
+                             ("Widget-Blue", text.rindex("Widget-Blue"), len(text), 1))
+            self.assertEqual(span["observation_hash"], sha256_json(_observation("obs_body", text).to_dict()))
+
+    def test_adjacent_row_and_multiline_anchors_cannot_select_repeated_quotes(self):
+        cases = [("Part-Z\nOther qty 9\nThird qty 9", ["Part-Z"]),
+                 ("Part-Z\nOther qty 9\nThird qty 9", ["Part-Z\nOther"]),
+                 ("Part-Z qty 9\nPart-Q qty 9", ["Part-Z", "Part-Q"]),
+                 ("Part-Z qty 9\nPart-Z qty 9", ["Part-Z"])]
+        for text, anchors in cases:
+            with self.subTest(text=text, anchors=anchors):
+                record = self.record("9")
+                record["evidence"] += [{"observation_id": "obs_body", "quote": q} for q in anchors]
+                value = self.read(text, [record]).read_ledger.value
+                self.assertEqual(value["validation_status"], "rejected_all")
+
+    def test_row_anchors_cannot_cross_observations_scalars_or_atoms(self):
+        for scope in ("observation", "scalar", "atom"):
+            with self.subTest(scope=scope):
+                items = [_observation("obs_body", "First qty 9\nSecond qty 9", {"anchor": "Part-Z qty 9"}),
+                         _observation("obs_other", "Part-Z qty 9")]
+                records = [self.record("9")]
+                if scope == "atom":
+                    records.append(self.record("Part-Z qty 9"))
+                    records[1]["evidence"][0]["observation_id"] = "obs_other"
+                else:
+                    records[0]["evidence"].append({"observation_id": "obs_other" if scope == "observation"
+                                                 else "obs_body", "quote": "Part-Z qty 9"})
+                result = self.read("", records, observations=items)
+                self.assertEqual(result.read_ledger.value["rejected_reasons"], {"exact_span_mismatch": 1})
+                self.assertEqual(len(result.candidate_atoms), 1 if scope == "atom" else 0)
+
+    def test_explicit_occurrence_and_unique_literal_keep_their_existing_selection(self):
+        text = "Part-Z qty 9\nOther qty 9"
+        for quote, occurrence, start in (("9", 1, text.rindex("9")),
+                                          ("Other qty 9", None, text.index("Other"))):
+            with self.subTest(quote=quote):
+                record = self.record(quote, subject="Part-Z", subject_quote={
+                    "observation_id": "obs_body", "quote": "Part-Z"})
+                def mutate(data):
+                    data["atoms"][0]["evidence"][0]["occurrence_index"] = occurrence
+                result = self.read(text, [record], mutate=mutate)
+                span = result.candidate_atoms[0].properties["evidence_spans"][0]
+                self.assertEqual((span["start"], span["end"], span.get("occurrence_index")),
+                                 (start, start + len(quote), occurrence))
+
+    def test_row_recovery_cannot_bypass_source_hash_or_permission_guards(self):
+        real_read = read_and_store_source_unit
+        for binding in ("expected_observation_hashes", "permission_scope_fingerprint"):
+            with self.subTest(binding=binding):
+                reader = mock.Mock()
+                def guarded_read(**kwargs):
+                    kwargs[binding] = ({"obs_body": sha256_json("changed")} if binding ==
+                                       "expected_observation_hashes" else sha256_json("other scope"))
+                    kwargs["reader"] = reader
+                    return real_read(**kwargs)
+                with mock.patch(__name__ + ".read_and_store_source_unit", side_effect=guarded_read):
+                    with self.assertRaisesRegex(ContractValidationError, "hash/permission"):
+                        self.read("Other qty 9\nPart-Z " + "x" * 180 + " qty 9", [self.record(
+                            "9", subject="Part-Z", subject_quote={"observation_id": "obs_body", "quote": "Part-Z"})])
+                reader.assert_not_called()
+                self.assertEqual(list(self.stores["candidate_atom_store"].list()), [])
+
     def test_unique_physical_line_keeps_precedence_over_new_anchors(self):
         text = "Clienta 2\n2\nOrgB 2"
         record = self.record("2")

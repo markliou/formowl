@@ -251,8 +251,8 @@ def _validate_no_raw_reference(value: str, field_name: str) -> None:
 
 
 _SEMANTIC_READ_PROFILE = "offline_complete_source_unit_semantics_v8"
-SEMANTIC_VALIDATION_POLICY_ID = "atom_subset_exact_anchors_segments_v1"
-SEMANTIC_ANCHOR_MAX_DISTANCE = 128
+SEMANTIC_VALIDATION_POLICY_ID = "atom_subset_exact_row_anchors_segments_v2"
+SEMANTIC_ANCHOR_MAX_DISTANCE = 128  # Legacy policy bound; same-row resolution has no distance cutoff.
 SEMANTIC_SEGMENT_MAX_COUNT = 8
 SEMANTIC_SEGMENT_MAX_SPAN = 256
 SEMANTIC_SEGMENT_MAX_GAP = 128
@@ -579,15 +579,25 @@ def _semantic_atom_shape(raw: Mapping[str, Any], focus_ids: Sequence[str]) -> No
         raise ContractValidationError("semantic candidate evidence is outside focus")
 
 
-def _anchored_match(matches: list, anchors: list[dict]) -> Any:
-    """Every usable anchor must have one nearest hit within 128 code points and agree."""
+def _anchored_match(matches: list, anchors: list[dict], text: str) -> Any:
+    """Independent anchors must agree on one contained hit or one same-line hit."""
     selected = set()
     for anchor in anchors:
-        distances = [max(anchor["start"] - m.end(), m.start() - anchor["end"], 0) for m in matches]
-        nearest = min(distances)
-        if nearest > SEMANTIC_ANCHOR_MAX_DISTANCE or distances.count(nearest) != 1:
+        start, end = anchor["start"], anchor["end"]
+        if "\r" in text[start:end] or "\n" in text[start:end]:
             return None
-        selected.add(distances.index(nearest))
+        contained = [i for i, match in enumerate(matches) if start <= match.start() and match.end() <= end]
+        if contained:
+            hits = contained
+        else:
+            line_start = max(text.rfind("\r", 0, start), text.rfind("\n", 0, start)) + 1
+            line_end = min((i for i in (text.find("\r", end), text.find("\n", end)) if i >= 0),
+                           default=len(text))
+            hits = [i for i, match in enumerate(matches)
+                    if line_start <= match.start() and match.end() <= line_end]
+        if len(hits) != 1:
+            return None
+        selected.add(hits[0])
     return matches[selected.pop()] if len(selected) == 1 else None
 
 
@@ -648,7 +658,7 @@ def _semantic_spans(
             if len(line_matches) == 1:
                 matches, group = line_matches, 1
         if occurrence is None and len(matches) > 1 and same_field:
-            chosen = _anchored_match(matches, same_field)
+            chosen = _anchored_match(matches, same_field, text)
             if chosen is None:
                 raise ContractValidationError("semantic evidence span does not match source")
             # Store the actual original occurrence, not the narrowed match-list index.
