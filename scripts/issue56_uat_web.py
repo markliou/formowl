@@ -850,22 +850,23 @@ def _compose_attachment_replacement_preparation(
 ) -> dict:
     """Offline text-block replacement over a pinned source checkpoint, never a query rebuild.
 
-    Structured replacement and empty/failed jobs are unsupported and fail closed.
-    The old source, exact shards and lexical database are never mutated.
+    Only successful nonempty text replaces source references. Failed/empty
+    attempts retain the old source and its actual extractor identity. Invalid
+    authority or structured replacement still fails closed; old files are never mutated.
     """
     from formowl_contract import sha256_json, to_plain
     from formowl_ingestion.storage import AssetStore, JobStore, ObservationStore, ExtractorRunStore
     from formowl_mail.import_workflow import open_completed_ingestion_job_reader
     from formowl_mail.issue56_sealed_source import (
         APPROVER_ACTOR, WORKSPACE_ID, load_issue56_ingestion_revision,
-        _validate_attachment_replacement, _MAX_INGESTION_REVISION_SOURCE_BYTES,
+        _validate_attachment_reextraction, _MAX_INGESTION_REVISION_SOURCE_BYTES,
     )
     from formowl_mail.hybrid import _is_attachment_text_observation
     from formowl_mail.query import _attachment_child_lineages
     from scripts.issue56_source_native_lookup import _seed_prefix
 
     if directory.exists() or directory.is_symlink() or not jobs:
-        raise ValueError("attachment replacement requires new output and completed jobs")
+        raise ValueError("attachment replacement requires new output and terminal jobs")
     base = load_issue56_ingestion_revision(
         base_preparation_directory, expected_revision_sha256=expected_base_preparation_sha256,
     )
@@ -882,16 +883,30 @@ def _compose_attachment_replacement_preparation(
         snapshot = json.loads((base_preparation_directory / "observations.json").read_bytes())
         bindings = list(snapshot["job_store_bindings"])
         authorities = list(records.job_authorities)
-        additions, replacement_by_asset = [], {}
+        additions, replacement_by_asset, outcomes = [], {}, {}
+        attempt_stores = {}
         for store, job_id in jobs:
-            reader = open_completed_ingestion_job_reader(
-                job_id, job_store=JobStore(Path(store)), asset_store=AssetStore(Path(store)),
-                observation_store=ObservationStore(Path(store)), extractor_run_store=ExtractorRunStore(Path(store)),
-                requester_user_id=APPROVER_ACTOR, workspace_id=WORKSPACE_ID,
-            )
-            authority = reader.authority
-            asset_id = authority.asset.asset_id
-            if (asset_id in replacement_by_asset
+            store = Path(store)
+            job = JobStore(store).get(job_id)
+            if (job is None or job.ingestion_job_id != job_id
+                    or job.status not in {"succeeded", "failed"}
+                    or job.requested_by != APPROVER_ACTOR or job.workspace_id != WORKSPACE_ID
+                    or not job.started_at or not job.completed_at or len(job.extractor_run_ids) != 1
+                    or len(set(job.observation_ids)) != len(job.observation_ids)
+                    or (job.status == "failed" and job.observation_ids)):
+                raise ValueError("attachment re-extraction terminal job scope is invalid")
+            asset = AssetStore(store).get(job.asset_id)
+            run = ExtractorRunStore(store).get(job.extractor_run_ids[0])
+            if (asset is None or asset.owner_user_id != APPROVER_ACTOR or asset.workspace_id != WORKSPACE_ID
+                    or asset.lifecycle_state != "active"
+                    or to_plain(asset.permission_scope) != to_plain(job.permission_scope)
+                    or run is None or run.extractor_run_id != job.extractor_run_ids[0]
+                    or run.status != job.status or not run.completed_at
+                    or job.extractor_names != [run.extractor_name]
+                    or (run.status == "succeeded" and (run.errors or job.error))):
+                raise ValueError("attachment re-extraction asset/run scope is invalid")
+            asset_id = asset.asset_id
+            if (asset_id in outcomes
                     or any(a.ingestion_job_id == job_id for a in authorities)):
                 raise ValueError("attachment replacement job/asset is ambiguous")
             helper = lookup.helper_for_attachment_asset(asset_id)
@@ -900,24 +915,41 @@ def _compose_attachment_replacement_preparation(
             parent_index = helper["reference"]["job_index"]
             parent_ref = [parent_index, helper["observation_id"], helper["observation_hash"]]
             # _seed_prefix already proved helper -> locator -> source membership.
-            index = len(authorities)
-            binding = {
-                "job_index": index, "store_directory": str(Path(store).resolve()),
-                "ingestion_job_id": job_id, "job_fingerprint": authority.job_fingerprint,
-                "observation_count": authority.observation_count,
-            }
-            authorities.append(authority)
-            bindings.append(binding)
             replacement = {
                 "base_preparation_sha256": expected_base_preparation_sha256,
                 "parent_reference": parent_ref,
                 "parent_job_fingerprint": helper["reference"]["job_fingerprint"],
-                "run_fingerprint": sha256_json(authority.runs[0].to_dict()),
-                "asset_fingerprint": sha256_json(to_plain(authority.asset)),
+                "run_fingerprint": sha256_json(run.to_dict()),
+                "asset_fingerprint": sha256_json(to_plain(asset)),
                 "removed_references": [],
             }
-            _, parent = _validate_attachment_replacement(replacement, authority, authorities, bindings)
-            references = []
+            _, parent = _validate_attachment_reextraction(replacement, asset, run, authorities, bindings)
+            outcome = {
+                "asset_id": asset_id, "status": "not_replaced",
+                "reason_code": "extraction_failed" if job.status == "failed" else "empty_output",
+                "base_preparation_sha256": expected_base_preparation_sha256,
+                "attempt": {
+                    "ingestion_job_id": job_id, "job_fingerprint": sha256_json(job.to_dict()),
+                    "extractor_run_id": run.extractor_run_id, "run_fingerprint": sha256_json(run.to_dict()),
+                    "extractor_version": run.extractor_version, "status": run.status,
+                    "warnings": list(run.warnings), "errors": list(run.errors),
+                },
+                "active_reference_count": 0, "used_extractors": [], "used_extractor_versions": [],
+            }
+            outcomes[asset_id], attempt_stores[asset_id] = outcome, store
+            if job.status == "failed" or not job.observation_ids:
+                continue
+            reader = open_completed_ingestion_job_reader(
+                job_id, job_store=JobStore(store), asset_store=AssetStore(store),
+                observation_store=ObservationStore(store), extractor_run_store=ExtractorRunStore(store),
+                requester_user_id=APPROVER_ACTOR, workspace_id=WORKSPACE_ID,
+            )
+            authority = reader.authority
+            if (authority.job_fingerprint != outcome["attempt"]["job_fingerprint"]
+                    or to_plain(authority.asset) != to_plain(asset)
+                    or [sha256_json(item.to_dict()) for item in authority.runs] != [replacement["run_fingerprint"]]):
+                raise ValueError("attachment re-extraction changed during validation")
+            index, references, has_text = len(authorities), [], False
             for child in reader.iter_observations():
                 if not _is_attachment_text_observation(child):
                     raise ValueError("attachment replacement structured content is unsupported")
@@ -926,8 +958,24 @@ def _compose_attachment_replacement_preparation(
                 }):
                     raise ValueError("attachment replacement child lineage is unavailable")
                 references.append([index, child.observation_id, sha256_json(child.to_dict())])
+                has_text |= bool(child.text and child.text.strip())
             if len(references) != authority.observation_count:
                 raise ValueError("attachment replacement content scope is incomplete")
+            if not has_text:
+                outcome["reason_code"] = "empty_text"
+                continue
+            authorities.append(authority)
+            bindings.append({
+                "job_index": index, "store_directory": str(store.resolve()),
+                "ingestion_job_id": job_id, "job_fingerprint": authority.job_fingerprint,
+                "observation_count": authority.observation_count,
+            })
+            outcome.update(status="replaced", reason_code="succeeded_with_text",
+                           active_reference_count=len(references),
+                           used_extractor_versions=[run.extractor_version], used_extractors=[{
+                               "extractor_run_id": run.extractor_run_id, "extractor_version": run.extractor_version,
+                               "run_fingerprint": replacement["run_fingerprint"], "observation_count": len(references),
+                           }])
             replacement_by_asset[asset_id] = replacement
             additions.append((authority, replacement, references))
         # Helpers with native occurrence coordinates belong to the unchanged
@@ -941,7 +989,7 @@ def _compose_attachment_replacement_preparation(
             if asset_id == authorities[job_index].asset.asset_id and asset_id not in replacement_by_asset:
                 unchanged.add(observation_id)
         retained, removed_ids, row_bindings = [], set(), {}
-        memberships = {}
+        memberships, retained_runs = {}, {}
         hydrated = 0
         for reference in records.observation_references:
             index, observation_id, observation_hash = reference
@@ -972,6 +1020,14 @@ def _compose_attachment_replacement_preparation(
                 removed_ids.add(observation_id)
             else:
                 retained.append(reference)
+                if observation.asset_id in outcomes:
+                    runs = retained_runs.setdefault(observation.asset_id, {})
+                    run = authority._runs_by_id[observation.extractor_run_id]
+                    used = runs.setdefault(run.extractor_run_id, {
+                        "extractor_run_id": run.extractor_run_id, "extractor_version": run.extractor_version,
+                        "run_fingerprint": sha256_json(run.to_dict()), "observation_count": 0,
+                    })
+                    used["observation_count"] += 1
             if hydrated % 10000 == 0:
                 print(json.dumps({"phase": "attachment_replacement_source_validation", "source_reads": hydrated}), flush=True)
         exact_path = base_preparation_directory / "exact-cells"
@@ -1006,6 +1062,21 @@ def _compose_attachment_replacement_preparation(
                 raise ValueError("attachment replacement exact shard changed")
         if not exact_cell_keys <= exact_row_keys:
             raise ValueError("attachment replacement orphan exact cells are unsupported")
+        reason_counts = {}
+        for asset_id, outcome in outcomes.items():
+            attempt, store = outcome["attempt"], attempt_stores[asset_id]
+            job = JobStore(store).get(attempt["ingestion_job_id"])
+            run = ExtractorRunStore(store).get(attempt["extractor_run_id"])
+            if (job is None or run is None or sha256_json(job.to_dict()) != attempt["job_fingerprint"]
+                    or sha256_json(run.to_dict()) != attempt["run_fingerprint"]):
+                raise ValueError("attachment re-extraction changed during composition")
+            if outcome["status"] == "not_replaced":
+                used = list(retained_runs.get(asset_id, {}).values())
+                outcome.update(used_extractors=used,
+                               used_extractor_versions=sorted({item["extractor_version"] for item in used}),
+                               active_reference_count=sum(item["observation_count"] for item in used))
+                reason = outcome["reason_code"]
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
         source = dict(snapshot["source_binding"])
         source["jobs"] = [*source["jobs"], *({
             "root_asset_hash": authority.asset.content_hash,
@@ -1038,9 +1109,12 @@ def _compose_attachment_replacement_preparation(
             "warning_count": sum(warnings.values()), "source_completeness_certified": False,
             "active_replacement_asset_count": len(additions), "superseded_reference_count": len(removed_ids),
             "replacement_reference_count": sum(len(refs) for _, _, refs in additions),
+            "not_replaced_asset_count": len(outcomes) - len(additions),
+            "not_replaced_reason_counts": reason_counts,
         }
         snapshot.update(source_binding=source, job_store_bindings=bindings,
-                        observation_references=[*retained, *(ref for _, _, refs in additions for ref in refs)])
+                        observation_references=[*retained, *(ref for _, _, refs in additions for ref in refs)],
+                        attachment_replacement_outcomes=list(outcomes.values()))
         directory.parent.mkdir(parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(prefix=f".{directory.name}.", dir=directory.parent))
         try:
@@ -1073,6 +1147,7 @@ def _compose_attachment_replacement_preparation(
                 shutil.rmtree(temporary)
         return {"phase": "source_preparation_checkpoint_ready", "preparation_directory": str(directory),
                 "replaced_asset_count": len(additions), "removed_reference_count": len(removed_ids),
+                "not_replaced_asset_count": len(outcomes) - len(additions),
                 "added_reference_count": sum(len(refs) for _, _, refs in additions), "source_reads": hydrated}
     finally:
         if lookup is not None:

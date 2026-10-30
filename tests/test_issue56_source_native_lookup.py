@@ -47,7 +47,7 @@ def _sha256(path: Path) -> str:
 
 class AttachmentReplacementTests(unittest.TestCase):
     def _fixture(self, root, *, version="0.7.5", bad_lineage=None, empty=False,
-                 old_table=False, new_table=False):
+                 failed=False, blank=False, old_table=False, new_table=False, old_active=True):
         from formowl_ingestion.extractors.document.attachment import AttachmentDocumentExtractor
         from formowl_ingestion.extraction import ExtractionResult
         from formowl_ingestion.jobs import create_ingestion_job, run_ingestion_job
@@ -65,6 +65,11 @@ class AttachmentReplacementTests(unittest.TestCase):
         for ref in old.snapshot["observation_references"]:
             if ref[1] == parent.observation_id:
                 ref[2] = sha256_json(parent.to_dict())
+        child = next(item for item in old.observations if item.modality == "document" and item.observation_type == (
+            "table_row" if old_table else "paragraph"))
+        if not old_active:
+            old.snapshot["observation_references"] = [
+                ref for ref in old.snapshot["observation_references"] if ref[1] != child.observation_id]
         raw = json.dumps(old.snapshot, sort_keys=True).encode()
         (old.directory / "observations.json").write_bytes(raw)
         core = {**old.preparation_core, "snapshot_size_bytes": len(raw),
@@ -78,8 +83,6 @@ class AttachmentReplacementTests(unittest.TestCase):
                              output_directory=dates, base_lookup_directory=lexical, mail_message_dates_only=True)
         for name in ("source-lookup.sqlite", "source-lookup-manifest.json"):
             shutil.copyfile(dates / name, old.directory / name)
-        child = next(item for item in old.observations if item.modality == "document" and item.observation_type == (
-            "table_row" if old_table else "paragraph"))
         asset = AssetStore(store).get(child.asset_id)
         new_store = root / "new-store"
         AssetStore(new_store).create(asset)
@@ -88,11 +91,15 @@ class AttachmentReplacementTests(unittest.TestCase):
                 return version
             def extract(self, extraction_input):
                 lineage = {**child.payload["lineage"], **(bad_lineage or {})}
+                if failed:
+                    return ExtractionResult(observations=[], errors=["attachment_document_byte_limit_reached"])
                 return ExtractionResult(observations=[] if empty else [replace(
-                    child, observation_id="synthetic_replacement_paragraph", text="cobalt current evidence",
+                    child, observation_id="synthetic_replacement_paragraph",
+                    text=" \n\t" if blank else "cobalt current evidence",
                     observation_type="table_row" if new_table else "paragraph",
                     extractor_run_id=extraction_input.extractor_run_id,
-                    payload={**child.payload, "lineage": lineage})])
+                    payload={**child.payload, "lineage": lineage})],
+                    warnings=["encrypted_unsupported"] if empty else [])
         adapter = ReplacementExtractor()
         job = create_ingestion_job(asset=asset, job_store=JobStore(new_store),
                                    requested_by=composition.loader.APPROVER_ACTOR, extractor_adapters=(adapter,))
@@ -116,6 +123,9 @@ class AttachmentReplacementTests(unittest.TestCase):
             old, child, store, job = self._fixture(root)
             output, result = self._compose(root, old, store, job)
             self.assertEqual(result["removed_reference_count"], 1)
+            outcome, = json.loads((output / "observations.json").read_bytes())["attachment_replacement_outcomes"]
+            self.assertEqual(outcome["status"], "replaced")
+            self.assertEqual(outcome["used_extractor_versions"], ["0.7.5"])
             pin = _sha256(output / "preparation.json")
             lookup_dir = root / "replacement-lookup"
             builder.build_lookup(
@@ -154,14 +164,120 @@ class AttachmentReplacementTests(unittest.TestCase):
             finally:
                 records.runtime_store.close()
 
+    def test_failed_empty_and_blank_attempts_retain_old_source_and_version(self):
+        for case, reason in (("failed", "extraction_failed"), ("empty", "empty_output"),
+                             ("blank", "empty_text")):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                old, child, store, job = self._fixture(root, version="0.7.6", **{case: True})
+                old_files = {name: _sha256(old.directory / name) for name in (
+                    "observations.json", "preparation.json", "source-lookup.sqlite", "source-lookup-manifest.json")}
+                output, result = self._compose(root, old, store, job)
+                self.assertEqual(result["replaced_asset_count"], 0)
+                self.assertEqual(result["not_replaced_asset_count"], 1)
+                self.assertEqual(result["removed_reference_count"], 0)
+                self.assertEqual(result["added_reference_count"], 0)
+                snapshot = json.loads((output / "observations.json").read_bytes())
+                self.assertEqual(snapshot["observation_references"], old.snapshot["observation_references"])
+                self.assertEqual(snapshot["job_store_bindings"], old.snapshot["job_store_bindings"])
+                outcome, = snapshot["attachment_replacement_outcomes"]
+                self.assertEqual(outcome["asset_id"], child.asset_id)
+                self.assertEqual(outcome["status"], "not_replaced")
+                self.assertEqual(outcome["reason_code"], reason)
+                self.assertEqual(outcome["attempt"]["extractor_version"], "0.7.6")
+                self.assertEqual(outcome["attempt"]["status"], job.status)
+                self.assertEqual(outcome["used_extractor_versions"], ["0.7.4"])
+                self.assertEqual(outcome["active_reference_count"], 1)
+                self.assertEqual(outcome["used_extractors"][0]["extractor_run_id"], child.extractor_run_id)
+                if case == "failed":
+                    self.assertEqual(outcome["attempt"]["errors"], ["attachment_document_byte_limit_reached"])
+                if case == "empty":
+                    from formowl_ingestion.storage import ExtractorRunStore
+                    self.assertEqual(outcome["attempt"]["warnings"],
+                                     ExtractorRunStore(store).get(job.extractor_run_ids[0]).warnings)
+                    self.assertIn("encrypted_unsupported", outcome["attempt"]["warnings"])
+                coverage = snapshot["source_binding"]["extraction_coverage"]
+                self.assertFalse(coverage["source_completeness_certified"])
+                self.assertEqual(coverage["not_replaced_reason_counts"], {reason: 1})
+                pin = _sha256(output / "preparation.json")
+                lookup_dir = root / "retained-lookup"
+                builder.build_lookup(
+                    directory=output, expected_revision_sha256=pin, output_directory=lookup_dir,
+                    base_lookup_directory=old.directory, seed_preparation_directory=old.directory,
+                    seed_expected_revision_sha256=old.preparation_sha256,
+                    seed_job_prefix_count=1, seed_reference_subset=True)
+                for name in ("source-lookup.sqlite", "source-lookup-manifest.json"):
+                    shutil.copyfile(lookup_dir / name, output / name)
+                revision = load_issue56_ingestion_revision(output, expected_revision_sha256=pin)
+                records = revision.source_records
+                try:
+                    with sqlite3.connect(old.directory / "source-lookup.sqlite") as previous:
+                        for table in ("helpers", "postings", "mail_message_dates"):
+                            self.assertEqual(set(previous.execute("SELECT * FROM " + table)),
+                                             set(records.runtime_store._connection.execute("SELECT * FROM " + table)))
+                    hits = records.runtime_store.source_family_lexical_lookup(
+                        old.runtime.tokenizer_profile.analyze("amber").tokens,
+                        source_family="mail", timeout_ms=500)
+                    self.assertIn(sha256_json(child.to_dict()), hits)
+                    self.assertEqual(records.get_observation(child.observation_id).to_dict(), child.to_dict())
+                    self.assertFalse(records.runtime_store.source_family_lexical_lookup(
+                        old.runtime.tokenizer_profile.analyze("cobalt").tokens,
+                        source_family="mail", timeout_ms=500))
+                    self.assertFalse(records.attachment_replacements)
+                finally:
+                    records.runtime_store.close()
+                self.assertEqual(old_files, {name: _sha256(old.directory / name) for name in old_files})
+
+    def test_empty_attempt_does_not_invent_used_version_without_active_old_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, _, store, job = self._fixture(root, empty=True, old_active=False, version="0.7.6")
+            output, result = self._compose(root, old, store, job)
+            self.assertEqual(result["not_replaced_asset_count"], 1)
+            snapshot = json.loads((output / "observations.json").read_bytes())
+            outcome, = snapshot["attachment_replacement_outcomes"]
+            self.assertEqual(outcome["status"], "not_replaced")
+            self.assertEqual(outcome["used_extractor_versions"], [])
+            self.assertEqual(outcome["used_extractors"], [])
+            self.assertEqual(outcome["active_reference_count"], 0)
+            self.assertEqual(snapshot["observation_references"], old.snapshot["observation_references"])
+            self.assertFalse(snapshot["source_binding"]["extraction_coverage"]["source_completeness_certified"])
+
+    def test_retention_does_not_hide_invalid_attempt_authority(self):
+        from formowl_ingestion.storage import AssetStore, JobStore, ExtractorRunStore
+        for case in ("permission", "source", "run_hash", "status", "version"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                old, _, store, job = self._fixture(
+                    root, empty=True, version="0.7.4" if case == "version" else "0.7.6")
+                if case in {"permission", "source"}:
+                    path = AssetStore(store)._store._record_path(job.asset_id)
+                    record = json.loads(path.read_bytes())
+                    if case == "permission":
+                        record["permission_scope"]["scope_id"] = "project_other"
+                    else:
+                        record["source_ref"]["source_key"] = "unrelated-occurrence"
+                elif case == "run_hash":
+                    path = ExtractorRunStore(store)._store._record_path(job.extractor_run_ids[0])
+                    record = json.loads(path.read_bytes())
+                    record["input_hash"] = "sha256:" + "0" * 64
+                elif case == "status":
+                    path = JobStore(store)._store._record_path(job.ingestion_job_id)
+                    record = json.loads(path.read_bytes())
+                    record["status"] = "running"
+                if case != "version":
+                    path.write_text(json.dumps(record))
+                with self.assertRaises((ContractValidationError, ValueError, RuntimeError)):
+                    self._compose(root, old, store, job)
+                self.assertFalse((root / "replacement").exists())
+
     def test_replacement_rejects_stale_version_bad_parent_hash_and_revision(self):
-        for case in ("version", "parent", "hash", "revision", "permission", "empty"):
+        for case in ("version", "parent", "hash", "revision", "permission"):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 kwargs = {"version": "0.7.4"} if case == "version" else {}
                 if case in {"parent", "hash"}:
                     kwargs["bad_lineage"] = {"parent_asset_id" if case == "parent" else "child_content_hash": "sha256:" + "0" * 64}
-                kwargs["empty"] = case == "empty"
                 old, _, store, job = self._fixture(root, **kwargs)
                 if case == "permission":
                     from formowl_ingestion.storage import AssetStore

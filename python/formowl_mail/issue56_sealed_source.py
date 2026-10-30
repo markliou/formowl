@@ -186,6 +186,19 @@ def _attachment_extractor_version(version: str) -> tuple[int, ...]:
 
 def _validate_attachment_replacement(binding, authority, authorities, store_bindings):
     """Revalidate a sealed cross-job attachment grant; root type alone grants nothing."""
+    if (len(authority.runs) != 1 or authority.runs[0].status != "succeeded"
+            or to_plain(authority.asset.permission_scope) != dict(authority.permission_scope)):
+        raise ContractValidationError("attachment replacement parent/run/hash/permission binding mismatch")
+    return _validate_attachment_reextraction(
+        binding, authority.asset, authority.runs[0], authorities, store_bindings,
+        excluded_authority=authority,
+    )
+
+
+def _validate_attachment_reextraction(
+    binding, asset, run, authorities, store_bindings, *, excluded_authority=None,
+):
+    """Bind an attempt to its original source; this alone grants no serving authority."""
     from formowl_ingestion.extractors.document.attachment import AttachmentDocumentExtractor
     parent_ref = binding.get("parent_reference")
     if (not isinstance(parent_ref, list) or len(parent_ref) != 3
@@ -196,42 +209,40 @@ def _validate_attachment_replacement(binding, authority, authorities, store_bind
         parent_ref[1], expected_observation_hash=parent_ref[2],
         expected_job_fingerprint=parent_authority.job_fingerprint,
     )
-    runs = authority.runs
     adapter = AttachmentDocumentExtractor()
-    if (len(runs) != 1 or runs[0].status != "succeeded"
-            or runs[0].asset_id != authority.asset.asset_id
-            or runs[0].extractor_type != adapter.extractor_type()
-            or runs[0].extractor_name != adapter.name()
-            or runs[0].input_hash != authority.asset.content_hash
+    if (run.asset_id != asset.asset_id
+            or run.extractor_type != adapter.extractor_type()
+            or run.extractor_name != adapter.name()
+            or run.input_hash != asset.content_hash
             or parent.modality != "mail" or parent.observation_type != "email_attachment_occurrence"
             or parent.asset_id != parent_authority.asset.asset_id
-            or (parent.payload or {}).get("child_asset_id") != authority.asset.asset_id
-            or (parent.payload or {}).get("content_hash") != authority.asset.content_hash
-            or to_plain(parent.permission_scope) != dict(authority.permission_scope)
+            or (parent.payload or {}).get("child_asset_id") != asset.asset_id
+            or (parent.payload or {}).get("content_hash") != asset.content_hash
+            or to_plain(parent.permission_scope) != to_plain(asset.permission_scope)
             or binding.get("parent_job_fingerprint") != parent_authority.job_fingerprint
-            or binding.get("run_fingerprint") != sha256_json(runs[0].to_dict())
-            or binding.get("asset_fingerprint") != sha256_json(to_plain(authority.asset))
+            or binding.get("run_fingerprint") != sha256_json(run.to_dict())
+            or binding.get("asset_fingerprint") != sha256_json(to_plain(asset))
             or _SHA256_RE.fullmatch(str(binding.get("base_preparation_sha256"))) is None):
         raise ContractValidationError("attachment replacement parent/run/hash/permission binding mismatch")
-    source_ref = to_plain(authority.asset.source_ref) or {}
+    source_ref = to_plain(asset.source_ref) or {}
     if (source_ref.get("source_system") != "formowl_mail_attachment"
             or source_ref.get("source_type") != "email_attachment_occurrence"):
         raise ContractValidationError("attachment replacement source occurrence is invalid")
-    previous = [(job, run) for job in authorities if job is not authority for run in job.runs
-                if run.asset_id == authority.asset.asset_id and run.extractor_type == "document_structure"]
+    previous = [(job, old_run) for job in authorities if job is not excluded_authority for old_run in job.runs
+                if old_run.asset_id == asset.asset_id and old_run.extractor_type == "document_structure"]
     if not previous or any(
-        run.extractor_name != runs[0].extractor_name
-        or run.input_hash != authority.asset.content_hash
-        or _attachment_extractor_version(run.extractor_version) >= _attachment_extractor_version(runs[0].extractor_version)
-        for _, run in previous
+        old_run.extractor_name != run.extractor_name
+        or old_run.input_hash != asset.content_hash
+        or _attachment_extractor_version(old_run.extractor_version) >= _attachment_extractor_version(run.extractor_version)
+        for _, old_run in previous
     ):
         raise ContractValidationError("attachment replacement extractor version is not newer")
     # The original materialized Asset, including source and access provenance,
     # must be byte-for-byte equivalent to the newly registered job root.
     for job, _ in previous:
         index = next(i for i, item in enumerate(authorities) if item is job)
-        original = AssetStore(Path(store_bindings[index]["store_directory"])).get(authority.asset.asset_id)
-        if to_plain(original) != to_plain(authority.asset):
+        original = AssetStore(Path(store_bindings[index]["store_directory"])).get(asset.asset_id)
+        if to_plain(original) != to_plain(asset):
             raise ContractValidationError("attachment replacement original Asset changed")
     return parent_authority, parent
 

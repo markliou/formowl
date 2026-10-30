@@ -100,7 +100,7 @@ class AttachmentDocumentExtractor:
         return "attachment_document_parser"
 
     def version(self) -> str:
-        return "0.7.5"
+        return "0.7.6"
 
     def supported_mime_types(self) -> list[str]:
         # run_extractor uses this as a routing admission check for every child
@@ -1491,25 +1491,24 @@ def _pdf_content_impl(data: bytes, *, config: dict[str, Any]) -> _ParsedContent:
     max_pages = _limit(config, "attachment_max_pages", 100)
     warnings: list[str] = []
     try:
-        reader = PdfReader(io.BytesIO(data), strict=True)
-        len(reader.pages)  # parsing is lazy; resolve the catalog here
+        reader, readable = _open_pdf_reader(data, PdfReader, strict=True)
     except Exception:
         # Malformed-but-readable files (broken xref, stray bytes) open in every
         # viewer; read them leniently and say so rather than dropping the file.
         try:
-            reader = PdfReader(io.BytesIO(data), strict=False)
-            len(reader.pages)  # forces the document catalog to resolve
+            reader, readable = _open_pdf_reader(data, PdfReader, strict=False)
             warnings.append("attachment_document_pdf_structure_repaired")
         except Exception as exc:
-            reader = _pdf_earlier_revision(data, PdfReader)
-            if reader is None:
+            earlier = _pdf_earlier_revision(data, PdfReader)
+            if earlier is None:
                 raise _ParserLimit("attachment_document_pdf_parse_failed") from exc
+            reader, readable = earlier
             # A broken incremental update was appended; viewers show the last
             # readable revision, and whatever the update added is not covered.
             warnings.extend(["attachment_document_pdf_later_revision_unreadable",
                              "attachment_document_partial_native_text_coverage"])
-    if reader.is_encrypted:
-        return _ParsedContent(warnings=["attachment_document_pdf_encrypted_unsupported"])
+    if not readable:
+        return _ParsedContent(warnings=[*warnings, "attachment_document_pdf_encrypted_unsupported"])
     pages = reader.pages
     if len(pages) > max_pages:
         warnings.append("attachment_document_page_limit_reached")
@@ -1538,6 +1537,13 @@ def _pdf_content_impl(data: bytes, *, config: dict[str, Any]) -> _ParsedContent:
                 not char.isspace() for char in plain
             ):
                 text, mode = plain, "plain_fallback"
+            else:
+                lines: list[str] = []
+                for line in text.splitlines():
+                    line = re.sub(r"[^\S\r\n]{3,}", "  ", line.rstrip())
+                    if line or not lines or lines[-1]:
+                        lines.append(line)
+                text = "\n".join(lines)
         except Exception as exc:
             # One unreadable page must not discard the others; only a file with
             # no readable page at all is a failed extraction.
@@ -1570,14 +1576,26 @@ def _pdf_content_impl(data: bytes, *, config: dict[str, Any]) -> _ParsedContent:
     return _ParsedContent(blocks=blocks, warnings=_unique(warnings))
 
 
-def _pdf_earlier_revision(data: bytes, reader_type: Any) -> Any:
+def _open_pdf_reader(data: bytes, reader_type: Any, *, strict: bool) -> tuple[Any, bool]:
+    reader = reader_type(io.BytesIO(data), strict=strict)
+    if reader.is_encrypted:
+        try:
+            if not reader.decrypt(""):
+                return reader, False
+        except Exception:
+            # Missing cipher support and rejected empty passwords are explicit
+            # unsupported coverage, not evidence of a malformed PDF catalog.
+            return reader, False
+    len(reader.pages)  # Resolve the lazy catalog only after encryption handling.
+    return reader, True
+
+
+def _pdf_earlier_revision(data: bytes, reader_type: Any) -> tuple[Any, bool] | None:
     """Newest earlier revision (cut at a previous ``%%EOF``) that opens, or None."""
     end = data.rstrip().rfind(b"%%EOF")
     while (end := data.rfind(b"%%EOF", 0, end)) > 0:
         try:
-            reader = reader_type(io.BytesIO(data[:end + 5]), strict=False)
-            len(reader.pages)  # forces the document catalog to resolve
-            return reader
+            return _open_pdf_reader(data[:end + 5], reader_type, strict=False)
         except Exception:
             continue
     return None

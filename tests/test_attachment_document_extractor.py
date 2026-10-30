@@ -272,7 +272,7 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
         )
         self.assertEqual([o.location["page_text_mode"] for o in result.observations],
                          ["layout", "layout"])
-        self.assertEqual(result.extractor_run.extractor_version, "0.7.5")
+        self.assertEqual(result.extractor_run.extractor_version, "0.7.6")
 
     def test_pdf_falls_back_to_plain_per_page_for_rotated_text(self) -> None:
         content = _positioned_pdf_bytes([
@@ -321,6 +321,86 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
                          ["plain_fallback", "layout"])
         self.assertNotIn("attachment_document_pdf_page_text_extract_failed", result.warnings)
 
+    def test_pdf_normalizes_layout_padding_without_changing_plain_fallback(self) -> None:
+        layout = "Code" + " " * 20_000 + "Count \t \nItem \t\t Value   \n\n \t\n\nLast row  end\t "
+        plain_fallback = "Keep   literal\n\n\npadding\t\t\tbetween"
+        pages = [Mock(), Mock()]
+        pages[0].extract_text.side_effect = [layout, "Code Count Item Value Last row end"]
+        pages[1].extract_text.side_effect = ["ab", plain_fallback]
+        with patch("pypdf.PdfReader", return_value=Mock(pages=pages, is_encrypted=False)):
+            result = self._extract(b"%PDF-1.4", mime_type="application/pdf", filename="padding.pdf")
+        self.assertFalse(result.errors)
+        self.assertEqual([o.text for o in result.observations], [
+            "Code  Count\nItem  Value\n\nLast row  end", plain_fallback,
+        ])
+        self.assertEqual([o.location["page_text_mode"] for o in result.observations],
+                         ["layout", "plain_fallback"])
+
+    def test_pdf_empty_password_extracts_and_other_password_stays_unsupported(self) -> None:
+        for password in ("", "fictional-password"):
+            with self.subTest(empty_password=not password):
+                result = self._run_registered(
+                    _encrypted_pdf_bytes("Readable with empty password", password),
+                    "application/pdf", "encrypted.pdf",
+                )
+                self.assertEqual(result.extractor_run.status, "succeeded")
+                if password:
+                    self.assertFalse(result.observations)
+                    self.assertIn("attachment_document_pdf_encrypted_unsupported", result.extractor_run.warnings)
+                else:
+                    self.assertEqual([o.text for o in result.observations], ["Readable with empty password"])
+                    self.assertNotIn("attachment_document_pdf_encrypted_unsupported", result.extractor_run.warnings)
+
+    def test_pdf_failed_empty_password_never_reads_encrypted_pages(self) -> None:
+        from pypdf.errors import DependencyError
+
+        class EncryptedReader:
+            is_encrypted = True
+
+            def __init__(self, decrypt):
+                self.decrypt = decrypt
+                self.page_reads = 0
+
+            @property
+            def pages(self):
+                self.page_reads += 1
+                raise AssertionError("encrypted pages must not be read")
+
+        for decrypt in (Mock(return_value=0), Mock(side_effect=DependencyError("fictional unavailable cipher"))):
+            with self.subTest(decrypt_raises=decrypt.side_effect is not None):
+                reader = EncryptedReader(decrypt)
+                with patch("pypdf.PdfReader", return_value=reader):
+                    result = self._extract(b"%PDF-1.4", mime_type="application/pdf", filename="protected.pdf")
+                self.assertEqual(reader.page_reads, 0)
+                decrypt.assert_called_once_with("")
+                self.assertFalse(result.errors)
+                self.assertFalse(result.observations)
+                self.assertIn("attachment_document_pdf_encrypted_unsupported", result.warnings)
+
+    def test_pdf_earlier_revision_preserves_encryption_handling(self) -> None:
+        import pypdf
+
+        real_reader = pypdf.PdfReader
+        for password in ("", "fictional-password"):
+            with self.subTest(empty_password=not password):
+                original = _encrypted_pdf_bytes("Earlier encrypted revision", password)
+                broken = original + b"9 0 obj\n<< /Annots [] >>\nendobj\ntrailer\n<</Size 10>>\nstartxref\n116\n%%EOF\n"
+
+                def reader(stream, strict):
+                    if stream.getvalue() == broken:
+                        raise pypdf.errors.PdfReadError("fictional broken update")
+                    return real_reader(stream, strict=strict)
+
+                with patch("pypdf.PdfReader", side_effect=reader):
+                    result = self._extract(broken, mime_type="application/pdf", filename="updated-encrypted.pdf")
+                self.assertFalse(result.errors)
+                self.assertIn("attachment_document_pdf_later_revision_unreadable", result.warnings)
+                if password:
+                    self.assertFalse(result.observations)
+                    self.assertIn("attachment_document_pdf_encrypted_unsupported", result.warnings)
+                else:
+                    self.assertEqual([o.text for o in result.observations], ["Earlier encrypted revision"])
+
     def test_native_pdf_and_independent_utf8_preserve_safe_text_around_redacted_spans(self) -> None:
         pdf_text = "SYN-LEFT Qty 23.75 / / Grade B SYN-RIGHT"
         independent_text = "SYN-LEFT 稽核 café Qty 23.75 / / /私密/樣本.txt Grade B SYN-RIGHT"
@@ -351,8 +431,8 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
                     extracted_value=observation.extracted_value,
                 ))
                 assert_no_public_raw_references(observation.to_dict())
-                self.assertEqual(AttachmentDocumentExtractor().version(), "0.7.5")
-                self.assertEqual(result.extractor_run.extractor_version, "0.7.5")
+                self.assertEqual(AttachmentDocumentExtractor().version(), "0.7.6")
+                self.assertEqual(result.extractor_run.extractor_version, "0.7.6")
 
     def test_pdf_reads_both_modes_only_for_admitted_pages(self) -> None:
         pages = [Mock(), Mock()]
@@ -706,6 +786,17 @@ def _pdf_bytes(text: str) -> bytes:
 
 def _blank_pdf_bytes() -> bytes:
     return _pdf_bytes("")
+
+
+def _encrypted_pdf_bytes(text: str, password: str) -> bytes:
+    from pypdf import PdfReader, PdfWriter
+
+    writer = PdfWriter()
+    writer.append_pages_from_reader(PdfReader(io.BytesIO(_pdf_bytes(text))))
+    writer.encrypt(password, owner_password="fictional-owner-password")
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
 
 
 if __name__ == "__main__":
