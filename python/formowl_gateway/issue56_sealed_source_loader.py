@@ -2892,6 +2892,8 @@ def _build_source_start_semantic_handler(
         annotation_hint_counts = {"projected": 0, "predicate_passed": 0,
                                   "predicate_rejected": 0}
         annotation_identity_reads_cell = None
+        fact_projection = None
+        fact_items = {}
 
         def prune_outer_dates():
             if not outer_dates:
@@ -3014,6 +3016,57 @@ def _build_source_start_semantic_handler(
         def admit(observation: Observation, item: dict[str, Any], scope_id: str):
             nonlocal admitted_context_bytes, context_limit_reached
             observation_hash = sha256_json(observation.to_dict())
+            if fact_projection is not None:
+                entries = fact_projection.get(observation_hash)
+                if entries is None:
+                    return None
+                from formowl_graph.candidates import _semantic_span_text
+                source_dict = observation.to_dict()
+                for entry in entries:
+                    check_source_evidence_deadline(source_budget["deadline"])
+                    field, span = entry["field"], entry["span"]
+                    if entry["property"] is None:
+                        raw = field["value_surface"]
+                        if (" ".join(unicodedata.normalize("NFKC", raw).casefold().split())
+                                != entry["row"]["subject_identity"]["value"]
+                                or field["target_identity"].get("value_surface") != raw
+                                or field["target_identity"].get("evidence_spans") != field["evidence_spans"]
+                                or not any(raw in evidence["quote"] for evidence in field["evidence_spans"])):
+                            raise ContractValidationError("candidate fact subject identity changed")
+                    _, text = _semantic_span_text({key: span.get(key) for key in (
+                        "observation_id", "field_path", "quote", "occurrence_index")},
+                        {observation.observation_id: source_dict})
+                    start, end = span.get("start"), span.get("end")
+                    if (field["permission_scope"] != source_dict["permission_scope"]
+                            or sha256_json(field["permission_scope"]) != field["permission_scope_fingerprint"]
+                            or span.get("observation_hash") != observation_hash
+                            or span.get("source_extractor_run_id") != observation.extractor_run_id
+                            or span.get("native_locator") != source_dict["location"]
+                            or type(start) is not int or type(end) is not int
+                            or not 0 <= start < end <= len(text) or text[start:end] != span["quote"]):
+                        raise ContractValidationError("candidate fact original source binding changed")
+                display = [{"row_id": entry["row"]["row_id"], "item_or_row": entry["row"]["item_or_row"],
+                    "property": entry["property"],
+                    **{key: entry["field"].get(key) for key in (
+                        "value", "unit", "qualifiers", "times", "unit_id", "source_unit_id",
+                        "source_revision_fingerprint", "source_observation_ids")},
+                    "original_evidence": entry["span"]}
+                    for entry in entries if entry["property"] is not None]
+                display.extend({"row_id": entry["row"]["row_id"], "item_or_row": entry["row"]["item_or_row"],
+                    "subject_identity": {key: entry["row"]["subject_identity"][key] for key in (
+                        "value", "type", "origin", "review_status", "semantic_correctness_verified")},
+                    "subject_source": {key: entry["field"][key] for key in (
+                        "value_surface", "unit_id", "source_unit_id", "source_revision_fingerprint",
+                        "source_observation_ids")}, "original_evidence": entry["span"]}
+                    for entry in entries if entry["property"] is None)
+                item["snippet"] = "候選事實（由標註取得，未經人工審核）\n" + json.dumps(display, ensure_ascii=False)
+                item["source_context"] = {**item.get("source_context", {}),
+                    "candidate_fact_pin": revision.candidate_fact_pin,
+                    "semantic_correctness_verified": False, "exact_field_proof": False,
+                    "deterministic_exact": False, "canonical": False}
+                validate_public_gateway_payload({"snippet": item["snippet"], "source_context": item["source_context"]})
+                fact_items[observation_hash] = item
+                return None
             if observation_hash in annotation_hashes:
                 candidate_ids = [entry["candidate_atom_id"] for entry in revision.reviewed_source_annotations
                                  if entry["candidate_atom_id"] in annotation_ids
@@ -3314,8 +3367,9 @@ def _build_source_start_semantic_handler(
             check_source_evidence_deadline(deadline)
             observe_required_terms(observation)
             last_anchor = None
-            semantic_hash = sha256_json(observation.to_dict()) if annotation_hashes else None
-            semantic_match = not full_read_projection and semantic_hash in annotation_hashes
+            semantic_hash = sha256_json(observation.to_dict()) if annotation_hashes or fact_projection is not None else None
+            semantic_match = not full_read_projection and (semantic_hash in annotation_hashes
+                or fact_projection is not None and semantic_hash in fact_projection)
             annotation_hint_surfaces = annotation_identity_hints.get(
                 sha256_json(observation.to_dict()),
                 (),
@@ -3323,7 +3377,7 @@ def _build_source_start_semantic_handler(
             annotation_hint_match = not full_read_projection and bool(annotation_hint_surfaces)
             if annotation_hint_match:
                 annotation_hint_counts["projected"] += 1
-            if semantic_match:
+            if semantic_match and fact_projection is None:
                 # Only the reviewed identity anchor may be source-linked rather
                 # than repeated in a child paragraph. ALL other literals survive.
                 if not _reviewed_annotation_literals_match(
@@ -3405,7 +3459,7 @@ def _build_source_start_semantic_handler(
                     # waive an attachment's complete required identifier literal.
                     # ASCII words and code separators cannot extend numeric or
                     # code terms. Sentence-final punctuation remains permitted.
-                    if attachment_softening and not all(
+                    if fact_projection is None and attachment_softening and not all(
                         re.search(r"(?<![a-z0-9])(?<![a-z0-9][._-])" + re.escape(term)
                                   + r"(?![a-z0-9]|[._-][a-z0-9])", normalized)
                         for term in attachment_hard_terms
@@ -4087,6 +4141,107 @@ def _build_source_start_semantic_handler(
         limit = arguments.get("limit" if mail_tool else "page_size", 5 if mail_tool else 10)
         if type(limit) is not int or not 1 <= limit <= 128:
             raise ContractValidationError("source-start evidence limit is invalid")
+        if (getattr(revision, "candidate_fact_pin", None) and required_terms
+                and query_class == "evidence_lookup" and execution_downgrade is None
+                and not auto_exact and table_query is None and native_locator is None
+                and placement is None and date_binding is None
+                and not any(arguments.get(key) is not None for key in ("exact_inventory_kind", "exact_field", "cursor"))
+                and not arguments.get("reviewed_annotation_ids") and arguments.get("reviewed_annotation_pin") is None):
+            from formowl_mail.issue56_sealed_source import lookup_issue56_candidate_fact_rows
+            rows = lookup_issue56_candidate_fact_rows(revision, required_terms,
+                deadline_monotonic=source_budget["deadline"])
+            selected = {}
+            selection_expired = False
+            for row in rows:
+                parts = list(row["fields"].items())
+                if row.get("subject_identity") is not None:
+                    parts.append((None, row["subject_identity"]["sources"]))
+                for prop, fields in parts:
+                    for field in fields:
+                        if time.monotonic() >= source_budget["deadline"]:
+                            selection_expired = True
+                            break
+                        # Export metadata never substitutes for the current sealed
+                        # source identity. No annotation/serving revision equality.
+                        if (not field.get("evidence_spans")
+                                or any(records.observation_hash(oid) != key
+                                       for oid, key in field["observation_hashes"].items())):
+                            raise ContractValidationError("candidate fact source Observation changed")
+                        for span in field["evidence_spans"]:
+                            if time.monotonic() >= source_budget["deadline"]:
+                                selection_expired = True
+                                break
+                            key = span["observation_hash"]
+                            if field["observation_hashes"].get(span["observation_id"]) != key:
+                                raise ContractValidationError("candidate fact source span mismatch")
+                            selected.setdefault(key, []).append({"row": row, "property": prop, "field": field, "span": span})
+                    if selection_expired:
+                        break
+                if selection_expired:
+                    break
+            if selected and not selection_expired and len(selected) <= 128:
+                # A bounded preferred scan uses the same guarded owner and remaining
+                # read/time budget. A failed/capped group never publishes a subset.
+                fact_projection = selected
+                deadline = source_budget["deadline"]
+                fact_reads = 0
+                try:
+                    for family in request_contract["source_family_scope"]:
+                        if family not in {"mail", "document_text"}:
+                            continue
+                        active_family, active_selector = family, selector
+                        def collect_fact(observation, scope):
+                            nonlocal fact_reads
+                            fact_reads += 1
+                            project(observation, scope, deadline)
+                            return not set(selected).issubset(fact_items)
+                        remaining = SOURCE_EVIDENCE_OBSERVATION_LIMIT - source_budget["reads"]
+                        if remaining <= 0 or time.monotonic() >= deadline:
+                            break
+                        scan = records.scan_authorized_observations(
+                            source_family=family, max_observations=remaining, deadline_monotonic=deadline,
+                            source_scope_ids=tuple(sorted(source.source_scope_ids)),
+                            mail_import_session_id=selector if family == "mail" else None,
+                            preferred_observation_hashes=tuple(selected), observation_callback=collect_fact)
+                        source_budget["reads"] += scan.scanned_observation_count
+                        fact_reads = 0
+                        if set(selected).issubset(fact_items):
+                            break
+                    if set(selected).issubset(fact_items) and time.monotonic() < deadline:
+                        evidence, truncated = _bounded_mail_header_groups(list(fact_items.values()), limit=limit,
+                            byte_limit=16 * 1024 - source_budget["context_bytes"])
+                        citations = [item["citation_hash"] for item in evidence]
+                        truncated |= not set(selected).issubset(citations)
+                        group = sha256_json({"pin": revision.candidate_fact_pin, "rows": [row["row_id"] for row in rows]})
+                        for item in evidence:
+                            # One source can support many rows and can also be
+                            # another item's outer header. Header deduplication
+                            # must never replace that source's candidate values.
+                            fact = fact_items.get(item["citation_hash"])
+                            if fact is not None:
+                                item["snippet"] = fact["snippet"]
+                                item["source_context"] = {**item.get("source_context", {}), **fact["source_context"]}
+                            item["source_context"] = {**item.get("source_context", {}),
+                                "candidate_fact_group": group, "required_citation_hashes": citations}
+                        payload = {"status": "partial", "query_hash": sha256_json(query_text),
+                            "coverage": {"status": "incomplete", "absence_claim": False},
+                            "evidence": evidence, "citations": citations}
+                        if mail_tool:
+                            payload.pop("evidence")
+                            payload.update(mail_import_session_id=selector, evidence_snippets=evidence,
+                                citations=[_citation_for_snippet(item) for item in evidence])
+                        from formowl_mail.human_uat_orchestrator import compact_evidence_for_model, evidence_citation_ids
+                        compact = compact_evidence_for_model(payload, item_limit=limit)
+                        if (not truncated and evidence and time.monotonic() < deadline
+                                and set(citations) == set(evidence_citation_ids(compact))):
+                            validate_public_gateway_payload(payload)
+                            return payload
+                except _SourceEvidenceDeadlineExceeded:
+                    source_budget["reads"] += fact_reads
+                finally:
+                    fact_projection = None
+                    active_family, active_selector = None, selector
+                    fact_items.clear()
         if query_class == "exact_set_or_inventory":
             # Primary native execution, not the evidence-lookup automatic
             # recheck. Keep the original exact request and all its constraints.

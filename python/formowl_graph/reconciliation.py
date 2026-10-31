@@ -93,21 +93,55 @@ def _fact_member_pins(member: Mapping[str, Any]) -> dict:
                 or sha256_json(source) != pins["observation_hashes"].get(oid)
                 or sha256_json(source.get("permission_scope")) != pins["permission_scope_fingerprint"]):
             raise ContractValidationError("candidate fact source pin changed")
-    spans = props.get("evidence_spans", [])
-    if not spans:
+    _fact_validate_spans(member, pins, props.get("evidence_spans", []))
+    return pins
+
+
+def _fact_validate_spans(member: Mapping[str, Any], pins: Mapping[str, Any], spans: Any) -> None:
+    """Apply the same immutable source and exact-offset guards to each span family."""
+    atom, sources = member["atom"], member["observations"]
+    if not isinstance(spans, list) or not spans:
         raise ContractValidationError("candidate fact evidence is missing")
     for span in spans:
         source, text = _semantic_span_text(
             {k: span.get(k) for k in ("observation_id", "field_path", "quote", "occurrence_index")}, sources)
         start, end = span.get("start"), span.get("end")
         if (span["observation_id"] not in atom["source_observation_ids"]
+                or sha256_json(source) != pins["observation_hashes"].get(span["observation_id"])
+                or sha256_json(source.get("permission_scope")) != pins["permission_scope_fingerprint"]
                 or span.get("observation_hash") != sha256_json(source)
                 or span.get("native_locator") != source.get("location")
                 or span.get("source_extractor_run_id") != source.get("extractor_run_id")
                 or type(start) is not int or type(end) is not int or not 0 <= start < end <= len(text)
                 or text[start:end] != span["quote"]):
             raise ContractValidationError("candidate fact evidence changed")
-    return pins
+
+
+def _fact_subject_identity(members: Sequence[Mapping[str, Any]], value: str) -> dict:
+    """Preserve all original item-target evidence without assigning a domain type."""
+    sources = []
+    for member in sorted(members, key=lambda m: m["atom"]["candidate_atom_id"]):
+        atom, ledger = member["atom"], member["ledger"]
+        props, pins = atom["properties"], ledger["value"]["pins"]
+        identity = props["target_identity"]
+        spans = identity.get("evidence_spans", [])
+        _fact_validate_spans(member, pins, spans)
+        if not any(identity["value_surface"] in span["quote"] for span in spans):
+            raise ContractValidationError("candidate fact subject surface changed")
+        sources.append({
+            "value_surface": identity["value_surface"], "target_identity": deepcopy(identity),
+            "evidence_spans": deepcopy(spans),
+            "candidate_atom_id": atom["candidate_atom_id"], "candidate_atom_hash": sha256_json(atom),
+            "ledger_id": ledger["semantic_metadata_id"], "ledger_hash": sha256_json(ledger),
+            "unit_id": member["unit_id"],
+            **{k: pins[k] for k in ("source_unit_id", "source_revision_fingerprint", "permission_scope_fingerprint")},
+            "permission_scope": deepcopy(props["permission_scope"]),
+            "source_observation_ids": list(atom["source_observation_ids"]),
+            "observation_hashes": {oid: pins["observation_hashes"][oid] for oid in atom["source_observation_ids"]},
+            "unit_validation_status": ledger["value"]["validation_status"],
+        })
+    return {"value": value, "type": None, "origin": "annotation_target", "review_status": "pending_review",
+            "semantic_correctness_verified": False, "sources": sources}
 
 
 def _fact_outer_mail_date(sources: Mapping[str, dict], pins: Mapping[str, Any]) -> dict:
@@ -179,6 +213,7 @@ def project_candidate_fact_rows(members: Sequence[Mapping[str, Any]], *,
     are implicit: both aliases and identity keys come from governance data.
     """
     rows: dict[str, dict] = {}
+    local_members: dict[str, list[Mapping[str, Any]]] = {}
     for member in members:
         pins = _fact_member_pins(member)
         atom, ledger = member["atom"], member["ledger"]
@@ -203,11 +238,27 @@ def project_candidate_fact_rows(members: Sequence[Mapping[str, Any]], *,
         field.update(raw_property=assertion.get("property"), qualifiers=match["qualifiers"],
                      candidate_atom_id=atom["candidate_atom_id"], candidate_atom_hash=sha256_json(atom),
                      ledger_id=ledger["semantic_metadata_id"], ledger_hash=sha256_json(ledger),
+                     unit_id=member["unit_id"], source_unit_id=pins["source_unit_id"], **scope,
+                     permission_scope=deepcopy(props["permission_scope"]),
+                     source_observation_ids=list(atom["source_observation_ids"]),
+                     observation_hashes={oid: pins["observation_hashes"][oid] for oid in atom["source_observation_ids"]},
+                     target_identity=deepcopy(props.get("target_identity", {})),
+                     identity_bindings=deepcopy(props.get("identity_bindings", [])),
                      unit_validation_status=ledger["value"]["validation_status"],
                      times=deepcopy(props.get("times", [])), evidence_spans=deepcopy(props["evidence_spans"]))
         row["fields"].setdefault(match["property_id"], []).append(field)
+        if item is not None:
+            local_members.setdefault(rid, []).append(member)
+    # Agreement is only over original mapped item atoms, before header context.
+    targets = {rid: {" ".join(_normalize(m["atom"]["properties"].get("target_identity", {}).get(
+                        "value_surface")).split()) for m in items} for rid, items in local_members.items()}
+    subjects = {rid: next(iter(values)) for rid, values in targets.items() if len(values) == 1 and "" not in values}
     _inherit_document_headers(list(rows.values()), mapping.data.get("document_level_properties", []))
     for row in rows.values():
+        subject = subjects.get(row["row_id"])
+        if subject and all(subject != " ".join(_normalize(f["value"]).split())
+                           for fields in row["fields"].values() for f in fields):
+            row["subject_identity"] = _fact_subject_identity(local_members[row["row_id"]], subject)
         for prop, fields in row["fields"].items():
             fields.sort(key=lambda f: f["candidate_atom_id"])
             by_qualifier: dict[str, set[str]] = {}

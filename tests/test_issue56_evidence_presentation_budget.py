@@ -37,6 +37,20 @@ def _decision(
 
 
 class EvidencePresentationBudgetTests(unittest.TestCase):
+    def test_candidate_fact_conflicts_travel_atomically(self):
+        hashes = [sha256_json(label) for label in ("clienta-a", "clienta-b")]
+        evidence = [{"citation_hash": key, "snippet": "候選事實（由標註取得，未經人工審核） " + value,
+                     "source_context": {"candidate_fact_group": "clienta", "required_citation_hashes": hashes}}
+                    for key, value in zip(hashes, ("2031-04-02", "2031-04-09"))]
+        payload = {"status": "partial", "evidence": evidence, "citations": hashes}
+        self.assertEqual(compact_evidence_for_model(payload)["evidence"], evidence)
+        self.assertEqual(compact_evidence_for_model(payload, item_limit=1)["evidence"], [])
+        broken = {**payload, "evidence": evidence[:1], "citations": hashes[:1]}
+        self.assertEqual(compact_evidence_for_model(broken)["evidence"], [])
+        oversized = deepcopy(payload)
+        oversized["evidence"][1]["snippet"] += "x" * 17000
+        self.assertEqual(compact_evidence_for_model(oversized)["evidence"], [])
+
     def _native_envelope_fixture(self, *, oversized=False, orphan=False):
         row_id, header_id = (sha256_json(label) for label in ("synthetic-row", "synthetic-header"))
         header = {

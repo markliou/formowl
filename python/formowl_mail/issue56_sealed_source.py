@@ -315,6 +315,9 @@ class Issue56IngestionRevision:
     reviewed_header_bindings: frozenset[str] = field(default=frozenset(), repr=False)
     reviewed_header_column_hashes: frozenset[str] = field(default=frozenset(), repr=False)
     reviewed_header_pin: str | None = None
+    # Operator-sealed candidate exports remain unreviewed and default off.
+    candidate_fact_rows: tuple[Mapping[str, Any], ...] = field(default=(), repr=False)
+    candidate_fact_pin: str | None = None
 
     @property
     def effective_graph_view(self) -> EffectiveGraphView:
@@ -1010,6 +1013,137 @@ def _validate_attachment_mail_parent(observation: Observation, parent: Observati
         ))
     ):
         raise ContractValidationError("source attachment explicit parent binding mismatch")
+
+
+def _validate_candidate_fact_subject(row: Mapping[str, Any]) -> None:
+    """Optional annotation target is untyped provenance, never a mapped field."""
+    if "subject_identity" not in row:
+        return
+    subject = row["subject_identity"]
+    def normalize(value):
+        return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+    if (not isinstance(subject, dict) or not isinstance(subject.get("value"), str)
+            or not subject["value"] or normalize(subject["value"]) != subject["value"]
+            or "type" not in subject or subject["type"] is not None
+            or subject.get("origin") != "annotation_target" or subject.get("review_status") != "pending_review"
+            or subject.get("semantic_correctness_verified") is not False
+            or not isinstance(subject.get("sources"), list) or not subject["sources"]):
+        raise ContractValidationError("candidate fact subject shape is invalid")
+    for source in subject["sources"]:
+        required_source_keys = {"value_surface", "target_identity", "evidence_spans", "candidate_atom_id",
+            "candidate_atom_hash", "ledger_id", "ledger_hash", "unit_id", "source_unit_id",
+            "source_revision_fingerprint", "permission_scope", "permission_scope_fingerprint",
+            "source_observation_ids", "observation_hashes", "unit_validation_status"}
+        if not isinstance(source, dict) or not required_source_keys <= set(source):
+            raise ContractValidationError("candidate fact subject provenance is incomplete")
+        raw = source.get("value_surface")
+        target = source.get("target_identity")
+        spans = source.get("evidence_spans")
+        hashes = source.get("observation_hashes")
+        if (not isinstance(raw, str) or normalize(raw) != subject["value"]
+                or not isinstance(target, dict) or target.get("value_surface") != raw
+                or not isinstance(spans, list) or not spans or target.get("evidence_spans") != spans
+                or not isinstance(hashes, dict) or not hashes
+                or set(source.get("source_observation_ids", ())) != set(hashes)
+                or source.get("source_revision_fingerprint") != row["source_revision_fingerprint"]
+                or sha256_json(source.get("permission_scope")) != source.get("permission_scope_fingerprint")
+                or any(span.get("observation_id") not in hashes
+                       or hashes[span["observation_id"]] != span.get("observation_hash") for span in spans)
+                or not any(isinstance(span.get("quote"), str) and raw in span["quote"] for span in spans)):
+            raise ContractValidationError("candidate fact subject source binding is invalid")
+
+
+def bind_issue56_candidate_fact_exports(
+    revision: Issue56IngestionRevision, *, configuration_path: Path, expected_sha256: str,
+) -> Issue56IngestionRevision:
+    """Bind existing private exports; this grants neither review nor source access."""
+    from formowl_graph.ontology import CandidatePropertyMapping
+
+    _, config = _read_sealed_json(configuration_path, expected_sha256=expected_sha256,
+        maximum_bytes=_MAX_SAFE_BYTES, reason_prefix="candidate_fact_config")
+    if (config.get("artifact_id") != "formowl_candidate_fact_runtime_config_v1"
+            or revision.session is not None or revision.source_records is None
+            or not callable(getattr(revision.source_records.runtime_store, "helper_for_hash", None))):
+        raise ContractValidationError("candidate fact source-start configuration is invalid")
+    for key in ("source_revision_sha256", "source_authority_fingerprint", "source_session_binding_fingerprint"):
+        if config.get(key) != revision.safe_binding[key]:
+            raise ContractValidationError("candidate fact serving revision mismatch")
+    exports = config.get("exports")
+    if not isinstance(exports, list) or not 1 <= len(exports) <= 128:
+        raise ContractValidationError("candidate fact exports are invalid")
+    rows, row_ids, total_row_bytes = [], set(), 0
+    for entry in exports:
+        path = Path(entry["manifest_path"])
+        _, manifest = _read_sealed_json(path, expected_sha256=entry["manifest_sha256"],
+            maximum_bytes=_MAX_SAFE_BYTES, reason_prefix="candidate_fact_export")
+        mapping_path = path.parent / "mapping.snapshot.json"
+        if mapping_path.is_symlink() or not mapping_path.is_file() or mapping_path.stat().st_size > _MAX_SAFE_BYTES:
+            raise ContractValidationError("candidate fact mapping is unavailable or oversized")
+        mapping_raw = mapping_path.read_bytes()
+        mapping = CandidatePropertyMapping.from_dict(json.loads(mapping_raw, object_pairs_hook=_unique_json_object))
+        if (manifest.get("artifact_id") != "formowl_candidate_fact_export_v1"
+                or manifest.get("review_status") != "pending_review"
+                or manifest.get("semantic_correctness_verified") is not False
+                or manifest.get("mapping_fingerprint") != mapping.fingerprint):
+            raise ContractValidationError("candidate fact export binding is invalid")
+        # The annotation snapshot is deliberately separate from the serving pin.
+        _require_sha256(manifest.get("source_revision"), "candidate_fact_annotation_revision_invalid")
+        rows_path = path.parent / "rows.jsonl"
+        if rows_path.is_symlink() or not rows_path.is_file() or rows_path.stat().st_size > _MAX_SAFE_BYTES:
+            raise ContractValidationError("candidate fact rows are unavailable or oversized")
+        raw = rows_path.read_bytes()
+        total_row_bytes += len(raw)
+        if total_row_bytes > _MAX_SAFE_BYTES:
+            raise ContractValidationError("candidate fact export set exceeds the bounded intake")
+        if _sha256_bytes(raw) != manifest.get("rows_sha256"):
+            raise ContractValidationError("candidate fact rows seal mismatch")
+        exported = [json.loads(line, object_pairs_hook=_unique_json_object) for line in raw.splitlines()]
+        if len(exported) != manifest.get("row_count"):
+            raise ContractValidationError("candidate fact row count mismatch")
+        identity_properties = {prop for group in mapping.data.get("identity_groups", ()) for prop in group["properties"]}
+        for row in exported:
+            if (row.get("artifact_id") != "formowl_candidate_fact_row_v1"
+                    or row.get("review_status") != "pending_review"
+                    or row.get("semantic_correctness_verified") is not False
+                    or row.get("source_revision_fingerprint") != manifest["source_revision"]
+                    or row.get("mapping_fingerprint") != mapping.fingerprint
+                    or row.get("row_id") in row_ids or not isinstance(row.get("fields"), dict)):
+                raise ContractValidationError("candidate fact row binding is invalid")
+            # Keep each export's declared identity vocabulary, without new aliases.
+            _validate_candidate_fact_subject(row)
+            rows.append({**row, "_identity_properties": tuple(sorted(identity_properties))})
+            row_ids.add(row["row_id"])
+    return replace(revision, candidate_fact_rows=tuple(rows),
+        candidate_fact_pin=expected_sha256)
+
+
+def lookup_issue56_candidate_fact_rows(revision: Issue56IngestionRevision, required_terms: Sequence[str], *,
+                                      deadline_monotonic: float | None = None):
+    """Exact identity lookup only; unsupported/missing terms leave ordinary retrieval intact."""
+    def normalize(value):
+        return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+    if not required_terms:
+        return ()
+    terms = {normalize(term) for term in required_terms}
+    selected = []
+    for row in revision.candidate_fact_rows:
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            return ()
+        values = set()
+        subject = row.get("subject_identity")
+        if subject is not None:
+            values.add(subject["value"])
+        for prop in row["_identity_properties"]:
+            for fact_field in row["fields"].get(prop, ()):
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    return ()
+                if isinstance(fact_field.get("value"), str):
+                    values.add(normalize(fact_field["value"]))
+        if terms <= values:
+            selected.append(row)
+            if len(selected) > 128:
+                return ()
+    return tuple(selected)
 
 
 def bind_issue56_reviewed_annotations(

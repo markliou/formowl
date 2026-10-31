@@ -49,14 +49,18 @@ def _annotate(temp_dir, observation: Observation, value: str, quote: str):
 
 
 class CandidateFactRowTests(unittest.TestCase):
-    def members(self, unit="unit-clienta", *, row="row-1", partial=False, header_properties=()):
+    def members(self, unit="unit-clienta", *, row="row-1", partial=False, header_properties=(),
+                subject="ZX-742", subject_label=None, identity_text=None):
         root = _paths.fresh_test_dir("candidate-fact-row")
         observation = _observation("obs_" + unit, "Clienta ZX-742 ticket R-007 expected 2030-06-01")
         header = Observation.from_dict({**observation.to_dict(), "observation_id": "obs_date_" + unit,
             "observation_type": "email_header", "text": "Wed, 01 Jan 2031 00:00:00 +0000",
             "payload": {"header_name": "Date", "header_value": "Wed, 01 Jan 2031 00:00:00 +0000"}})
-        records = [{"record_type": "claim", "topic": "Clienta", "subject": "ZX-742", "subject_label": None,
-                    "subject_quote": {"observation_id": observation.observation_id, "quote": "ZX-742"},
+        identity_source = _observation("obs_identity_" + unit, identity_text) if identity_text else observation
+        sources = [observation, header] + ([identity_source] if identity_text else [])
+        records = [{"record_type": "claim", "topic": "Clienta", "subject": subject, "subject_label": subject_label,
+                    "subject_quote": {"observation_id": identity_source.observation_id,
+                                      "quote": identity_text or subject},
                     "item_or_row": None if prop in header_properties else row,
                     "property": prop, "value": value, "unit": None, "event_type": None,
                     "state": None, "actor": None, "times": [], "confidence": 0.9,
@@ -67,8 +71,8 @@ class CandidateFactRowTests(unittest.TestCase):
         reader = LocalOllamaReader("http://127.0.0.1:1", "m")
         with mock.patch("urllib.request.urlopen", return_value=io.BytesIO(body.encode())):
             result = read_and_store_source_unit(
-                source_unit_id="su_" + sha256_json(unit)[7:39], observations=[observation, header],
-                expected_observation_hashes={o.observation_id: sha256_json(o.to_dict()) for o in (observation, header)},
+                source_unit_id="su_" + sha256_json(unit)[7:39], observations=sources,
+                expected_observation_hashes={o.observation_id: sha256_json(o.to_dict()) for o in sources},
                 source_revision_fingerprint=sha256_json("revision-clienta"),
                 permission_scope_fingerprint=sha256_json(observation.to_dict()["permission_scope"]),
                 source_complete=True, extractor_run_id="semrun_" + unit, ontology_revision_id="ontology_clienta",
@@ -79,7 +83,7 @@ class CandidateFactRowTests(unittest.TestCase):
         if partial:
             ledger["value"].update(annotation_status="pending", validation_status="partial")
         return [{"atom": atom.to_dict(), "ledger": deepcopy(ledger), "unit_id": unit,
-                 "observations": {o.observation_id: o.to_dict() for o in (observation, header)}}
+                 "observations": {o.observation_id: o.to_dict() for o in sources}}
                 for atom in result.candidate_atoms]
 
     @staticmethod
@@ -180,6 +184,201 @@ class CandidateFactRowTests(unittest.TestCase):
         other = [m for m in self.members("unit-other") if m["atom"]["properties"]["assertion"].get("property") == "Asset Code"]
         rows = reconciliation.project_candidate_fact_rows(header + other, mapping=mapping)
         self.assertEqual(set(next(r for r in rows if r["unit_id"] == "unit-other")["fields"]), {"asset_code"})
+
+    def test_every_field_keeps_its_own_source_unit_permission_and_identity_lineage(self):
+        members = self.members(header_properties=("Ticket",))
+        config = self.mapping().data
+        config["document_level_properties"] = ["ticket_code"]
+        rows = reconciliation.project_candidate_fact_rows(
+            members, mapping=ontology.CandidatePropertyMapping.from_dict(config))
+        detail = next(row for row in rows if row["item_or_row"] is not None)
+        for fields in detail["fields"].values():
+            for field in fields:
+                member = next(m for m in members if m["atom"]["candidate_atom_id"] == field["candidate_atom_id"])
+                pins, props = member["ledger"]["value"]["pins"], member["atom"]["properties"]
+                self.assertIn("unit_id", field)
+                self.assertEqual(field["unit_id"], member["unit_id"])
+                for key in ("source_unit_id", "source_revision_fingerprint", "permission_scope_fingerprint"):
+                    self.assertEqual(field[key], pins[key])
+                self.assertEqual(field["permission_scope"], props["permission_scope"])
+                self.assertEqual(field["source_observation_ids"], member["atom"]["source_observation_ids"])
+                self.assertEqual(field["observation_hashes"], {
+                    oid: pins["observation_hashes"][oid] for oid in field["source_observation_ids"]})
+                for key in ("target_identity", "identity_bindings", "evidence_spans"):
+                    self.assertEqual(field[key], props[key])
+        self.assertNotEqual(detail["outer_mail_date"]["value"], detail["fields"]["target_date"][0]["value"])
+
+    def test_multiple_temporal_roles_and_same_role_alternatives_remain_source_bound(self):
+        members = self.members()
+        base = next(m for m in members if m["atom"]["properties"]["assertion"]["property"] == "Expected Date")
+        config = self.mapping().data
+        config["aliases"].append({"label": "Committed Date", "property_id": "target_date",
+                                  "qualifiers": {"kind": "committed"}})
+        alternatives = []
+        for suffix, label, value in (("_requested2", "Expected Date", "2030-06-02"),
+                                     ("_committed", "Committed Date", "2030-06-03")):
+            member = deepcopy(base)
+            member["atom"]["candidate_atom_id"] += suffix
+            member["atom"]["properties"]["assertion"].update(property=label, value=value)
+            alternatives.append(member)
+        ledger = deepcopy(base["ledger"])
+        for member in alternatives:
+            ledger["value"]["candidate_hashes"][member["atom"]["candidate_atom_id"]] = sha256_json(member["atom"])
+        for member in members + alternatives:
+            member["ledger"] = deepcopy(ledger)
+        rows = reconciliation.project_candidate_fact_rows(
+            members + alternatives, mapping=ontology.CandidatePropertyMapping.from_dict(config))
+        fields = rows[0]["fields"]["target_date"]
+        self.assertEqual({(f["value"], f["qualifiers"]["kind"]) for f in fields},
+                         {("2030-06-01", "expected"), ("2030-06-02", "expected"), ("2030-06-03", "committed")})
+        self.assertEqual(rows[0]["conflicting_properties"], ["target_date"])
+        self.assertTrue(all(f.get("unit_id") == "unit-clienta" and f["evidence_spans"] for f in fields))
+
+    def test_project_cli_reports_safe_field_coverage_including_missing_fields(self):
+        from test_issue56_semantic_annotation import CandidateProjectionCommandTests, annotation
+        fixture = CandidateProjectionCommandTests()
+        root, args = fixture.fixture()
+        config = json.loads((root / "mapping").read_text())
+        config["properties"].append("unobserved_property")
+        (root / "mapping").write_text(json.dumps(config))
+        with mock.patch("urllib.request.urlopen", side_effect=AssertionError("no provider calls")):
+            self.assertEqual(annotation.main(["project", "--units", args.units,
+                "--annotation-output", args.annotation_output, "--run-id", args.run_id,
+                "--mapping", args.mapping, "--output", args.output]), 0)
+        result = json.loads((root / "export" / "manifest.json").read_text())
+        self.assertIn("field_coverage", result)
+        self.assertEqual(result["field_coverage"]["asset_code"],
+                         {"rows": 1, "values": 1, "units": 1, "conflicting_rows": 0,
+                          "document_header_conflict_rows": 0, "conflicting_identity_groups": 0})
+        self.assertEqual(result["field_coverage"]["unobserved_property"]["rows"], 0)
+        self.assertEqual(result["conflict_counts"],
+                         {"row_properties": 0, "document_header_properties": 0, "linked_identity_properties": 0})
+        self.assertFalse(result["scope_complete"])
+        self.assertFalse(result["semantic_correctness_verified"])
+        self.assertNotIn("ZX-742", json.dumps(result))
+        self.assertEqual((root / "export" / "manifest.json").stat().st_mode & 0o777, 0o600)
+
+
+class CandidateSubjectIdentityTests(unittest.TestCase):
+    def members(self, **kwargs):
+        return [m for m in CandidateFactRowTests().members(**kwargs)
+                if m["atom"]["properties"]["assertion"]["property"] != "Asset Code"]
+
+    def project(self, members, mapping=None):
+        return reconciliation.project_candidate_fact_rows(members, mapping=mapping or CandidateFactRowTests.mapping())
+
+    @staticmethod
+    def repin(members):
+        for member in members:
+            member["ledger"]["value"]["candidate_hashes"].update(
+                {m["atom"]["candidate_atom_id"]: sha256_json(m["atom"]) for m in members})
+
+    def test_shared_subject_is_untyped_and_keeps_each_original_identity_source(self):
+        for label in (None, "Ticket"):
+            with self.subTest(label=label):
+                members = self.members(subject_label=label, identity_text="Ticket ZX-742")
+                before = deepcopy(members)
+                row = self.project(members)[0]
+                self.assertIn("subject_identity", row)
+                subject = row["subject_identity"]
+                self.assertEqual((subject["value"], subject["type"], subject["origin"], subject["review_status"]),
+                                 ("zx-742", None, "annotation_target", "pending_review"))
+                self.assertFalse(subject["semantic_correctness_verified"])
+                self.assertEqual(len(subject["sources"]), len(members))
+                for source in subject["sources"]:
+                    member = next(m for m in members if m["atom"]["candidate_atom_id"] == source["candidate_atom_id"])
+                    identity = member["atom"]["properties"]["target_identity"]
+                    self.assertEqual(source["value_surface"], "ZX-742")
+                    self.assertEqual(source["target_identity"], identity)
+                    self.assertEqual(source["evidence_spans"], identity["evidence_spans"])
+                    self.assertEqual(source["unit_id"], member["unit_id"])
+                    self.assertEqual(source["source_revision_fingerprint"],
+                                     member["ledger"]["value"]["pins"]["source_revision_fingerprint"])
+                    self.assertEqual(source["permission_scope"], member["atom"]["properties"]["permission_scope"])
+                    for span in source["evidence_spans"]:
+                        self.assertIn(span["observation_id"], source["source_observation_ids"])
+                        self.assertEqual(source["observation_hashes"][span["observation_id"]], span["observation_hash"])
+                        self.assertTrue(span["observation_id"].startswith("obs_identity_"))
+                self.assertEqual(members, before)
+                self.assertEqual(self.project(list(reversed(members)))[0]["subject_identity"], subject)
+
+    def test_subject_agreement_normalizes_whole_surfaces_and_preserves_raw_values(self):
+        members = self.members(subject="ＺＸ-００７", identity_text="ＺＸ-００７ zx-007")
+        identity = members[1]["atom"]["properties"]["target_identity"]
+        identity["value_surface"] = "zx-007"
+        members[1]["atom"]["properties"]["assertion"]["target"] = "zx-007"
+        self.repin(members)
+        row = self.project(members)[0]
+        self.assertIn("subject_identity", row)
+        self.assertEqual(row["subject_identity"]["value"], "zx-007")
+        self.assertEqual({s["value_surface"] for s in row["subject_identity"]["sources"]}, {"ＺＸ-００７", "zx-007"})
+
+    def test_missing_conflicting_colliding_and_singleton_subjects_are_not_selected(self):
+        cases = ("missing", "missing_identity", "blank", "different", "punctuation", "zero", "field", "singleton")
+        for case in cases:
+            with self.subTest(case=case):
+                members = self.members(subject="ZX-007", identity_text="ZX-007 ZX-7 ZX007 Clienta")
+                props = members[0]["atom"]["properties"]
+                if case == "missing":
+                    props["target_identity"].pop("value_surface", None)
+                elif case == "missing_identity":
+                    props.pop("target_identity")
+                elif case == "blank":
+                    props["target_identity"]["value_surface"] = " \t"
+                elif case in ("different", "punctuation", "zero"):
+                    props["target_identity"]["value_surface"] = {
+                        "different": "Clienta", "punctuation": "ZX007", "zero": "ZX-7"}[case]
+                elif case == "field":
+                    props["assertion"]["value"] = "ｚｘ-００７"
+                else:
+                    for m in members:
+                        m["atom"]["properties"]["assertion"]["item_or_row"] = None
+                self.repin(members)
+                self.assertTrue(all("subject_identity" not in row for row in self.project(members)))
+
+    def test_identity_spans_are_revalidated_even_when_field_spans_are_valid(self):
+        for change in ("missing", "offset", "hash", "locator", "extractor", "outside", "source_permission"):
+            with self.subTest(change=change):
+                members = self.members(identity_text="Subject ZX-742")
+                props = members[0]["atom"]["properties"]
+                span = props["target_identity"]["evidence_spans"][0]
+                if change == "missing":
+                    props["target_identity"]["evidence_spans"] = []
+                elif change == "offset":
+                    span["start"] += 1
+                elif change == "hash":
+                    span["observation_hash"] = sha256_json("different")
+                elif change == "locator":
+                    span["native_locator"] = {"page": 99}
+                elif change == "extractor":
+                    span["source_extractor_run_id"] = "run_other"
+                elif change == "outside":
+                    members[0]["atom"]["source_observation_ids"].remove(span["observation_id"])
+                else:
+                    members[0]["observations"][span["observation_id"]]["permission_scope"]["scope_id"] = "ws_other"
+                self.repin(members)
+                with self.assertRaises(ContractValidationError):
+                    self.project(members)
+
+    def test_inherited_header_targets_do_not_vote_but_inherited_values_can_exclude(self):
+        members = self.members(header_properties=("Ticket",), identity_text="ZX-742 R-007")
+        header = next(m for m in members if m["atom"]["properties"]["assertion"].get("item_or_row") is None)
+        header["atom"]["properties"]["target_identity"]["value_surface"] = "R-007"
+        header["atom"]["properties"]["assertion"]["target"] = "R-007"
+        self.repin(members)
+        data = CandidateFactRowTests.mapping().data
+        data["document_level_properties"] = ["ticket_code"]
+        mapping = ontology.CandidatePropertyMapping.from_dict(data)
+        rows = self.project(members, mapping)
+        detail = next(row for row in rows if row["item_or_row"] is not None)
+        self.assertIn("subject_identity", detail)
+        self.assertEqual(len(detail["subject_identity"]["sources"]), 1)
+        self.assertTrue(detail["fields"]["ticket_code"][0]["inherited_from_document_header"])
+        self.assertTrue(all("subject_identity" not in row for row in rows if row["item_or_row"] is None))
+        header["atom"]["properties"]["assertion"]["value"] = "ＺＸ-７４２"
+        self.repin(members)
+        detail = next(row for row in self.project(members, mapping) if row["item_or_row"] is not None)
+        self.assertNotIn("subject_identity", detail)
 
 
 class ReconciliationTests(unittest.TestCase):

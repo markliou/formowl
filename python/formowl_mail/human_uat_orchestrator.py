@@ -12046,6 +12046,14 @@ def compact_evidence_for_model(
     mail_groups: dict[str, str] = {}
     mail_observations: dict[str, str] = {}
     content_records = [*records.get("evidence", ()), *records.get("evidence_snippets", ())]
+    # Every alternative and its cross-source identity travels together. The
+    # existing item/byte caps apply to the whole candidate dependency group.
+    fact_groups = {}
+    for record in content_records:
+        context = record.get("source_context", {})
+        if context.get("candidate_fact_group"):
+            for citation in context.get("required_citation_hashes", ()):
+                fact_groups[citation] = "candidate_fact:" + context["candidate_fact_group"]
     for record in content_records:
         header = record.get("mail_header_citation_hash")
         citation = record.get("citation_hash")
@@ -12057,6 +12065,10 @@ def compact_evidence_for_model(
             mail_observations[record["source_observation_id"]] = group
 
     def anchor_for(collection: str, record: Any) -> str | None:
+        fact_group = fact_groups.get(record if isinstance(record, str) else record.get("citation_hash")
+                                     if isinstance(record, Mapping) else None)
+        if fact_group:
+            return fact_group
         group = (
             mail_groups.get(record) if isinstance(record, str) else
             (mail_groups.get(record.get("citation_hash"))
@@ -12123,6 +12135,8 @@ def compact_evidence_for_model(
             item["source_context"].get("anchor_citation_hash") for item in content
             if item.get("source_context", {}).get("relationship") == "outer_message_header"
         )
+        required.update(citation for item in content
+                        for citation in item.get("source_context", {}).get("required_citation_hashes", ()))
         if not required.issubset(present):
             truncated = True
             counts["rejected_group_count"] += 1

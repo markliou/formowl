@@ -3206,6 +3206,8 @@ def main() -> int:
     parser.add_argument("--ingestion-revision-sha256")
     parser.add_argument("--reviewed-annotations", type=Path)
     parser.add_argument("--reviewed-annotations-sha256")
+    parser.add_argument("--candidate-fact-exports", type=Path)
+    parser.add_argument("--candidate-fact-exports-sha256")
     parser.add_argument("--reviewed-headers", type=Path)
     parser.add_argument("--reviewed-headers-sha256")
     parser.add_argument("--ingestion-projection-postgres-config", type=Path)
@@ -3378,6 +3380,10 @@ def main() -> int:
         parser.error("ingestion revision activation is temporary-LAN diagnostic only")
     if bool(args.reviewed_annotations) != bool(args.reviewed_annotations_sha256):
         parser.error("reviewed annotations path and sha256 must be supplied together")
+    if bool(args.candidate_fact_exports) != bool(args.candidate_fact_exports_sha256):
+        parser.error("candidate fact exports path and sha256 must be supplied together")
+    if args.candidate_fact_exports and (not args.temporary_lan_diagnostic or not args.ingestion_revision):
+        parser.error("candidate fact exports require a temporary-LAN ingestion revision")
     if args.reviewed_annotations and (not args.temporary_lan_diagnostic or not args.ingestion_revision):
         parser.error("reviewed annotations require a temporary-LAN ingestion revision")
     if bool(args.reviewed_headers) != bool(args.reviewed_headers_sha256):
@@ -3467,6 +3473,12 @@ def main() -> int:
                     else None
                 ),
             )
+            if args.candidate_fact_exports is not None:
+                from formowl_mail.issue56_sealed_source import bind_issue56_candidate_fact_exports
+
+                ingestion_revision = bind_issue56_candidate_fact_exports(ingestion_revision,
+                    configuration_path=args.candidate_fact_exports,
+                    expected_sha256=args.candidate_fact_exports_sha256)
             if args.reviewed_headers is not None:
                 from formowl_mail.issue56_sealed_source import bind_issue56_reviewed_headers
 

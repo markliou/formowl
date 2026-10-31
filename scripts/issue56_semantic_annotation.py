@@ -767,6 +767,10 @@ def project_command(args) -> int:
 
     statuses, validations, retained, row_coverage = (collections.Counter() for _ in range(4))
     labels, row_count, row_hash = {}, 0, hashlib.sha256()
+    field_coverage = {prop: {"rows": 0, "values": 0, "units": set(), "conflicting_rows": 0,
+                             "document_header_conflict_rows": 0, "conflicting_identity_groups": 0}
+                      for prop in mapping.data["properties"]}
+    identity_values, identity_rows = {}, {}
     with (dest / "rows.partial.jsonl").open("xb") as output:
         os.fchmod(output.fileno(), 0o600)
         for unit_id, unit in sorted(units.items()):
@@ -812,12 +816,33 @@ def project_command(args) -> int:
             retained[state] += len(members)
             row_coverage[state] += len(projected)
             for row in projected:
+                for prop, coverage in field_coverage.items():
+                    fields = row["fields"].get(prop, [])
+                    coverage["rows"] += bool(fields)
+                    coverage["values"] += len(fields)
+                    if fields:
+                        coverage["units"].add(unit_id)
+                    coverage["conflicting_rows"] += prop in row["conflicting_properties"]
+                    coverage["document_header_conflict_rows"] += prop in row.get("document_header_conflicts", {})
+                for identity in row["identity_candidates"]:
+                    key = identity["candidate_identity_id"]
+                    identity_rows.setdefault(key, set()).add(row["row_id"])
+                    for prop, fields in row["fields"].items():
+                        for field in fields:
+                            slot = (key, prop, sha256_json(field["qualifiers"]))
+                            identity_values.setdefault(slot, set()).add(sha256_json([field["value"], field["unit"]]))
                 line = encode(row)
                 output.write(line)
                 row_hash.update(line)
                 row_count += 1
     (dest / "rows.partial.jsonl").rename(dest / "rows.jsonl")
     write("labels.jsonl", b"".join(encode(labels[k]) for k in sorted(labels)))
+    conflicting_identities = {(key, prop) for (key, prop, _), values in identity_values.items()
+                              if len(identity_rows[key]) > 1 and len(values) > 1}
+    for _, prop in conflicting_identities:
+        field_coverage[prop]["conflicting_identity_groups"] += 1
+    for coverage in field_coverage.values():
+        coverage["units"] = len(coverage["units"])
     manifest = {"artifact_id": "formowl_candidate_fact_export_v1", "review_status": "pending_review",
         "semantic_correctness_verified": False, "run_id": args.run_id,
         "source_revision": config["source_revision"], "scope_sha256": scope_hash,
@@ -825,6 +850,13 @@ def project_command(args) -> int:
         "ignored_progress_tail_bytes": len(observed) - boundary, "unit_count": len(units),
         "units_by_status": dict(statuses), "units_by_validation": dict(validations),
         "retained_atoms_by_validation": dict(retained), "rows_by_validation": dict(row_coverage),
+        "field_coverage": field_coverage,
+        "coverage_denominator": "all_exported_candidate_rows_including_singleton_headers",
+        "conflict_counts": {
+            "row_properties": sum(c["conflicting_rows"] for c in field_coverage.values()),
+            "document_header_properties": sum(c["document_header_conflict_rows"] for c in field_coverage.values()),
+            "linked_identity_properties": len(conflicting_identities)},
+        "linked_identity_group_count": sum(len(rows) > 1 for rows in identity_rows.values()),
         "scope_complete": validations["complete"] == len(units), "row_count": row_count,
         "rows_sha256": "sha256:" + row_hash.hexdigest()}
     write("manifest.json", encode(manifest))
