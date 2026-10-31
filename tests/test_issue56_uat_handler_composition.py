@@ -4,6 +4,7 @@ import json
 import hashlib
 import copy
 import shutil
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -7021,7 +7022,7 @@ class CandidateSubjectRuntimeTests(unittest.TestCase):
             bound, _ = self._bound(directory)
             for damage in ("quote", "permission", "surface"):
                 with self.subTest(damage=damage):
-                    rows = json.loads(json.dumps(bound.candidate_fact_rows))
+                    rows = json.loads(json.dumps(list(bound.candidate_fact_rows)))
                     source = rows[0]["subject_identity"]["sources"][0]
                     if damage == "quote":
                         source["evidence_spans"][0]["quote"] = "invented identity"
@@ -7032,6 +7033,148 @@ class CandidateSubjectRuntimeTests(unittest.TestCase):
                     damaged = replace(bound, candidate_fact_rows=tuple(rows))
                     with self.assertRaises(ContractValidationError):
                         loader._build_source_start_semantic_handler(damaged, mail_tool=False)(self._arguments())
+
+
+class CandidateFactDiskIndexTests(unittest.TestCase):
+    _fixture = CandidateFactRuntimeTests._fixture
+
+    @staticmethod
+    def _reseal(config_path, export, count):
+        manifest_path = export / "manifest.json"
+        manifest = json.loads(manifest_path.read_bytes())
+        digest = hashlib.sha256()
+        with (export / "rows.jsonl").open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        manifest.update(rows_sha256="sha256:" + digest.hexdigest(), row_count=count)
+        manifest_path.write_text(json.dumps(manifest))
+        config = json.loads(config_path.read_bytes())
+        config["exports"][0]["manifest_sha256"] = "sha256:" + hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        config_path.write_text(json.dumps(config))
+        return "sha256:" + hashlib.sha256(config_path.read_bytes()).hexdigest()
+
+    def test_streamed_above_old_cap_indexes_exact_same_row_identities_without_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            revision, config, _, export, _ = self._fixture(Path(directory))
+            rows_path = export / "rows.jsonl"
+            original = rows_path.read_bytes()
+            filler = json.loads(original.splitlines()[0])
+            filler["diagnostic_padding"] = "x" * (16 * 1024)
+            with rows_path.open("wb") as output:
+                for index in range(1100):
+                    filler["row_id"] = f"factrow_clienta_extra_{index}"
+                    filler["fields"]["asset_code"][0]["value"] = f"Clienta-{index:06d}"
+                    output.write(json.dumps(filler).encode() + b"\n")
+                output.write(original)
+            self.assertGreater(rows_path.stat().st_size, 16 * 1024 * 1024)
+            config_hash = self._reseal(config, export, 1102)
+            read_bytes = Path.read_bytes
+            def no_whole_rows_read(path):
+                self.assertNotEqual(path, rows_path, "rows must stream, not read_bytes")
+                return read_bytes(path)
+            with patch.object(Path, "read_bytes", no_whole_rows_read), self.assertLogs(
+                    "formowl_mail.issue56_sealed_source", level="WARNING") as logs:
+                bound = issue56_sealed_source.bind_issue56_candidate_fact_exports(
+                    revision, configuration_path=config, expected_sha256=config_hash)
+            self.assertEqual(len(bound.candidate_fact_rows), 1102)
+            self.assertNotIsInstance(bound.candidate_fact_rows, (list, tuple))
+            self.assertIn("estimated_index_bytes", " ".join(logs.output))
+            self.assertNotIn("ZX-742", " ".join(logs.output))
+            self.assertNotIn(directory, " ".join(logs.output))
+            lookup = issue56_sealed_source.lookup_issue56_candidate_fact_rows
+            selected = lookup(bound, [" ＺＸ-７４２ ", "r-007"])
+            self.assertEqual(len(selected), 1)
+            selected[0]["fields"]["target_date"][0]["value"] = "locally mutated"
+            self.assertEqual(lookup(bound, ["ZX-742", "R-007"])[0]["fields"]["target_date"][0]["value"], "2031-04-02")
+            self.assertEqual(len(lookup(bound, ["ZX-742"])), 2)
+            self.assertEqual(len(lookup(bound, ["R-008"])), 1)
+            self.assertFalse(lookup(bound, ["Clienta-000000", "R-008"]))
+            self.assertFalse(lookup(bound, ["ZX742"]))
+            self.assertFalse(lookup(bound, ["ZX-742"], deadline_monotonic=0))
+
+    def test_offset_row_tamper_and_io_failure_use_existing_guarded_source_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            revision, config, config_hash, export, _ = self._fixture(Path(directory))
+            bound = issue56_sealed_source.bind_issue56_candidate_fact_exports(
+                revision, configuration_path=config, expected_sha256=config_hash)
+            handler = loader._build_source_start_semantic_handler(bound, mail_tool=False)
+            arguments = {"query_text": "Find Clienta R-008 expected date", "required_terms": ["R-008"],
+                "requester_user_id": loader.APPROVER_ACTOR, "workspace_id": loader.WORKSPACE_ID,
+                "session_id": "clienta-disk-fallback", "page_size": 10}
+            self.assertIn("candidate_fact_group", json.dumps(handler(arguments)))
+            rows_path = export / "rows.jsonl"
+            info = rows_path.lstat()
+            sealed_identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            raw = rows_path.read_bytes()
+            offset = len(raw.splitlines(keepends=True)[0])
+            with rows_path.open("r+b") as output:
+                output.seek(offset)
+                output.write(raw[offset:].replace(b"2031-04-09", b"2031-04-08"))
+            for mode in ("metadata", "row_sha", "missing"):
+                if mode == "missing":
+                    rows_path.unlink()
+                stable_identity = (patch.object(issue56_sealed_source, "_candidate_fact_file_identity",
+                    return_value=sealed_identity, create=True) if mode == "row_sha" else nullcontext())
+                with self.subTest(mode=mode), stable_identity:
+                    if mode == "row_sha":
+                        # Hold only metadata stable: the offset row's own sealed
+                        # hash must still reject changed bytes before projection.
+                        with self.assertRaisesRegex(ContractValidationError, "row seal mismatch"):
+                            bound.candidate_fact_rows[1]
+                    self.assertFalse(issue56_sealed_source.lookup_issue56_candidate_fact_rows(bound, ["ZX-742"]))
+                    result = handler(arguments)
+                    self.assertTrue(result["citations"], result)
+                    self.assertNotIn("candidate_fact_group", json.dumps(result))
+                    self.assertNotEqual(result["status"], "not_found")
+
+    def test_gib_file_and_total_preflight_reject_sparse_files_without_reading_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            revision, config, config_hash, export, _ = self._fixture(Path(directory))
+            rows_path = export / "rows.jsonl"
+            with rows_path.open("r+b") as output:
+                output.truncate(1024 ** 3 + 1)
+            binder = issue56_sealed_source.bind_issue56_candidate_fact_exports
+            with self.assertRaisesRegex(ContractValidationError, "unavailable or oversized"):
+                binder(revision, configuration_path=config, expected_sha256=config_hash)
+            with rows_path.open("r+b") as output:
+                output.truncate(600 * 1024 ** 2)
+            second = Path(directory) / "second-export"
+            second.mkdir()
+            for name in ("manifest.json", "mapping.snapshot.json"):
+                shutil.copyfile(export / name, second / name)
+            with (second / "rows.jsonl").open("wb") as output:
+                output.truncate(600 * 1024 ** 2)
+            data = json.loads(config.read_bytes())
+            data["exports"].append({**data["exports"][0], "manifest_path": str(second / "manifest.json")})
+            config.write_text(json.dumps(data))
+            config_hash = "sha256:" + hashlib.sha256(config.read_bytes()).hexdigest()
+            original_open = Path.open
+            def no_rows_open(path, *args, **kwargs):
+                self.assertNotEqual(path.name, "rows.jsonl", "size preflight must precede row reads")
+                return original_open(path, *args, **kwargs)
+            with patch.object(Path, "open", no_rows_open), self.assertRaisesRegex(
+                    ContractValidationError, "export set exceeds the bounded intake"):
+                binder(revision, configuration_path=config, expected_sha256=config_hash)
+
+    def test_index_keeps_128_matched_rows_limit_and_duplicate_id_rejection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            revision, config, _, export, _ = self._fixture(Path(directory))
+            row = json.loads((export / "rows.jsonl").read_bytes().splitlines()[0])
+            binder = issue56_sealed_source.bind_issue56_candidate_fact_exports
+            lookup = issue56_sealed_source.lookup_issue56_candidate_fact_rows
+            for count in (128, 129):
+                with (export / "rows.jsonl").open("wb") as output:
+                    for index in range(count):
+                        row["row_id"] = f"factrow_clienta_{index}"
+                        output.write(json.dumps(row).encode() + b"\n")
+                config_hash = self._reseal(config, export, count)
+                bound = binder(revision, configuration_path=config, expected_sha256=config_hash)
+                self.assertEqual(len(lookup(bound, ["ZX-742"])), 128 if count == 128 else 0)
+            with (export / "rows.jsonl").open("ab") as output:
+                output.write(json.dumps(row).encode() + b"\n")
+            config_hash = self._reseal(config, export, 130)
+            with self.assertRaisesRegex(ContractValidationError, "row binding is invalid"):
+                binder(revision, configuration_path=config, expected_sha256=config_hash)
 
 
 def _source_start_preparation_fixture(

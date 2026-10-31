@@ -10,6 +10,7 @@ canonical graph state.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from builtins import BaseExceptionGroup
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
@@ -19,10 +20,13 @@ from datetime import datetime, timezone
 import hashlib
 import heapq
 import json
+import logging
+import os
 from pathlib import Path
 import re
 import stat
 import sqlite3
+import sys
 import threading
 import time
 import unicodedata
@@ -117,6 +121,7 @@ _MAX_SOURCE_BYTES = 1024 * 1024 * 1024
 _MAX_INGESTION_REVISION_SOURCE_BYTES = 4 * 1024 * 1024 * 1024
 _MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
 _MAX_SAFE_BYTES = 16 * 1024 * 1024
+_MAX_CANDIDATE_FACT_ROW_BYTES = 1024 * 1024 * 1024
 # Per-message parent maps grow with completed mail jobs, not small metadata.
 # Keep their JSON intake finite and separate from every generic manifest cap.
 _MAX_INGESTION_PARENT_BINDING_BYTES = 256 * 1024 * 1024
@@ -316,7 +321,7 @@ class Issue56IngestionRevision:
     reviewed_header_column_hashes: frozenset[str] = field(default=frozenset(), repr=False)
     reviewed_header_pin: str | None = None
     # Operator-sealed candidate exports remain unreviewed and default off.
-    candidate_fact_rows: tuple[Mapping[str, Any], ...] = field(default=(), repr=False)
+    candidate_fact_rows: Sequence[Mapping[str, Any]] = field(default=(), repr=False)
     candidate_fact_pin: str | None = None
 
     @property
@@ -1053,6 +1058,70 @@ def _validate_candidate_fact_subject(row: Mapping[str, Any]) -> None:
             raise ContractValidationError("candidate fact subject source binding is invalid")
 
 
+def _candidate_fact_file_identity(info):
+    if not stat.S_ISREG(info.st_mode):
+        raise ContractValidationError("candidate fact rows are not a regular file")
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _candidate_fact_normalize(value):
+    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+def _candidate_fact_identity_values(row, properties, deadline=None):
+    subject = row.get("subject_identity")
+    if subject is not None:
+        yield subject["value"]
+    for prop in properties:
+        for fact_field in row["fields"].get(prop, ()):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("candidate fact deadline")
+            if isinstance(fact_field.get("value"), str):
+                yield _candidate_fact_normalize(fact_field["value"])
+
+
+@dataclass(frozen=True)
+class _CandidateFactRows(Sequence[Mapping[str, Any]]):
+    """Private lazy row references and startup postings; never cache row objects."""
+    exports: tuple
+    references: tuple
+    postings: Mapping[str, tuple[int, ...]]
+
+    def __len__(self):
+        return len(self.references)
+
+    def _unchanged(self, export_index):
+        path, identity, _ = self.exports[export_index]
+        if _candidate_fact_file_identity(path.lstat()) != identity:
+            raise ContractValidationError("candidate fact rows changed after binding")
+
+    def _read(self, index, deadline=None):
+        export_index, offset, length, digest = self.references[index]
+        path, identity, properties = self.exports[export_index]
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("candidate fact deadline")
+        self._unchanged(export_index)
+        with path.open("rb") as source:
+            if _candidate_fact_file_identity(os.fstat(source.fileno())) != identity:
+                raise ContractValidationError("candidate fact rows changed after binding")
+            source.seek(offset)
+            raw = source.read(length)
+            if len(raw) != length or _sha256_bytes(raw) != digest:
+                raise ContractValidationError("candidate fact row seal mismatch")
+            if _candidate_fact_file_identity(os.fstat(source.fileno())) != identity:
+                raise ContractValidationError("candidate fact rows changed during read")
+        self._unchanged(export_index)
+        row = json.loads(raw, object_pairs_hook=_unique_json_object)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("candidate fact deadline")
+        return {**row, "_identity_properties": properties}
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return tuple(self._read(i) for i in range(*index.indices(len(self))))
+        return self._read(index)
+
+
 def bind_issue56_candidate_fact_exports(
     revision: Issue56IngestionRevision, *, configuration_path: Path, expected_sha256: str,
 ) -> Issue56IngestionRevision:
@@ -1071,7 +1140,7 @@ def bind_issue56_candidate_fact_exports(
     exports = config.get("exports")
     if not isinstance(exports, list) or not 1 <= len(exports) <= 128:
         raise ContractValidationError("candidate fact exports are invalid")
-    rows, row_ids, total_row_bytes = [], set(), 0
+    pending, total_row_bytes = [], 0
     for entry in exports:
         path = Path(entry["manifest_path"])
         _, manifest = _read_sealed_json(path, expected_sha256=entry["manifest_sha256"],
@@ -1089,60 +1158,103 @@ def bind_issue56_candidate_fact_exports(
         # The annotation snapshot is deliberately separate from the serving pin.
         _require_sha256(manifest.get("source_revision"), "candidate_fact_annotation_revision_invalid")
         rows_path = path.parent / "rows.jsonl"
-        if rows_path.is_symlink() or not rows_path.is_file() or rows_path.stat().st_size > _MAX_SAFE_BYTES:
+        if (rows_path.is_symlink() or not rows_path.is_file()
+                or rows_path.stat().st_size > _MAX_CANDIDATE_FACT_ROW_BYTES):
             raise ContractValidationError("candidate fact rows are unavailable or oversized")
-        raw = rows_path.read_bytes()
-        total_row_bytes += len(raw)
-        if total_row_bytes > _MAX_SAFE_BYTES:
+        identity = _candidate_fact_file_identity(rows_path.lstat())
+        total_row_bytes += identity[2]
+        if total_row_bytes > _MAX_CANDIDATE_FACT_ROW_BYTES:
             raise ContractValidationError("candidate fact export set exceeds the bounded intake")
-        if _sha256_bytes(raw) != manifest.get("rows_sha256"):
-            raise ContractValidationError("candidate fact rows seal mismatch")
-        exported = [json.loads(line, object_pairs_hook=_unique_json_object) for line in raw.splitlines()]
-        if len(exported) != manifest.get("row_count"):
-            raise ContractValidationError("candidate fact row count mismatch")
-        identity_properties = {prop for group in mapping.data.get("identity_groups", ()) for prop in group["properties"]}
-        for row in exported:
-            if (row.get("artifact_id") != "formowl_candidate_fact_row_v1"
+        properties = tuple(sorted({prop for group in mapping.data.get("identity_groups", ()) for prop in group["properties"]}))
+        pending.append((rows_path, identity, properties, manifest))
+    # Preflight the entire set before opening even the first potentially huge file.
+    references, postings, row_ids = [], {}, set()
+    for export_index, (rows_path, identity, properties, manifest) in enumerate(pending):
+        digest, offset, count = hashlib.sha256(), 0, 0
+        with rows_path.open("rb") as source:
+            if _candidate_fact_file_identity(os.fstat(source.fileno())) != identity:
+                raise ContractValidationError("candidate fact rows changed during binding")
+            for raw in source:
+                digest.update(raw)
+                if offset + len(raw) > identity[2]:
+                    raise ContractValidationError("candidate fact rows changed during binding")
+                try:
+                    row = json.loads(raw, object_pairs_hook=_unique_json_object)
+                except (UnicodeError, ValueError) as exc:
+                    raise ContractValidationError("candidate fact rows JSON is invalid") from exc
+                if (row.get("artifact_id") != "formowl_candidate_fact_row_v1"
                     or row.get("review_status") != "pending_review"
                     or row.get("semantic_correctness_verified") is not False
                     or row.get("source_revision_fingerprint") != manifest["source_revision"]
-                    or row.get("mapping_fingerprint") != mapping.fingerprint
+                    or row.get("mapping_fingerprint") != manifest["mapping_fingerprint"]
                     or row.get("row_id") in row_ids or not isinstance(row.get("fields"), dict)):
-                raise ContractValidationError("candidate fact row binding is invalid")
-            # Keep each export's declared identity vocabulary, without new aliases.
-            _validate_candidate_fact_subject(row)
-            rows.append({**row, "_identity_properties": tuple(sorted(identity_properties))})
-            row_ids.add(row["row_id"])
-    return replace(revision, candidate_fact_rows=tuple(rows),
+                    raise ContractValidationError("candidate fact row binding is invalid")
+                _validate_candidate_fact_subject(row)
+                for value in set(_candidate_fact_identity_values(row, properties)):
+                    postings.setdefault(value, []).append(len(references))
+                references.append((export_index, offset, len(raw), _sha256_bytes(raw)))
+                row_ids.add(row["row_id"])
+                offset += len(raw)
+                count += 1
+            if (_candidate_fact_file_identity(os.fstat(source.fileno())) != identity
+                    or _candidate_fact_file_identity(rows_path.lstat()) != identity):
+                raise ContractValidationError("candidate fact rows changed during binding")
+        if "sha256:" + digest.hexdigest() != manifest.get("rows_sha256"):
+            raise ContractValidationError("candidate fact rows seal mismatch")
+        if count != manifest.get("row_count") or offset != identity[2]:
+            raise ContractValidationError("candidate fact row count mismatch")
+    rows = _CandidateFactRows(tuple(item[:3] for item in pending), tuple(references),
+                              {value: tuple(indexes) for value, indexes in postings.items()})
+    # An approximate Python object footprint, not RSS; no identities or paths logged.
+    estimated = sys.getsizeof(rows.references) + sum(sys.getsizeof(ref) + sum(sys.getsizeof(v) for v in ref)
+                                                   for ref in rows.references)
+    estimated += sys.getsizeof(rows.postings) + sum(sys.getsizeof(value) + sys.getsizeof(indexes)
+        + sum(sys.getsizeof(index) for index in indexes) for value, indexes in rows.postings.items())
+    logging.getLogger(__name__).warning("candidate_fact_index exports=%d rows=%d identities=%d postings=%d "
+        "rows_bytes=%d estimated_index_bytes=%d", len(rows.exports), len(rows), len(rows.postings),
+        sum(len(indexes) for indexes in rows.postings.values()), total_row_bytes, estimated)
+    return replace(revision, candidate_fact_rows=rows,
         candidate_fact_pin=expected_sha256)
 
 
 def lookup_issue56_candidate_fact_rows(revision: Issue56IngestionRevision, required_terms: Sequence[str], *,
                                       deadline_monotonic: float | None = None):
     """Exact identity lookup only; unsupported/missing terms leave ordinary retrieval intact."""
-    def normalize(value):
-        return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
     if not required_terms:
         return ()
-    terms = {normalize(term) for term in required_terms}
-    selected = []
-    for row in revision.candidate_fact_rows:
-        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
-            return ()
-        values = set()
-        subject = row.get("subject_identity")
-        if subject is not None:
-            values.add(subject["value"])
-        for prop in row["_identity_properties"]:
-            for fact_field in row["fields"].get(prop, ()):
+    terms = {_candidate_fact_normalize(term) for term in required_terms}
+    rows, selected = revision.candidate_fact_rows, []
+    try:
+        if isinstance(rows, _CandidateFactRows):
+            posting_lists = sorted((rows.postings.get(term, ()) for term in terms), key=len)
+            if not posting_lists[0]:
+                return ()
+            indexes = []
+            for index in posting_lists[0]:
                 if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                     return ()
-                if isinstance(fact_field.get("value"), str):
-                    values.add(normalize(fact_field["value"]))
-        if terms <= values:
-            selected.append(row)
-            if len(selected) > 128:
-                return ()
+                if all((position := bisect_left(other, index)) < len(other) and other[position] == index
+                       for other in posting_lists[1:]):
+                    indexes.append(index)
+                    if len(indexes) > 128:
+                        return ()
+            selected = [rows._read(index, deadline_monotonic) for index in indexes]
+            for export_index in {rows.references[index][0] for index in indexes}:
+                rows._unchanged(export_index)
+        else:
+            # Explicit in-memory fixture replacements retain the same exact contract.
+            for row in rows:
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    return ()
+                if terms <= set(_candidate_fact_identity_values(row, row["_identity_properties"], deadline_monotonic)):
+                    selected.append(row)
+                    if len(selected) > 128:
+                        return ()
+    except (OSError, ValueError, ContractValidationError):
+        # A changed/unavailable disk row cannot lend candidate values to this lookup.
+        return ()
+    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+        return ()
     return tuple(selected)
 
 
