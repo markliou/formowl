@@ -208,12 +208,99 @@ class AtomValidationTests(unittest.TestCase):
     def record(quote, **kwargs):
         return _record(evidence=[{"observation_id": "obs_body", "quote": quote}], **kwargs)
 
-    def test_repeated_short_quote_uses_the_unique_same_atom_anchor(self):
+    def test_containment_cannot_choose_between_two_short_hits_on_the_same_row(self):
         result = self.read("Clienta qty 2; OrgB qty 2", [self.record("2", subject="Clienta",
             subject_quote={"observation_id": "obs_body", "quote": "Clienta qty 2"})])
-        span = result.candidate_atoms[0].properties["evidence_spans"][0]
-        self.assertEqual((span["start"], span["end"]), (12, 13))
+        self.assertEqual(result.candidate_atoms, [])
+        self.assertEqual(result.read_ledger.value["rejected_reasons"], {"exact_span_mismatch": 1})
+
+    def test_optional_repeated_type_label_is_cleared_without_losing_the_named_assertion(self):
+        text = "Kind\nKind\nWidget-A stock 7\nWidget-A elsewhere"
+        record = self.record("Widget-A stock 7", subject="Widget-A", subject_label="Kind",
+            subject_quote={"observation_id": "obs_body", "quote": "Widget-A stock 7"})
+        adapter = Adapter(_sources(_observation("obs_body", text)))
+        data = adapter.convert({"read_status": "complete", "records": [record]})
+        self.assertIsNone(data["identities"][0]["type_surface"])
+        self.assertEqual(adapter.counts["invented_label_cleared"], 1)
+        self.assertEqual(adapter.counts["invented_subject_cleared"], 0)
+        result = self.read(text, [record])
+        atom = result.candidate_atoms[0]
+        self.assertEqual(atom.properties["assertion"]["target"], "Widget-A")
+        self.assertEqual(atom.properties["target_identity"]["value_surface"], "Widget-A")
+        self.assertIsNone(atom.properties["identity_bindings"][0].get("type_surface"))
         self.assertEqual(result.read_ledger.value["annotation_status"], "annotated")
+
+    def test_optional_label_removal_cannot_hide_a_required_subject_surface_failure(self):
+        text = "Kind\nKind\nWidget-A stock 7\nWidget-A elsewhere\nReady"
+        record = self.record("Widget-A stock 7", subject="Widget-A", subject_label="Kind",
+            subject_quote={"observation_id": "obs_body", "quote": "Ready"})
+        adapter = Adapter(_sources(_observation("obs_body", text)))
+        data = adapter.convert({"records": [record]})
+        self.assertIsNone(data["identities"][0]["type_surface"])
+        self.assertEqual(data["identities"][0]["value_surface"], "Widget-A")
+        self.assertEqual(adapter.counts["invented_subject_cleared"], 0)
+        result = self.read(text, [record])
+        self.assertEqual(result.candidate_atoms, [])
+        self.assertEqual(result.read_ledger.value["rejected_reasons"], {"identity_surface_mismatch": 1})
+
+    def test_supported_and_uniquely_relocated_optional_labels_are_retained(self):
+        for text, quote in (("Kind Widget-A stock 7", "Kind Widget-A stock 7"),
+                            ("Kind\nWidget-A stock 7", "Widget-A stock 7")):
+            with self.subTest(text=text):
+                record = self.record("Widget-A stock 7", subject="Widget-A", subject_label="Kind",
+                    subject_quote={"observation_id": "obs_body", "quote": quote})
+                adapter = Adapter(_sources(_observation("obs_body", text)))
+                data = adapter.convert({"records": [record]})
+                self.assertEqual(data["identities"][0]["type_surface"], "Kind")
+                self.assertEqual(adapter.counts["invented_label_cleared"], 0)
+                result = self.read(text, [record])
+                self.assertEqual(result.candidate_atoms[0].properties["target_identity"]["type_surface"], "Kind")
+
+    def test_zero_hit_and_multiline_anchors_do_not_veto_a_unique_same_row_hit(self):
+        for separator in ("\n", "\r\n", "\r"):
+            with self.subTest(separator=repr(separator)):
+                text = separator.join(("Other qty 7 due 2032-06-09", "Header", "Section",
+                                       "Widget-A " + "x" * 180 + " qty 7 due 2032-06-09"))
+                record = self.record("7", subject="Widget-A", subject_label="Header",
+                    subject_quote={"observation_id": "obs_body", "quote": "Widget-A"}, times=[{
+                        "role": "due", "raw": "2032-06-09", "normalized": "2032-06-09",
+                        "precision": "day", "quote": {"observation_id": "obs_body", "quote": "2032-06-09"}}])
+                record["evidence"].append({"observation_id": "obs_body", "quote": "Header" + separator + "Section"})
+                result = self.read(text, [record])
+                self.assertEqual(result.read_ledger.value["annotation_status"], "annotated")
+                atom = result.candidate_atoms[0]
+                for span, quote in ((atom.properties["evidence_spans"][0], "7"),
+                                    (atom.properties["times"][0]["evidence_spans"][0], "2032-06-09")):
+                    self.assertEqual((span["start"], span["end"], span["occurrence_index"]),
+                                     (text.rindex(quote), text.rindex(quote) + len(quote), 1))
+                    self.assertEqual(span["observation_hash"], sha256_json(_observation("obs_body", text).to_dict()))
+                self.assertEqual(atom.properties["target_identity"]["value_surface"], "Widget-A")
+
+    def test_temporal_only_unique_quotes_cannot_anchor_repeated_evidence(self):
+        text = "Other qty 7\nWidget-A qty 7 due 2032-06-09"
+        record = self.record("7", times=[{"role": "due", "raw": "2032-06-09",
+            "normalized": None, "precision": "day", "quote": {
+                "observation_id": "obs_body", "quote": "Widget-A qty 7 due 2032-06-09"}}])
+        result = self.read(text, [record])
+        self.assertEqual(result.candidate_atoms, [])
+        self.assertEqual(result.read_ledger.value["rejected_reasons"], {"exact_span_mismatch": 1})
+        def invalid_time_address(data):
+            data["atoms"][0]["times"][0]["evidence"][0]["observation_id"] = "outside"
+        with self.assertRaises(ContractValidationError):
+            self.read(text, [record], mutate=invalid_time_address)
+        self.assertEqual(self.stores["candidate_atom_store"].list(), [])
+
+    def test_repeated_identity_ignores_unrelated_label_anchor_and_keeps_original_offsets(self):
+        text = "Header\nOther Widget-A\nSlot-R " + "x" * 180 + " Widget-A"
+        result = self.read(text, [self.record("Slot-R", subject="Widget-A", subject_label="Header",
+            subject_quote={"observation_id": "obs_body", "quote": "Widget-A"})])
+        self.assertEqual(result.read_ledger.value["annotation_status"], "annotated")
+        atom = result.candidate_atoms[0]
+        for identity in (atom.properties["target_identity"], atom.properties["identity_bindings"][0]):
+            self.assertEqual(identity["value_surface"], "Widget-A")
+            span = identity["evidence_spans"][0]
+            self.assertEqual((span["start"], span["end"], span["occurrence_index"]),
+                             (text.rindex("Widget-A"), len(text), 1))
 
     def test_distant_same_row_quotes_keep_original_identity_time_and_offsets(self):
         for separator in ("\n", "\r\n", "\r"):

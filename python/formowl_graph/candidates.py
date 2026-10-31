@@ -251,7 +251,7 @@ def _validate_no_raw_reference(value: str, field_name: str) -> None:
 
 
 _SEMANTIC_READ_PROFILE = "offline_complete_source_unit_semantics_v8"
-SEMANTIC_VALIDATION_POLICY_ID = "atom_subset_exact_row_anchors_segments_v2"
+SEMANTIC_VALIDATION_POLICY_ID = "atom_subset_exact_supported_row_anchors_segments_v3"
 SEMANTIC_ANCHOR_MAX_DISTANCE = 128  # Legacy policy bound; same-row resolution has no distance cutoff.
 SEMANTIC_SEGMENT_MAX_COUNT = 8
 SEMANTIC_SEGMENT_MAX_SPAN = 256
@@ -516,11 +516,15 @@ def _semantic_span_text(span: Any, sources: Mapping[str, dict[str, Any]]) -> tup
 
 
 def _semantic_anchors(raw: Mapping[str, Any], sources: Mapping[str, dict[str, Any]]) -> list[dict]:
-    """Only independently unique literal quotes from this atom, never inferred/resolved anchors."""
+    """Only independently unique identity/evidence quotes from this atom may anchor."""
     evidence = list(raw["evidence"]) if isinstance(raw["evidence"], list) else []
-    for value in [raw["target_identity"], *raw["identity_bindings"], *raw["times"]]:
+    for value in [raw["target_identity"], *raw["identity_bindings"]]:
         if isinstance(value, dict) and isinstance(value.get("evidence"), list):
             evidence.extend(value["evidence"])
+    # Temporal addresses remain fatal preflight checks, but never anchor authority.
+    for temporal in raw["times"]:
+        for span in temporal["evidence"]:
+            _semantic_span_text(span, sources)
     anchors = []
     for span in evidence:
         _, text = _semantic_span_text(span, sources)
@@ -580,21 +584,19 @@ def _semantic_atom_shape(raw: Mapping[str, Any], focus_ids: Sequence[str]) -> No
 
 
 def _anchored_match(matches: list, anchors: list[dict], text: str) -> Any:
-    """Independent anchors must agree on one contained hit or one same-line hit."""
+    """Hit-bearing single-line anchors must agree on exactly one hit in their row."""
     selected = set()
     for anchor in anchors:
         start, end = anchor["start"], anchor["end"]
         if "\r" in text[start:end] or "\n" in text[start:end]:
-            return None
-        contained = [i for i, match in enumerate(matches) if start <= match.start() and match.end() <= end]
-        if contained:
-            hits = contained
-        else:
-            line_start = max(text.rfind("\r", 0, start), text.rfind("\n", 0, start)) + 1
-            line_end = min((i for i in (text.find("\r", end), text.find("\n", end)) if i >= 0),
-                           default=len(text))
-            hits = [i for i, match in enumerate(matches)
-                    if line_start <= match.start() and match.end() <= line_end]
+            continue
+        line_start = max(text.rfind("\r", 0, start), text.rfind("\n", 0, start)) + 1
+        line_end = min((i for i in (text.find("\r", end), text.find("\n", end)) if i >= 0),
+                       default=len(text))
+        hits = [i for i, match in enumerate(matches)
+                if line_start <= match.start() and match.end() <= line_end]
+        if not hits:
+            continue
         if len(hits) != 1:
             return None
         selected.add(hits[0])

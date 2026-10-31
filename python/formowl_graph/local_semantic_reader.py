@@ -31,7 +31,7 @@ from typing import Any, Mapping
 from formowl_contract import ContractValidationError, sha256_json
 from .candidates import SEMANTIC_SEGMENT_MAX_COUNT
 
-ADAPTER_ID = "local_flat_reader_v10"
+ADAPTER_ID = "local_flat_reader_v11"
 TIME_ROLES = ["asserted", "effective", "due", "planned", "forecast", "actual", "requested",
               "valid_from", "valid_to", "superseded", "unknown"]
 RECORD_TYPES = ["entity", "claim", "event", "state_transition"]
@@ -263,8 +263,8 @@ class Adapter:
                             id_spans = id_spans + [found]
                             label = found["quote"]
                             self.counts["surface_located"] += 1
-                        elif not self.present(label):
-                            label = None  # an unknown type_surface is null, never invented
+                        else:
+                            label = None  # optional types without their own evidence stay unknown
                             self.counts["invented_label_cleared"] += 1
                 for name in (value, label if value is not None and isinstance(label, str) and label.strip() else None):
                     if name is not None and not any(name in s["quote"] for s in id_spans if isinstance(s["quote"], str)):
