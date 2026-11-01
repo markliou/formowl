@@ -11757,12 +11757,185 @@ def _final_agent_message(
     return messages[-1]
 
 
+_CANDIDATE_FACT_TABLE_MAX_BYTES = 10 * 1024
+
+
+def _candidate_fact_table_status(reason, **fields):
+    # One early request-local cell survives later reader detail exhaustion.
+    # Observer faults must never replace source validation or a business result.
+    try:
+        from formowl_retrieval.gateway import _SOURCE_PHASE_TRACE, _trace
+        trace = _SOURCE_PHASE_TRACE.get()
+        if trace is None:
+            return
+        cell = getattr(trace, "_candidate_fact_status_cell", None)
+        if cell is None:
+            cell = _trace(trace, "phase", "project", candidate_fact_status=True)
+            trace._candidate_fact_status_cell = cell
+        if reason in {"identity_only_rows_omitted", "table_rows_truncated_to_budget"}:
+            fields["identity_only_notice" if reason == "identity_only_rows_omitted" else "truncation_notice"] = reason
+        _trace(cell, "finish", state="declined" if reason else "completed", fallback_reason=reason, **fields)
+    except Exception:
+        return
+
+
+def _candidate_fact_table_refs(item, allowed):
+    """Recognize only the bounded server table with a root-bound citation closure."""
+    try:
+        context = item["source_context"]
+        label, raw = item["snippet"].split("\n", 1)
+        if (label != "候選事實（由標註取得，未經人工審核）" or len(raw.encode()) > _MAX_MODEL_EVIDENCE_BYTES
+                or any(context.get(key) is not False for key in (
+                    "semantic_correctness_verified", "exact_field_proof", "deterministic_exact", "canonical"))
+                or any(not re.fullmatch(r"sha256:[0-9a-f]{64}", context.get(key, ""))
+                       for key in ("candidate_fact_group", "candidate_fact_pin"))):
+            return None
+        table = json.loads(raw)
+        columns, rows, citations = table["columns"], table["rows"], table["citations"]
+        if (not isinstance(columns, list) or not columns or any(not isinstance(key, str) for key in columns)
+                or len(set(columns)) != len(columns) or not isinstance(rows, list) or not 1 <= len(rows) <= 128
+                or not isinstance(citations, list) or not 1 <= len(citations) <= 128):
+            return None
+        refs, observations = {}, set()
+        for citation in citations:
+            reference, digest, observation = citation["ref"], citation["citation_hash"], citation["source_observation_id"]
+            if (not isinstance(reference, str) or not re.fullmatch(r"c[1-9][0-9]*", reference) or reference in refs
+                    or not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
+                    or digest not in allowed or not isinstance(observation, str) or not observation
+                    or observation in observations or not isinstance(citation["native_locator"], dict)
+                    or not citation["native_locator"]
+                    or not isinstance(citation["source_extractor_run_id"], str) or not citation["source_extractor_run_id"]
+                    or not isinstance(citation["spans"], list) or not citation["spans"]
+                    or any(not isinstance(span, list) or len(span) != 2
+                           or any(type(offset) is not int for offset in span) or not 0 <= span[0] < span[1]
+                           for span in citation["spans"])):
+                return None
+            refs[reference] = digest
+            observations.add(observation)
+        required = context["required_citation_hashes"]
+        if (not isinstance(required, list) or len(required) != len(set(required))
+                or set(required) != set(refs.values()) or item.get("citation_hash") not in required):
+            return None
+        used = set()
+        citation_spans = {entry["ref"]: entry["spans"] for entry in citations}
+        for row in rows:
+            if ("item" not in row or not isinstance(row["values"], list)
+                    or len(row["values"]) != len(columns)):
+                return None
+            catalog = row["quotes"]
+            if not isinstance(catalog, list) or not catalog:
+                return None
+            seen_quotes = set()
+            for quote, bindings in catalog:
+                if (not isinstance(quote, str) or not quote or quote in seen_quotes
+                        or not isinstance(bindings, list) or not bindings):
+                    return None
+                seen_quotes.add(quote)
+                for reference, span_index in bindings:
+                    if (reference not in refs or type(span_index) is not int
+                            or not 0 <= span_index < len(citation_spans[reference])):
+                        return None
+            def quotes(value):
+                pairs = value["quotes"]
+                if not isinstance(pairs, list) or not pairs:
+                    raise ValueError("missing quotes")
+                for quote_index, binding_index in pairs:
+                    if (type(quote_index) is not int or type(binding_index) is not int
+                            or not 0 <= quote_index < len(catalog)
+                            or not 0 <= binding_index < len(catalog[quote_index][1])):
+                        raise ValueError("unbound quote")
+                    reference, span_index = catalog[quote_index][1][binding_index]
+                    start, end = citation_spans[reference][span_index]
+                    if end - start != len(catalog[quote_index][0]):
+                        raise ValueError("quote offset mismatch")
+                    used.add(reference)
+            for cells in row["values"]:
+                if not isinstance(cells, list):
+                    return None
+                for cell in cells:
+                    if "value" not in cell or set(cell) - {"value", "unit", "times", "quotes"}:
+                        return None
+                    if "times" in cell and (not isinstance(cell["times"], list) or any(
+                            set(entry) != {"normalized", "role"}
+                            or any(value is not None and not isinstance(value, str) for value in entry.values())
+                            for entry in cell["times"])):
+                        return None
+                    quotes(cell)
+            subject = row.get("subject")
+            if subject is not None:
+                if (set(subject) != {"surfaces", "quotes"} or not isinstance(subject["surfaces"], list)
+                        or not subject["surfaces"] or any(not isinstance(value, str) or not value for value in subject["surfaces"])):
+                    return None
+                quotes(subject)
+        return set(refs.values()) if used == set(refs) else None
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
 def compact_evidence_for_model(
     result: Mapping[str, Any],
     *,
     item_limit: int = _MAX_MODEL_EVIDENCE_ITEMS,
     diagnostic: dict[str, Any] | None = None,
+    _candidate_reservation: tuple[Any, Any] | None = None,
 ) -> dict[str, Any]:
+    content_key = "evidence_snippets" if "evidence_snippets" in result else "evidence"
+    content = result.get(content_key, ())
+    tables = [item for item in content if isinstance(item, Mapping)
+              and item.get("source_type") == "candidate_fact_table"] if isinstance(content, (list, tuple)) else []
+    def reserved_envelope(value, reservation):
+        table, citations = reservation
+        result = {**value, content_key: [table, *value.get(content_key, ())]}
+        result["citations"] = list(value.get("citations", ()))
+        result["citations"].extend(item for item in citations if item not in result["citations"])
+        return result
+
+    if tables:
+        ordinary_items = [item for item in content if item not in tables]
+        ordinary_ids = set(evidence_citation_ids(ordinary_items))
+        def citation_id(item):
+            return item if isinstance(item, str) else item.get("citation_hash", item.get("citation_id"))
+        root_citations = result.get("citations", ())
+        allowed = {citation_id(item) for item in root_citations if isinstance(item, (str, Mapping))}
+        ordinary = {**result, content_key: ordinary_items, "citations": [item for item in root_citations
+                    if isinstance(item, (str, Mapping)) and citation_id(item) in ordinary_ids]}
+        table = tables[0]
+        required = _candidate_fact_table_refs(table, allowed) if len(tables) == 1 else None
+        reason = None
+        if len(json.dumps(table, ensure_ascii=False).encode()) > _CANDIDATE_FACT_TABLE_MAX_BYTES:
+            reason = "table_over_reserved_budget"
+        elif (required is None or result.get("deterministic_exact")
+                or result.get("exact_result") is not None or "exact_inventory" in result):
+            reason = "citation_validation_failed"
+        elif item_limit < 1:
+            reason = "final_envelope_rejected"
+        if reason is None:
+            citations = [item for item in root_citations if isinstance(item, (str, Mapping))
+                         and citation_id(item) in required]
+            reservation = (table, citations)
+            compact = compact_evidence_for_model(ordinary, item_limit=max(0, item_limit - 1),
+                diagnostic=diagnostic, _candidate_reservation=reservation)
+            candidate = reserved_envelope(compact, reservation)
+            if (len(evidence_citation_ids(candidate)) <= 128 and
+                    len(json.dumps({**candidate, "presentation_truncated": True}, ensure_ascii=False).encode())
+                        <= _MAX_MODEL_EVIDENCE_BYTES):
+                _candidate_fact_table_status(None)
+                if diagnostic is not None:
+                    diagnostic["candidate_fact_fallback_reason"] = None
+                    diagnostic["group_count"] = diagnostic.get("group_count", 0) + 1
+                    diagnostic["accepted_group_count"] = diagnostic.get("accepted_group_count", 0) + 1
+                    diagnostic["item_limit"] = max(0, item_limit)
+                    diagnostic["presented_bytes"] = len(json.dumps(candidate, ensure_ascii=False).encode())
+                return candidate
+            reason = "final_envelope_rejected"
+        _candidate_fact_table_status(reason)
+        compact = compact_evidence_for_model(ordinary, item_limit=item_limit, diagnostic=diagnostic)
+        if diagnostic is not None:
+            diagnostic["candidate_fact_fallback_reason"] = reason
+            diagnostic["group_count"] = diagnostic.get("group_count", 0) + 1
+            diagnostic["rejected_group_count"] = diagnostic.get("rejected_group_count", 0) + 1
+            diagnostic["item_limit"] = max(0, item_limit)
+        return {**compact, "presentation_truncated": True}
     # This one server-validated mode admits the complete bounded document
     # scope. Ordinary/mail evidence keeps the existing 16 KiB / item limits.
     agent = result.get("query_agent")
@@ -11846,6 +12019,9 @@ def compact_evidence_for_model(
         reasons[reason] = reasons.get(reason, 0) + 1
 
     def size(value: Mapping[str, Any]) -> int:
+        if _candidate_reservation is not None:
+            value = reserved_envelope(value, _candidate_reservation)
+            return len(json.dumps({**value, "presentation_truncated": True}, ensure_ascii=False).encode("utf-8"))
         return len(json.dumps(
             {**value, "presentation_truncated": True},
             ensure_ascii=False, separators=(",", ":"),

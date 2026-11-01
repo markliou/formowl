@@ -503,5 +503,101 @@ class EvidencePresentationBudgetTests(unittest.TestCase):
         self.assertLessEqual(_size(compact), _MAX_MODEL_EVIDENCE_BYTES)
 
 
+class CandidateFactTableBudgetTests(unittest.TestCase):
+    @staticmethod
+    def _result(*, ordinary=True, large=False):
+        hashes = ["sha256:" + f"{index+1:064x}" for index in range(14)]
+        table = {"columns": ["asset_code"], "rows": [{"row": f"clienta-{index}", "item": str(index),
+            "quotes": [["q" * (800 if large else 1), [[f"c{index+1}", 0]]]],
+            "values": [[{"value": f"ZX-{index:03d}", "quotes": [[0, 0]]}]]}
+            for index in range(14)], "citations": [{"ref": f"c{index+1}", "citation_hash": digest,
+                "source_observation_id": f"obs-clienta-{index}", "native_locator": {"line_start": index+1, "line_end": index+1},
+                "source_extractor_run_id": "run-clienta", "spans": [[0, 800 if large else 1]]}
+                for index, digest in enumerate(hashes)]}
+        item = {"source_type": "candidate_fact_table", "citation_hash": hashes[0],
+            "snippet": "候選事實（由標註取得，未經人工審核）\n" + json.dumps(table, separators=(",", ":")),
+            "source_context": {"candidate_fact_group": "sha256:" + "a" * 64, "candidate_fact_pin": "sha256:" + "b" * 64,
+                "required_citation_hashes": hashes, "semantic_correctness_verified": False,
+                "exact_field_proof": False, "deterministic_exact": False, "canonical": False}}
+        normal = {"citation_hash": "sha256:" + "f" * 64, "snippet": "normal source " * (650 if large else 1)}
+        return {"status": "partial", "coverage": {"status": "incomplete", "absence_claim": False},
+            "evidence": [item] + ([normal] if ordinary else []), "citations": hashes + ([normal["citation_hash"]] if ordinary else [])}
+
+    def test_table_counts_as_one_item_with_bounded_complete_citation_closure(self):
+        result = self._result(ordinary=False)
+        for limit in (1, 10):
+            with self.subTest(item_limit=limit):
+                compact = compact_evidence_for_model(result, item_limit=limit)
+                self.assertEqual(compact["evidence"], result["evidence"])
+                self.assertEqual(set(compact["citations"]), set(result["citations"]))
+                self.assertEqual(len(json.loads(compact["evidence"][0]["snippet"].split("\n", 1)[1])["rows"]), 14)
+                self.assertLessEqual(_size(compact), _MAX_MODEL_EVIDENCE_BYTES)
+                self.assertEqual(compact_evidence_for_model(compact, item_limit=limit), compact)
+
+    def test_bad_table_citations_or_overflow_never_displace_ordinary_evidence(self):
+        for failure in ("missing_root", "missing_required", "unknown_ref", "bytes", "items"):
+            with self.subTest(failure=failure):
+                result = self._result(large=failure == "bytes")
+                ordinary = result["evidence"][1]
+                if failure == "missing_root":
+                    result["citations"].pop(0)
+                elif failure == "missing_required":
+                    result["evidence"][0]["source_context"]["required_citation_hashes"].pop(0)
+                elif failure == "unknown_ref":
+                    table = json.loads(result["evidence"][0]["snippet"].split("\n", 1)[1])
+                    table["rows"][0]["quotes"][0][1][0][0] = "not-a-validated-reference"
+                    result["evidence"][0]["snippet"] = "候選事實（由標註取得，未經人工審核）\n" + json.dumps(table)
+                compact = compact_evidence_for_model(result, item_limit=1 if failure == "items" else 8)
+                if failure == "items":
+                    self.assertEqual(compact["evidence"], result["evidence"][:1])
+                    self.assertEqual(set(compact["citations"]), set(result["evidence"][0]["source_context"]["required_citation_hashes"]))
+                else:
+                    self.assertEqual(compact["evidence"], [ordinary])
+                    self.assertEqual(compact["citations"], [ordinary["citation_hash"]])
+                    self.assertNotIn("candidate_fact_group", json.dumps(compact))
+                self.assertLessEqual(_size(compact), _MAX_MODEL_EVIDENCE_BYTES)
+
+
+class CandidateFactTablePriorityTests(unittest.TestCase):
+    def test_under_cap_table_reserves_envelope_before_saturated_ordinary_sources(self):
+        from formowl_retrieval.gateway import _SourcePhaseTrace, _source_phase_trace_scope
+        result = CandidateFactTableBudgetTests._result(ordinary=False)
+        table = result["evidence"][0]
+        self.assertLess(len(json.dumps(table, ensure_ascii=False).encode()), 10 * 1024)
+        ordinary = [{"citation_hash": "sha256:" + f"{index+200:064x}", "snippet": f"source {index} " + "q" * 1400}
+                    for index in range(10)]
+        result["evidence"].extend(ordinary)
+        result["citations"].extend(item["citation_hash"] for item in ordinary)
+        trace = _SourcePhaseTrace({})
+        with _source_phase_trace_scope(trace):
+            compact = compact_evidence_for_model(result, item_limit=10)
+        self.assertEqual(compact["evidence"][0], table)
+        kept = compact["evidence"][1:]
+        self.assertLess(len(kept), len(ordinary))
+        self.assertEqual(kept, ordinary[:len(kept)])
+        self.assertLessEqual(len(json.dumps(compact, ensure_ascii=False).encode()), 16 * 1024)
+        self.assertTrue(set(table["source_context"]["required_citation_hashes"]).issubset(orchestrator.evidence_citation_ids(compact)))
+        self.assertEqual(compact_evidence_for_model(compact, item_limit=10), compact)
+
+    def test_whole_table_over_ten_kib_is_omitted_with_real_trace_reason(self):
+        from formowl_retrieval.gateway import _SourcePhaseTrace, _source_phase_trace_scope
+        result = CandidateFactTableBudgetTests._result()
+        table = result["evidence"][0]
+        label, raw = table["snippet"].split("\n", 1)
+        value = json.loads(raw)
+        value["rows"][0]["quotes"][0][0] = "q" * 4000
+        table["snippet"] = label + "\n" + json.dumps(value, separators=(",", ":"))
+        self.assertGreater(len(json.dumps(table, ensure_ascii=False).encode()), 10 * 1024)
+        self.assertLess(len(json.dumps(table, ensure_ascii=False).encode()), 16 * 1024)
+        trace = _SourcePhaseTrace({})
+        with _source_phase_trace_scope(trace):
+            compact = compact_evidence_for_model(result)
+        self.assertEqual(compact["evidence"], result["evidence"][1:])
+        self.assertIn("table_over_reserved_budget", trace.snapshot())
+        diagnostic = {}
+        self.assertEqual(compact_evidence_for_model(result, diagnostic=diagnostic), compact)
+        self.assertEqual(diagnostic["candidate_fact_fallback_reason"], "table_over_reserved_budget")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+import unicodedata
 from unittest.mock import AsyncMock, Mock, call, patch
 
 import _paths  # noqa: F401
@@ -6784,12 +6785,13 @@ def _completed_registered_text_revision_fixture(
 
 
 class CandidateFactRuntimeTests(unittest.TestCase):
-    def _fixture(self, root, *, subject_only=False):
+    def _fixture(self, root, *, subject_only=False, family="document_text", subject_surface="ＺＸ-００７"):
         from formowl_graph.ontology import CandidatePropertyMapping
-        fixture = _source_start_preparation_fixture(root, families=("document_text",), document_text=(
-            "Clienta ZX-742 ticket R-007 expected 2031-04-02 " + "filler " * 3000 +
+        text = (
+            "Clienta ZX-742 ticket R-007 expected 2031-04-02 " + ("filler " * 3000 if family == "document_text" else "") +
             "\n\nTicket R-008\n\nExpected 2031-04-09" +
-            ("\n\nSubject ＺＸ-００７" if subject_only else "")))
+            ("\n\nSubject " + subject_surface if subject_only else ""))
+        fixture = _source_start_preparation_fixture(root, families=(family,), document_text=text, mail_text=text)
         from scripts.issue56_source_native_lookup import build_lookup
         lookup = root / "lookup"
         build_lookup(directory=fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
@@ -6806,7 +6808,8 @@ class CandidateFactRuntimeTests(unittest.TestCase):
             "identity_groups": [{"name": "asset_ticket", "properties": ["asset_code", "ticket_code"]}]})
         annotation_revision = sha256_json("annotation-snapshot-separate-from-serving")
         rows = []
-        observations = [o for o in fixture.observations if o.observation_type == "paragraph"]
+        observation_type = "paragraph" if family == "document_text" else "email_body_segment"
+        observations = [o for o in fixture.observations if o.observation_type == observation_type]
         self.assertEqual(len(observations), 4 if subject_only else 3)
         for index, observation in enumerate(observations[:2]):
             digest = sha256_json(observation.to_dict())
@@ -6835,7 +6838,7 @@ class CandidateFactRuntimeTests(unittest.TestCase):
                 "outer_mail_date": {"value": "2099-12-31", "evidence": [{"quote": "unvalidated-outer-date"}] }})
         if subject_only:
             identity = observations[3]
-            raw_surface = "ＺＸ-００７"
+            raw_surface = subject_surface
             start = identity.text.index(raw_surface)
             identity_hash = sha256_json(identity.to_dict())
             span = {"observation_id": identity.observation_id, "observation_hash": identity_hash,
@@ -6858,7 +6861,8 @@ class CandidateFactRuntimeTests(unittest.TestCase):
                         "permission_scope_fingerprint": sha256_json(identity.to_dict()["permission_scope"]),
                         "source_observation_ids": [identity.observation_id],
                         "observation_hashes": {identity.observation_id: identity_hash}, "unit_validation_status": "complete"})
-                row["subject_identity"] = {"value": "zx-007", "type": None, "origin": "annotation_target",
+                row["subject_identity"] = {"value": " ".join(unicodedata.normalize("NFKC", raw_surface).casefold().split()),
+                    "type": None, "origin": "annotation_target",
                     "review_status": "pending_review", "semantic_correctness_verified": False, "sources": sources}
         export = root / "fact-export"
         export.mkdir()
@@ -6879,6 +6883,108 @@ class CandidateFactRuntimeTests(unittest.TestCase):
         config_path = root / "facts.json"
         config_hash = write(config_path, config)
         return revision, config_path, config_hash, export, observations
+
+    @staticmethod
+    def _arguments():
+        return {"query_text": "Find Clienta R-008 expected date", "required_terms": ["R-008"],
+            "requester_user_id": loader.APPROVER_ACTOR, "workspace_id": loader.WORKSPACE_ID,
+            "session_id": "clienta-fact-fallback", "page_size": 10}
+
+    def test_mail_candidate_group_uses_mail_scope_and_preserves_source_citations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            register_asset = register_asset_from_local_file
+            def register_captured_source(*args, **kwargs):
+                kwargs.pop("source_ref", None)
+                return register_asset(*args, **kwargs)
+            # Exercise the source-neutral captured-mail graph route used by
+            # the replay; upload-session mail has a separate selector contract.
+            with patch(__name__ + ".register_asset_from_local_file", side_effect=register_captured_source):
+                revision, config, digest, _, observations = self._fixture(Path(directory), family="mail")
+            bound = issue56_sealed_source.bind_issue56_candidate_fact_exports(
+                revision, configuration_path=config, expected_sha256=digest)
+            self.assertTrue(bound.authorized_source.source_scope_ids)
+            self.assertEqual(bound.source_records.authorized_mail_import_session_ids, ())
+            with patch.object(bound.source_records, "scan_authorized_observations",
+                              wraps=bound.source_records.scan_authorized_observations) as scan:
+                arguments = {**self._arguments(), "required_terms": ["ZX-742"],
+                    "query_text": "Find Clienta asset ZX-742 expected date"}
+                result = loader._build_source_start_semantic_handler(bound, mail_tool=False)(arguments)
+                compact = human_uat_orchestrator.compact_evidence_for_model(result)
+                # AS58 reserves the under-cap table before ordinary mail groups.
+                self.assertIn("candidate_fact_group", json.dumps(compact))
+                self.assertEqual(compact["evidence"][0]["source_type"], "candidate_fact_table")
+                self.assertEqual(result["coverage"]["status"], "incomplete")
+                for value in ("2031-04-02", "2031-04-09", "R-007", "R-008"):
+                    self.assertIn(value, json.dumps(compact))
+                self.assertTrue({sha256_json(o.to_dict()) for o in observations}.issubset(
+                    human_uat_orchestrator.evidence_citation_ids(compact)))
+                self.assertTrue(scan.call_args_list)
+                for observed in scan.call_args_list:
+                    self.assertEqual(observed.kwargs["source_family"], "mail")
+                    self.assertEqual(observed.kwargs["source_scope_ids"], ())
+                    self.assertIsNone(observed.kwargs["mail_import_session_id"])
+
+    def test_candidate_contract_error_discards_group_and_uses_guarded_source_fallback(self):
+        from formowl_retrieval.gateway import _SourcePhaseTrace, _source_phase_trace_scope
+        with tempfile.TemporaryDirectory() as directory:
+            revision, config, digest, _, _ = self._fixture(Path(directory))
+            bound = issue56_sealed_source.bind_issue56_candidate_fact_exports(
+                revision, configuration_path=config, expected_sha256=digest)
+            handler = loader._build_source_start_semantic_handler(bound, mail_tool=False)
+            original_scan = bound.source_records.scan_authorized_observations
+            original_validate = loader.validate_public_gateway_payload
+            for stage in ("scan", "payload"):
+                trace = _SourcePhaseTrace({})
+                injected = []
+                def scan_source(**kwargs):
+                    if stage == "scan" and kwargs.get("preferred_observation_hashes"):
+                        callback = kwargs["observation_callback"]
+                        def fail_after_projection(observation, scope):
+                            callback(observation, scope)
+                            injected.append(True)
+                            raise ContractValidationError("synthetic /tmp/private-candidate-error")
+                        kwargs = {**kwargs, "observation_callback": fail_after_projection}
+                    return original_scan(**kwargs)
+                def validate(payload):
+                    if stage == "payload" and "evidence" in payload and "candidate_fact_group" in json.dumps(payload):
+                        injected.append(True)
+                        raise ContractValidationError("synthetic /tmp/private-candidate-error")
+                    return original_validate(payload)
+                with self.subTest(stage=stage), _source_phase_trace_scope(trace), patch.object(
+                        bound.source_records, "scan_authorized_observations", side_effect=scan_source) as scan, patch.object(
+                        loader, "validate_public_gateway_payload", side_effect=validate):
+                    result = handler(self._arguments())
+                    self.assertEqual(injected, [True])
+                    self.assertTrue(result["citations"], result)
+                    display = json.dumps(human_uat_orchestrator.compact_evidence_for_model(result), ensure_ascii=False)
+                    self.assertIn("R-008", display)
+                    self.assertNotIn("candidate_fact", display)
+                    self.assertNotIn("候選事實", display)
+                    self.assertNotEqual(result["status"], "not_found")
+                    self.assertGreaterEqual(len(scan.call_args_list), 2)
+                    first, last = scan.call_args_list[0].kwargs, scan.call_args_list[-1].kwargs
+                    self.assertLess(last["max_observations"], first["max_observations"])
+                    self.assertLessEqual(last["deadline_monotonic"], first["deadline_monotonic"])
+                    snapshot = trace.snapshot()
+                    self.assertIn("candidate_fact_contract_validation_failed", snapshot)
+                    self.assertNotIn("private-candidate-error", snapshot)
+
+    def test_candidate_fallback_does_not_swallow_other_branch_or_error_types(self):
+        with tempfile.TemporaryDirectory() as directory:
+            revision, config, digest, _, _ = self._fixture(Path(directory))
+            bound = issue56_sealed_source.bind_issue56_candidate_fact_exports(
+                revision, configuration_path=config, expected_sha256=digest)
+            handler = loader._build_source_start_semantic_handler(bound, mail_tool=False)
+            def scan_source(**kwargs):
+                if kwargs.get("preferred_observation_hashes"):
+                    raise ContractValidationError("candidate-only rejection")
+                raise ContractValidationError("ordinary source rejection")
+            with patch.object(bound.source_records, "scan_authorized_observations", side_effect=scan_source), self.assertRaisesRegex(
+                    ContractValidationError, "ordinary source rejection"):
+                handler(self._arguments())
+            with patch.object(bound.source_records, "scan_authorized_observations", side_effect=RuntimeError("other error")), self.assertRaisesRegex(
+                    RuntimeError, "other error"):
+                handler(self._arguments())
 
     def test_sealed_fact_export_to_guarded_handler_and_final_citations(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -6909,13 +7015,15 @@ class CandidateFactRuntimeTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 human_uat_orchestrator._validate_evidence_bound_decision(
                     {**decision, "citation_ids": [sha256_json("unavailable-citation")]}, evidence_results=(compact,))
-            self.assertEqual(human_uat_orchestrator.compact_evidence_for_model(result, item_limit=1)["evidence"], [])
+            single = human_uat_orchestrator.compact_evidence_for_model(result, item_limit=1)
+            self.assertEqual(len(json.loads(single["evidence"][0]["snippet"].split("\n", 1)[1])["rows"]), 2)
             capped = handler({**arguments, "page_size": 1})
-            self.assertNotIn("candidate_fact_group", json.dumps(capped))
+            self.assertEqual(len(capped["evidence"]), 1)
+            self.assertEqual(len(json.loads(capped["evidence"][0]["snippet"].split("\n", 1)[1])["rows"]), 2)
             self.assertEqual(handler({**arguments, "requester_user_id": "other"})["status"], "permission_denied")
             lookup = issue56_sealed_source.lookup_issue56_candidate_fact_rows
             self.assertEqual(len(lookup(bound, ["R-008"])), 1)
-            self.assertFalse(lookup(bound, ["ZX-742", "unsupported-description"]))
+            self.assertEqual(len(lookup(bound, ["ZX-742", "unsupported-description"])), 2)
             self.assertFalse(lookup(bound, ["ZX742"]))
             fallback = handler({**arguments, "required_terms": ["R-008"]})
             self.assertTrue(fallback["citations"])
@@ -6926,8 +7034,10 @@ class CandidateFactRuntimeTests(unittest.TestCase):
             tampered["fields"] = json.loads(json.dumps(tampered["fields"]))
             tampered["fields"]["target_date"][0]["evidence_spans"][0]["quote"] = "invented"
             damaged = replace(bound, candidate_fact_rows=(tampered,))
-            with self.assertRaises(ContractValidationError):
-                loader._build_source_start_semantic_handler(damaged, mail_tool=False)(arguments)
+            fallback = loader._build_source_start_semantic_handler(damaged, mail_tool=False)(arguments)
+            self.assertNotIn("candidate_fact_group", json.dumps(fallback))
+            self.assertNotIn("invented", json.dumps(fallback))
+            self.assertNotEqual(fallback["status"], "not_found")
             # Change original source bytes after sealing; the guarded owner must
             # reject them even though the candidate/export pins are unchanged.
             store = ObservationStore(Path(directory) / "document_text")
@@ -6979,32 +7089,39 @@ class CandidateSubjectRuntimeTests(unittest.TestCase):
             self.assertEqual(set(result["citations"]), {sha256_json(o.to_dict()) for o in observations})
             compact = human_uat_orchestrator.compact_evidence_for_model(result)
             text = json.dumps(compact, ensure_ascii=False)
-            for value in ("2031-04-02", "2031-04-09", "R-007", "R-008", "subject_identity", "annotation_target", "ＺＸ-００７"):
+            for value in ("2031-04-02", "2031-04-09", "R-007", "R-008", "ＺＸ-００７"):
                 self.assertIn(value, text)
-            subject_entries = [entry for item in compact["evidence"]
-                        for entry in json.loads(item["snippet"].split("\n", 1)[1]) if "subject_identity" in entry]
-            subjects = [entry["subject_identity"] for entry in subject_entries]
-            self.assertTrue(subjects)
-            self.assertTrue(all(subject["type"] is None and subject["review_status"] == "pending_review" for subject in subjects))
+            tables = [item for item in compact["evidence"] if item.get("source_type") == "candidate_fact_table"]
+            self.assertEqual(len(tables), 1)
+            table = json.loads(tables[0]["snippet"].split("\n", 1)[1])
+            subjects = [row["subject"] for row in table["rows"]]
+            self.assertEqual(len(subjects), 2)
+            self.assertTrue(all(set(subject) == {"surfaces", "quotes"} for subject in subjects))
             self.assertNotIn("misleading classification", text)
-            for entry in subject_entries:
-                provenance, span = entry["subject_source"], entry["original_evidence"]
-                self.assertEqual(provenance["value_surface"], "ＺＸ-００７")
-                self.assertTrue(provenance["unit_id"] and provenance["source_unit_id"])
-                self.assertEqual(provenance["source_revision_fingerprint"], bound.candidate_fact_rows[0]["source_revision_fingerprint"])
-                self.assertIn(span["observation_id"], provenance["source_observation_ids"])
-                self.assertEqual(span["quote"], "ＺＸ-００７")
-                self.assertEqual(span["start"], observations[3].text.index("ＺＸ-００７"))
-                self.assertEqual(span["end"] - span["start"], len(span["quote"]))
-                self.assertEqual(span["native_locator"], observations[3].to_dict()["location"])
-                self.assertEqual(span["observation_hash"], sha256_json(observations[3].to_dict()))
-                self.assertEqual(span["source_extractor_run_id"], observations[3].extractor_run_id)
-            self.assertEqual(human_uat_orchestrator.compact_evidence_for_model(result, item_limit=3)["evidence"], [])
-            for args in ({**self._arguments(), "page_size": 3},
-                         {**self._arguments(), "required_terms": ["ZX-999"]}):
-                fallback = handler(args)
-                self.assertNotIn("candidate_fact_group", json.dumps(fallback))
-                self.assertNotEqual(fallback["status"], "not_found")
+            identity_hash = sha256_json(observations[3].to_dict())
+            identity_citation = next(entry for entry in table["citations"] if entry["citation_hash"] == identity_hash)
+            self.assertEqual(identity_citation["source_observation_id"], observations[3].observation_id)
+            self.assertEqual(identity_citation["native_locator"], observations[3].to_dict()["location"])
+            for row, subject in zip(table["rows"], subjects):
+                self.assertEqual(subject["surfaces"], ["ＺＸ-００７"])
+                quote_index, binding_index = subject["quotes"][0]
+                self.assertEqual(row["quotes"][quote_index], ["ＺＸ-００７", [[identity_citation["ref"], 0]]])
+                self.assertEqual(binding_index, 0)
+            # Full original source and offset bindings remain server-side.
+            for row in bound.candidate_fact_rows:
+                for source in row["subject_identity"]["sources"]:
+                    span = source["evidence_spans"][0]
+                    self.assertTrue(source["unit_id"] and source["source_unit_id"])
+                    self.assertEqual(span["start"], observations[3].text.index("ＺＸ-００７"))
+                    self.assertEqual(span["end"] - span["start"], len(span["quote"]))
+                    self.assertEqual(span["native_locator"], observations[3].to_dict()["location"])
+                    self.assertEqual(span["source_extractor_run_id"], observations[3].extractor_run_id)
+            tight = human_uat_orchestrator.compact_evidence_for_model(result, item_limit=3)
+            self.assertEqual(tight["evidence"][0]["source_type"], "candidate_fact_table")
+            self.assertLessEqual(len(tight["evidence"]), 3)
+            fallback = handler({**self._arguments(), "required_terms": ["ZX-999"]})
+            self.assertNotIn("candidate_fact_group", json.dumps(fallback))
+            self.assertNotEqual(fallback["status"], "not_found")
             absent = replace(bound, candidate_fact_rows=tuple({k: v for k, v in row.items() if k != "subject_identity"}
                                                               for row in bound.candidate_fact_rows))
             self.assertFalse(lookup(absent, ["ZX-007"]))
@@ -7031,8 +7148,733 @@ class CandidateSubjectRuntimeTests(unittest.TestCase):
                     else:
                         source["value_surface"] = "different identity"
                     damaged = replace(bound, candidate_fact_rows=tuple(rows))
-                    with self.assertRaises(ContractValidationError):
-                        loader._build_source_start_semantic_handler(damaged, mail_tool=False)(self._arguments())
+                    fallback = loader._build_source_start_semantic_handler(damaged, mail_tool=False)(self._arguments())
+                    self.assertNotIn("candidate_fact_group", json.dumps(fallback))
+                    self.assertNotIn("候選事實", json.dumps(fallback, ensure_ascii=False))
+                    self.assertNotEqual(fallback["status"], "not_found")
+
+
+class CandidateFactReachabilityTests(unittest.TestCase):
+    _fixture = CandidateFactRuntimeTests._fixture
+
+    def _captured(self, root):
+        register_asset = register_asset_from_local_file
+        def register(*args, **kwargs):
+            kwargs.pop("source_ref", None)
+            return register_asset(*args, **kwargs)
+        with patch(__name__ + ".register_asset_from_local_file", side_effect=register):
+            revision, config, digest, _, observations = self._fixture(root, family="mail")
+        return issue56_sealed_source.bind_issue56_candidate_fact_exports(
+            revision, configuration_path=config, expected_sha256=digest), observations
+
+    @staticmethod
+    def _arguments(*, families=("mail",), query_class="evidence_lookup", terms=("ZX-742",)):
+        query = "上一次 Clienta " + " ".join(terms) + " expected date"
+        return {"query_text": query, "required_terms": list(terms),
+            "request_contract": {"original_query_hash": "sha256:" + hashlib.sha256(query.encode()).hexdigest(),
+                "query_class": query_class, "source_family_scope": list(families), "requested_fields": [],
+                "maximum_claim_strength": "complete_authorized_scope" if query_class == "exact_set_or_inventory" else "cited_evidence"},
+            "requester_user_id": loader.APPROVER_ACTOR, "workspace_id": loader.WORKSPACE_ID,
+            "session_id": "clienta-reachability", "page_size": 20}
+
+    def _native(self, root, *, cells=False):
+        template = root / "template"
+        template.mkdir()
+        _, config, _, export, _ = self._fixture(template)
+        native = root / "native"
+        native.mkdir()
+        register_asset = register_asset_from_local_file
+        def register(*args, **kwargs):
+            kwargs.pop("source_ref", None)
+            return register_asset(*args, **kwargs)
+        with patch(__name__ + ".register_asset_from_local_file", side_effect=register):
+            fixture = _source_start_preparation_fixture(native, families=("mail",),
+                attachment_csv="Asset,Ticket,Expected\nZX-742,R-007,2031-04-02\nZX-742,R-008,2031-04-09\n")
+        from scripts.issue56_source_native_lookup import build_lookup
+        lookup = native / "lookup"
+        build_lookup(directory=fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
+                     output_directory=lookup)
+        for name in ("source-lookup-manifest.json", "source-lookup.sqlite"):
+            shutil.copyfile(lookup / name, fixture.directory / name)
+        revision = issue56_sealed_source.load_issue56_ingestion_revision(
+            fixture.directory, expected_revision_sha256=fixture.preparation_sha256)
+        rows = [json.loads(line) for line in (export / "rows.jsonl").read_bytes().splitlines()]
+        cited = {}
+        for index, row in enumerate(rows):
+            native_row = next(o for o in fixture.observations if o.observation_type == "table_row"
+                              and f"R-00{index + 7}" in (o.text or ""))
+            for values in row["fields"].values():
+                field = values[0]
+                obs = (next(o for o in fixture.observations if o.observation_type == "table_cell"
+                    and loader._table_row_key(o) == loader._table_row_key(native_row)
+                    and o.text == field["value"]) if cells else native_row)
+                value = field["value"]
+                start = obs.text.index(value)
+                digest = sha256_json(obs.to_dict())
+                field.update(permission_scope=obs.to_dict()["permission_scope"],
+                    permission_scope_fingerprint=sha256_json(obs.to_dict()["permission_scope"]),
+                    source_observation_ids=[obs.observation_id], observation_hashes={obs.observation_id: digest},
+                    evidence_spans=[{"observation_id": obs.observation_id, "observation_hash": digest,
+                        "field_path": ["text"], "quote": value, "occurrence_index": None,
+                        "start": start, "end": start + len(value), "native_locator": obs.to_dict()["location"],
+                        "source_extractor_run_id": obs.extractor_run_id}])
+                cited[digest] = obs
+        (export / "rows.jsonl").write_bytes(b"".join(json.dumps(row).encode() + b"\n" for row in rows))
+        cfg = json.loads(config.read_bytes())
+        cfg.update({key: revision.safe_binding[key] for key in (
+            "source_revision_sha256", "source_authority_fingerprint", "source_session_binding_fingerprint")})
+        config.write_text(json.dumps(cfg))
+        digest = CandidateFactDiskIndexTests._reseal(config, export, len(rows))
+        bound = issue56_sealed_source.bind_issue56_candidate_fact_exports(
+            revision, configuration_path=config, expected_sha256=digest)
+        return bound, cited
+
+    def test_presentation_tiebreak_reaches_candidates_but_date_scan_does_not(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bound, _ = self._captured(Path(directory))
+            args = self._arguments()
+            public = {k: v for k, v in args.items() if k not in ("requester_user_id", "workspace_id", "session_id")}
+            binding = issue56_sealed_source.bind_mail_date_priority(
+                user_text=args["query_text"], arguments=public, tool_name="query_effective_graph_view")
+            self.assertEqual(binding.mode, "presentation_tiebreak")
+            handler = loader._build_source_start_semantic_handler(bound, mail_tool=False)
+            with issue56_sealed_source.mail_date_priority_scope(binding), patch.object(
+                    issue56_sealed_source, "lookup_issue56_candidate_fact_rows",
+                    wraps=issue56_sealed_source.lookup_issue56_candidate_fact_rows) as lookup:
+                result = handler(args)
+                lookup.assert_called_once()
+            compact = human_uat_orchestrator.compact_evidence_for_model(result)
+            self.assertIn("candidate_fact_group", json.dumps(compact))
+            self.assertTrue(compact["evidence"])
+            self.assertEqual(result["coverage"]["status"], "incomplete")
+            with issue56_sealed_source.mail_date_priority_scope(replace(binding, mode="date_scan")), patch.object(
+                    issue56_sealed_source, "lookup_issue56_candidate_fact_rows",
+                    wraps=issue56_sealed_source.lookup_issue56_candidate_fact_rows) as lookup:
+                handler(args)
+                lookup.assert_not_called()
+
+    def test_exact_downgrade_can_present_candidates_without_exact_or_absence_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bound, _ = self._native(Path(directory))
+            args = self._arguments(families=("mail", "attachment_table"), query_class="exact_set_or_inventory")
+            result = loader._build_source_start_semantic_handler(bound, mail_tool=False)(args)
+            compact = human_uat_orchestrator.compact_evidence_for_model(result)
+            self.assertIn("candidate_fact_group", json.dumps(compact))
+            self.assertEqual(result["coverage"]["status"], "incomplete")
+            self.assertIs(result["coverage"]["absence_claim"], False)
+            self.assertFalse(result["deterministic_exact"])
+            self.assertEqual(result["execution_downgrade"]["request_contract_fingerprint"],
+                             sha256_json(args["request_contract"]))
+            self.assertEqual(result["execution_downgrade"]["executed_request_contract"]["query_class"], "evidence_lookup")
+            self.assertTrue(result["execution_downgrade"]["disclosure"])
+
+    def test_native_row_and_cell_candidates_keep_all_rows_and_original_locators(self):
+        for cells in (False, True):
+            with self.subTest(cells=cells), tempfile.TemporaryDirectory() as directory:
+                bound, cited = self._native(Path(directory), cells=cells)
+                args = self._arguments(families=("mail", "attachment_table"))
+                result = loader._build_source_start_semantic_handler(bound, mail_tool=False)(args)
+                compact = human_uat_orchestrator.compact_evidence_for_model(result)
+                self.assertIn("candidate_fact_group", json.dumps(compact))
+                self.assertTrue(set(cited).issubset(human_uat_orchestrator.evidence_citation_ids(compact)))
+                text = json.dumps(compact)
+                for value in ("R-007", "R-008", "2031-04-02", "2031-04-09"):
+                    self.assertIn(value, text)
+                for obs in cited.values():
+                    self.assertIn(str(obs.location["row_index"]), text)
+                self.assertFalse(result.get("deterministic_exact"))
+                single = human_uat_orchestrator.compact_evidence_for_model(result, item_limit=1)
+                self.assertEqual(single["evidence"][0]["source_type"], "candidate_fact_table")
+                self.assertEqual(len(single["evidence"]), 1)
+
+    def test_candidate_lookup_uses_nonempty_postings_then_deterministic_rarest_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            revision, config, digest, _, _ = self._fixture(Path(directory))
+            bound = issue56_sealed_source.bind_issue56_candidate_fact_exports(
+                revision, configuration_path=config, expected_sha256=digest)
+            lookup = issue56_sealed_source.lookup_issue56_candidate_fact_rows
+            for selected in (bound, replace(bound, candidate_fact_rows=tuple(bound.candidate_fact_rows))):
+                with self.subTest(indexed=selected is bound):
+                    self.assertEqual(len(lookup(selected, ["ZX-742", "clienta frame", "gen2"])), 2)
+                    self.assertEqual(len(lookup(selected, ["ZX-742", "R-007", "gen2"])), 1)
+                    # R-007 and R-008 have equally rare, disjoint postings.
+                    # The full normalized key resolves ties, independent of input order.
+                    for terms in (["R-007", "R-008"], ["R-008", "R-007"]):
+                        result = lookup(selected, terms)
+                        self.assertEqual([r["row_id"] for r in result], ["factrow_clienta_0"])
+                    self.assertFalse(lookup(selected, ["ZX-74", "clienta frame", "gen2"]))
+                    self.assertFalse(lookup(selected, ["ZX-742"], deadline_monotonic=0))
+
+    def test_native_candidate_failure_discards_staging_and_charges_actual_reads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bound, _ = self._native(Path(directory))
+            handler = loader._build_source_start_semantic_handler(bound, mail_tool=False)
+            original = loader._IngestionExactCellLookup.scan_source_rows
+            calls = []
+            def scan(instance, **kwargs):
+                calls.append(kwargs)
+                if kwargs.get("preferred_observation_hashes"):
+                    callback = kwargs["observation_callback"]
+                    def reject(observation, scope):
+                        callback(observation, scope)
+                        raise ContractValidationError("fictional native candidate projection rejected")
+                    return original(instance, **{**kwargs, "observation_callback": reject})
+                return original(instance, **kwargs)
+            with patch.object(loader._IngestionExactCellLookup, "scan_source_rows", new=scan):
+                result = handler(self._arguments(families=("mail", "attachment_table")))
+            preferred = next(call for call in calls if call.get("preferred_observation_hashes"))
+            actual_reads = preferred["_phase_metrics"]["scanned_observation_count"]
+            self.assertGreater(actual_reads, 1)
+            ordinary = [call for call in calls if not call.get("preferred_observation_hashes")]
+            self.assertTrue(ordinary)
+            self.assertLessEqual(ordinary[0]["max_observations"], preferred["max_observations"] - actual_reads)
+            self.assertNotIn("candidate_fact", json.dumps(human_uat_orchestrator.compact_evidence_for_model(result)))
+            self.assertNotEqual(result["status"], "not_found")
+            calls.clear()
+            with patch.object(loader, "SOURCE_EVIDENCE_OBSERVATION_LIMIT", 1), patch.object(
+                    loader._IngestionExactCellLookup, "scan_source_rows", new=scan):
+                capped = handler(self._arguments(families=("mail", "attachment_table")))
+            self.assertNotIn("candidate_fact_group", json.dumps(capped))
+            self.assertTrue(all(call.get("_phase_metrics", {}).get("scanned_observation_count", 0) <= 1
+                                for call in calls if call.get("preferred_observation_hashes")))
+
+    def test_oversized_fact_group_keeps_every_row_with_bounded_quote_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            revision, config, _, export, observations = self._fixture(Path(directory))
+            originals = [json.loads(line) for line in (export / "rows.jsonl").read_bytes().splitlines()]
+            rows = []
+            for index in range(10):
+                row = json.loads(json.dumps(originals[index % 2]))
+                row["row_id"] = f"factrow_clienta_context_{index}"
+                rows.append(row)
+            (export / "rows.jsonl").write_bytes(b"".join(json.dumps(row).encode() + b"\n" for row in rows))
+            digest = CandidateFactDiskIndexTests._reseal(config, export, len(rows))
+            bound = issue56_sealed_source.bind_issue56_candidate_fact_exports(
+                revision, configuration_path=config, expected_sha256=digest)
+            args = self._arguments(families=("document_text",))
+            result = loader._build_source_start_semantic_handler(bound, mail_tool=False)(args)
+            compact = human_uat_orchestrator.compact_evidence_for_model(result)
+            facts = [item for item in compact["evidence"]
+                     if item.get("source_context", {}).get("candidate_fact_group")]
+            self.assertEqual(len(facts), 1)
+            table = json.loads(facts[0]["snippet"].split("\n", 1)[1])
+            self.assertEqual([entry["item"] for entry in table["rows"]], [row["item_or_row"] for row in rows])
+            displayed = [cell for row in table["rows"] for cells in row["values"] for cell in cells]
+            self.assertEqual(len(displayed), 30)
+            self.assertEqual({entry["value"] for entry in displayed},
+                             {"ZX-742", "R-007", "R-008", "2031-04-02", "2031-04-09"})
+            source_by_hash = {sha256_json(obs.to_dict()): obs for obs in observations}
+            sources = {entry["ref"]: source_by_hash[entry["citation_hash"]] for entry in table["citations"]}
+            for entry in table["citations"]:
+                self.assertEqual(entry["native_locator"], sources[entry["ref"]].to_dict()["location"])
+            for row in table["rows"]:
+                for values in row["values"]:
+                    for cell in values:
+                        for quote_index, binding_index in cell["quotes"]:
+                            quote, bindings = row["quotes"][quote_index]
+                            reference, _ = bindings[binding_index]
+                            self.assertIn(quote, sources[reference].text)
+            self.assertLessEqual(len(json.dumps(compact, ensure_ascii=False).encode()), 16 * 1024)
+            tight = human_uat_orchestrator.compact_evidence_for_model(result, item_limit=2)
+            self.assertEqual(len(json.loads(tight["evidence"][0]["snippet"].split("\n", 1)[1])["rows"]), 10)
+
+    def test_fact_group_still_over_budget_never_releases_a_subset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            revision, config, _, export, observations = self._fixture(Path(directory))
+            original = json.loads((export / "rows.jsonl").read_bytes().splitlines()[0])
+            original["fields"]["asset_code"][0]["evidence_spans"][0].update(
+                quote=observations[0].text, start=0, end=len(observations[0].text))
+            rows = [{**original, "row_id": f"factrow_clienta_large_{index}"} for index in range(128)]
+            (export / "rows.jsonl").write_bytes(b"".join(json.dumps(row).encode() + b"\n" for row in rows))
+            digest = CandidateFactDiskIndexTests._reseal(config, export, len(rows))
+            bound = issue56_sealed_source.bind_issue56_candidate_fact_exports(
+                revision, configuration_path=config, expected_sha256=digest)
+            result = loader._build_source_start_semantic_handler(bound, mail_tool=False)(
+                self._arguments(families=("document_text",)))
+            display = human_uat_orchestrator.compact_evidence_for_model(result)
+            self.assertNotIn("candidate_fact_group", json.dumps(display))
+            self.assertNotEqual(result["status"], "not_found")
+
+
+class CandidateFactTablePresentationTests(unittest.TestCase):
+    def _fixture(self, root, *, overflow=False, adjacent=False, real_times=False, shared_source=False, overflow_contexts=480):
+        from formowl_graph.ontology import CandidatePropertyMapping
+        paragraphs = [f"{'Clienta ZX-742 ' if index == 0 else ''}Ticket R-{index:03d} "
+            f"PO date 2030-05-{index+1:02d} expected 2031-04-{index+1:02d} Quantity {index+1} pcs"
+            for index in range(14)]
+        if overflow:
+            paragraphs[0] += " Supporting source context." * overflow_contexts
+        paragraphs.append("Clienta ZX-742 ordinary independent source support must remain visible.")
+        text = (" ".join(paragraphs[:14]) + "\n" * 70 + paragraphs[-1] if shared_source else
+                ("\n\n" if adjacent else "\n" * 70).join(paragraphs))
+        fixture = _source_start_preparation_fixture(root, families=("document_text",), document_text=text)
+        from scripts.issue56_source_native_lookup import build_lookup
+        lookup = root / "table-lookup"
+        build_lookup(directory=fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
+                     output_directory=lookup)
+        for name in ("source-lookup-manifest.json", "source-lookup.sqlite"):
+            shutil.copyfile(lookup / name, fixture.directory / name)
+        revision = issue56_sealed_source.load_issue56_ingestion_revision(
+            fixture.directory, expected_revision_sha256=fixture.preparation_sha256)
+        observations = [item for item in fixture.observations if item.observation_type == "paragraph"]
+        self.assertEqual(len(observations), 2 if shared_source else 15)
+        properties = ["asset_code", "ticket_code", "po_date", "target_date", "quantity"]
+        mapping = CandidatePropertyMapping.from_dict({"artifact_id": "formowl_candidate_property_mapping_v1",
+            "mapping_id": "clienta_fact_table", "review_status": "pending_review", "properties": properties,
+            "aliases": [{"label": prop, "property_id": prop, "qualifiers": {}} for prop in properties],
+            "identity_groups": [{"name": "asset", "properties": ["asset_code"]}]})
+        annotation = sha256_json("fictional-table-annotation-separate-from-serving")
+        rows = []
+        for index, observation in enumerate([observations[0]] * 14 if shared_source else observations[:14]):
+            fields = {}
+            values = ("ZX-742", f"R-{index:03d}", f"2030-05-{index+1:02d}", f"2031-04-{index+1:02d}", index+1)
+            for prop, value in zip(properties, values):
+                source = observations[0] if prop == "asset_code" else observation
+                quote = f"Quantity {value} pcs" if prop == "quantity" else value
+                if overflow and prop == "asset_code":
+                    quote = source.text
+                if shared_source and prop != "asset_code":
+                    quote = paragraphs[index].removeprefix("Clienta ZX-742 ")
+                start = source.text.index(quote)
+                digest = sha256_json(source.to_dict())
+                fields[prop] = [{"value": value, "unit": "pcs" if prop == "quantity" else None,
+                    "qualifiers": ({"notes": "x" * 2000} if overflow else {"kind": "expected"}) if prop == "target_date" else {},
+                    "times": [], "unit_id": f"clienta-unit-{index}", "source_unit_id": f"clienta-source-{index}",
+                    "source_revision_fingerprint": annotation, "permission_scope": source.to_dict()["permission_scope"],
+                    "permission_scope_fingerprint": sha256_json(source.to_dict()["permission_scope"]),
+                    "source_observation_ids": [source.observation_id], "observation_hashes": {source.observation_id: digest},
+                    "evidence_spans": [{"observation_id": source.observation_id, "observation_hash": digest,
+                        "field_path": ["text"], "quote": quote, "occurrence_index": None,
+                        "start": start, "end": start + len(quote), "native_locator": source.to_dict()["location"],
+                        "source_extractor_run_id": source.extractor_run_id}]}]
+            if real_times:
+                for prop in ("po_date", "target_date"):
+                    fact = fields[prop][0]
+                    fact["times"] = [{"normalized": fact["value"], "role": role, "raw": fact["value"],
+                        "precision": "day", "property": prop, "evidence_spans": copy.deepcopy(fact["evidence_spans"])}
+                        for role in ("recorded", "expected")]
+            rows.append({"artifact_id": "formowl_candidate_fact_row_v1", "row_id": f"factrow_clienta_table_{index}",
+                "source_revision_fingerprint": annotation, "mapping_fingerprint": mapping.fingerprint,
+                "review_status": "pending_review", "semantic_correctness_verified": False,
+                "item_or_row": str(index), "fields": fields, "identity_candidates": []})
+        export = root / "table-export"
+        export.mkdir()
+        raw = b"".join(json.dumps(row).encode() + b"\n" for row in rows)
+        (export / "rows.jsonl").write_bytes(raw)
+        (export / "mapping.snapshot.json").write_text(json.dumps(mapping.data))
+        manifest = {"artifact_id": "formowl_candidate_fact_export_v1", "review_status": "pending_review",
+            "semantic_correctness_verified": False, "source_revision": annotation,
+            "mapping_fingerprint": mapping.fingerprint, "rows_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(), "row_count": 14}
+        (export / "manifest.json").write_text(json.dumps(manifest))
+        config = {"artifact_id": "formowl_candidate_fact_runtime_config_v1", **{key: revision.safe_binding[key] for key in (
+            "source_revision_sha256", "source_authority_fingerprint", "source_session_binding_fingerprint")},
+            "exports": [{"manifest_path": str(export / "manifest.json"),
+                         "manifest_sha256": "sha256:" + hashlib.sha256((export / "manifest.json").read_bytes()).hexdigest()}]}
+        path = root / "table-config.json"
+        path.write_text(json.dumps(config))
+        bound = issue56_sealed_source.bind_issue56_candidate_fact_exports(revision,
+            configuration_path=path, expected_sha256="sha256:" + hashlib.sha256(path.read_bytes()).hexdigest())
+        return revision, bound, observations
+
+    @staticmethod
+    def _arguments():
+        return {"query_text": "Find Clienta ZX-742 facts", "required_terms": ["ZX-742"],
+            "requester_user_id": loader.APPROVER_ACTOR, "workspace_id": loader.WORKSPACE_ID,
+            "session_id": "clienta-single-table", "page_size": 10}
+
+    def test_fourteen_rows_five_fields_over_reserved_cap_remain_whole_until_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            revision, bound, observations = self._fixture(Path(directory), overflow=True)
+            args = self._arguments()
+            ordinary = human_uat_orchestrator.compact_evidence_for_model(
+                loader._build_source_start_semantic_handler(revision, mail_tool=False)(args))
+            tables = []
+            build = loader._candidate_fact_table
+            def capture(*values, **kwargs):
+                table = build(*values, **kwargs)
+                if kwargs.get("_counts") is None:
+                    tables.append(table if table is not None else build(*values, **{**kwargs, "_counts": (len(values[0]), 0)}))
+                return table
+            with patch.object(loader, "_candidate_fact_table", side_effect=capture):
+                result = loader._build_source_start_semantic_handler(bound, mail_tool=False)(args)
+            compact = human_uat_orchestrator.compact_evidence_for_model(result)
+            self.assertEqual(len(tables), 1)
+            self.assertGreater(len(json.dumps(tables[0], ensure_ascii=False).encode()), 10 * 1024)
+            self.assertNotIn("candidate_fact_group", json.dumps(compact))
+            label, raw = tables[0]["snippet"].split("\n", 1)
+            self.assertEqual(label, "候選事實（由標註取得，未經人工審核）")
+            table = json.loads(raw)
+            self.assertEqual(len(table["rows"]), 14)
+            self.assertEqual(len(table["columns"]), 5)
+            self.assertEqual(len(table["citations"]), 14)
+            self.assertEqual(set(tables[0]["source_context"]["required_citation_hashes"]),
+                             {entry["citation_hash"] for entry in table["citations"]})
+            cells = [cell for row in table["rows"] for values in row["values"] for cell in values]
+            self.assertEqual(len(cells), 70)
+            self.assertEqual({cell["value"] for cell in cells if cell.get("unit") == "pcs"}, set(range(1, 15)))
+            self.assertEqual({cell["value"] for row in table["rows"]
+                for cell in row["values"][table["columns"].index("target_date")]},
+                {f"2031-04-{index:02d}" for index in range(1, 15)})
+            self.assertTrue(all("qualifiers" not in cell for cell in cells))
+            sources = {sha256_json(obs.to_dict()): obs for obs in observations}
+            references = {entry["ref"]: sources[entry["citation_hash"]] for entry in table["citations"]}
+            for row in table["rows"]:
+                for values in row["values"]:
+                    for cell in values:
+                        for quote_index, binding_index in cell["quotes"]:
+                            quote, bindings = row["quotes"][quote_index]
+                            reference, _ = bindings[binding_index]
+                            self.assertIn(quote, references[reference].text)
+            for entry in table["citations"]:
+                self.assertEqual(entry["native_locator"], sources[entry["citation_hash"]].to_dict()["location"])
+                self.assertEqual(entry["source_observation_id"], sources[entry["citation_hash"]].observation_id)
+            ordinary_items = [item for item in compact["evidence"] if item not in tables]
+            self.assertEqual(ordinary_items, ordinary["evidence"])
+            self.assertEqual(human_uat_orchestrator.evidence_citation_ids(compact),
+                             human_uat_orchestrator.evidence_citation_ids(ordinary))
+            row_bytes = [len(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode()) for row in table["rows"]]
+            envelope_bytes = len(json.dumps(compact, ensure_ascii=False).encode())
+            print("AS58_OVER_CAP_14x5_BYTES", json.dumps({"rows": row_bytes, "table_item": len(json.dumps(tables[0], ensure_ascii=False).encode()),
+                "full_envelope": envelope_bytes}), flush=True)
+            self.assertEqual(len(raw.splitlines()), len(table["rows"]) + 2)
+            self.assertLess(envelope_bytes, 16 * 1024)
+            self.assertEqual(human_uat_orchestrator.compact_evidence_for_model(compact), compact)
+            human_uat_orchestrator._validate_evidence_bound_decision({"response_kind": "answer",
+                "citation_ids": list(human_uat_orchestrator.evidence_citation_ids(compact)), "coverage_status": "incomplete"},
+                evidence_results=(compact,))
+
+    def test_over_cap_table_preserves_existing_ordinary_citation_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            revision, bound, _ = self._fixture(Path(directory), overflow=True, overflow_contexts=380)
+            self.assertTrue(all(len(row["fields"]["asset_code"][0]["evidence_spans"][0]["quote"].encode()) > 10240
+                                for row in bound.candidate_fact_rows))
+            admit = loader._admit_source_model_envelope
+            def ordinary_support_first(payload, **kwargs):
+                # Order only the already-guarded completed ordinary envelope;
+                # source/quote/hash validation and retrieval remain unchanged.
+                payload = admit(payload, **kwargs)
+                items = list(reversed(payload["evidence"]))
+                return {**payload, "evidence": items, "citations": [item["citation_hash"] for item in items]}
+            with patch.object(loader, "_admit_source_model_envelope", side_effect=ordinary_support_first):
+                ordinary = human_uat_orchestrator.compact_evidence_for_model(
+                    loader._build_source_start_semantic_handler(revision, mail_tool=False)(self._arguments()))
+                result = loader._build_source_start_semantic_handler(bound, mail_tool=False)(self._arguments())
+            compact = human_uat_orchestrator.compact_evidence_for_model(result)
+            self.assertTrue(compact["evidence"])
+            self.assertNotIn("candidate_fact_group", json.dumps(compact))
+            self.assertEqual(compact["evidence"], ordinary["evidence"])
+            self.assertGreaterEqual(len(ordinary["evidence"]), 2)
+            self.assertGreaterEqual(len(ordinary["citations"]), 2)
+            self.assertEqual(compact["citations"], ordinary["citations"])
+            print("AS60_R2_PROOF", json.dumps({"ordinary_items": len(ordinary["evidence"]),
+                "ordinary_citations": len(ordinary["citations"]),
+                "ordinary_order": [sha256_json(item) for item in ordinary["evidence"]],
+                "final_order": [sha256_json(item) for item in compact["evidence"]],
+                "ordinary_citation_order": ordinary["citations"], "final_citation_order": compact["citations"],
+                "min_fact_quote_bytes": min(len(row["fields"]["asset_code"][0]["evidence_spans"][0]["quote"].encode())
+                                            for row in bound.candidate_fact_rows)}), flush=True)
+
+    def test_table_overflow_or_bad_quote_keeps_whole_ordinary_fallback(self):
+        for failure in ("overflow", "quote", "item_cap", "ordinary_saturated"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                revision, bound, _ = self._fixture(Path(directory), overflow=True, adjacent=failure == "ordinary_saturated")
+                args = {**self._arguments(), **({"page_size": 1} if failure == "item_cap" else {})}
+                if failure == "quote":
+                    rows = copy.deepcopy(list(bound.candidate_fact_rows))
+                    rows[-1]["fields"]["target_date"][0]["evidence_spans"][0]["quote"] = "invented quote"
+                    bound = replace(bound, candidate_fact_rows=tuple(rows))
+                ordinary = human_uat_orchestrator.compact_evidence_for_model(
+                    loader._build_source_start_semantic_handler(revision, mail_tool=False)(args))
+                result = loader._build_source_start_semantic_handler(bound, mail_tool=False)(args)
+                compact = human_uat_orchestrator.compact_evidence_for_model(result)
+                self.assertNotIn("candidate_fact_group", json.dumps(compact))
+                self.assertEqual(compact["evidence"], ordinary["evidence"])
+                self.assertTrue(compact["citations"])
+                if failure == "ordinary_saturated":
+                    print("AS57_SATURATED_BYTES", json.dumps({"ordinary_full_envelope": len(json.dumps(ordinary, ensure_ascii=False).encode()),
+                        "retained_ordinary_items": len(ordinary["evidence"]), "final_envelope": len(json.dumps(compact, ensure_ascii=False).encode())}), flush=True)
+
+
+class CandidateFactTablePriorityHandlerTests(unittest.TestCase):
+    def test_guarded_mail_table_survives_saturated_ordinary_envelope(self):
+        from formowl_retrieval.gateway import _SourcePhaseTrace, _source_phase_trace_scope
+        with tempfile.TemporaryDirectory() as directory:
+            bound, _ = CandidateFactReachabilityTests()._captured(Path(directory))
+            args = {**CandidateFactRuntimeTests._arguments(), "required_terms": ["ZX-742"],
+                    "query_text": "Find Clienta asset ZX-742 expected date"}
+            ordinary = human_uat_orchestrator.compact_evidence_for_model(loader._build_source_start_semantic_handler(
+                replace(bound, candidate_fact_pin=None), mail_tool=False)(args))
+            trace = _SourcePhaseTrace({})
+            with _source_phase_trace_scope(trace):
+                result = loader._build_source_start_semantic_handler(bound, mail_tool=False)(args)
+                compact = human_uat_orchestrator.compact_evidence_for_model(result)
+            self.assertEqual(compact["evidence"][0].get("source_type"), "candidate_fact_table")
+            # Frozen replay performs final/default compaction outside trace scope.
+            self.assertEqual(human_uat_orchestrator.compact_evidence_for_model(result), compact)
+            self.assertEqual(human_uat_orchestrator.compact_evidence_for_model(compact), compact)
+            table = json.loads(compact["evidence"][0]["snippet"].split("\n", 1)[1])
+            self.assertEqual(len(table["rows"]), 2)
+            self.assertLess(len(compact["evidence"]) - 1, len(ordinary["evidence"]))
+            self.assertLessEqual(len(json.dumps(compact, ensure_ascii=False).encode()), 16 * 1024)
+            self.assertTrue(set(compact["evidence"][0]["source_context"]["required_citation_hashes"]).issubset(
+                human_uat_orchestrator.evidence_citation_ids(compact)))
+
+    def test_guarded_fourteen_row_table_over_cap_reports_reason_after_trace_fills(self):
+        from formowl_retrieval.gateway import _SourcePhaseTrace, _source_phase_trace_scope
+        class FillingTrace(_SourcePhaseTrace):
+            def phase(self, name, **fields):
+                cell = super().phase(name, **fields)
+                if fields.get("candidate_fact_status"):
+                    while len(self.details) < 256:
+                        self.cell(kind="phase", name="project")
+                return cell
+        with tempfile.TemporaryDirectory() as directory:
+            _, bound, _ = CandidateFactTablePresentationTests()._fixture(Path(directory), overflow=True)
+            trace = FillingTrace({})
+            with _source_phase_trace_scope(trace):
+                result = loader._build_source_start_semantic_handler(bound, mail_tool=False)(
+                    CandidateFactTablePresentationTests._arguments())
+                compact = human_uat_orchestrator.compact_evidence_for_model(result)
+            self.assertNotIn("candidate_fact_group", json.dumps(compact))
+            snapshot = json.loads(trace.snapshot())
+            self.assertIn("table_over_reserved_budget", json.dumps(snapshot))
+            self.assertEqual(len(snapshot["details"]), 256)
+
+
+
+class CandidateFactCompactDisplayTests(unittest.TestCase):
+    def test_fourteen_rows_with_full_time_evidence_fit_and_keep_paired_roles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, bound, observations = CandidateFactTablePresentationTests()._fixture(Path(directory), real_times=True, shared_source=True)
+            tables = []
+            build = loader._candidate_fact_table
+            def capture(*args, **kwargs):
+                item = build(*args, **kwargs)
+                tables.append(item)
+                print("AS59_STAGED_TIME_BYTES", len(json.dumps(item, ensure_ascii=False).encode()), flush=True)
+                return item
+            with patch.object(loader, "_candidate_fact_table", side_effect=capture):
+                result = loader._build_source_start_semantic_handler(bound, mail_tool=False)(
+                    CandidateFactTablePresentationTests._arguments())
+            compact = human_uat_orchestrator.compact_evidence_for_model(result)
+            self.assertEqual(compact["evidence"][0].get("source_type"), "candidate_fact_table")
+            item = compact["evidence"][0]
+            table = json.loads(item["snippet"].split("\n", 1)[1])
+            self.assertEqual(len(table["rows"]), 14)
+            self.assertEqual(len(table["citations"]), 1)
+            self.assertEqual([row["item"] for row in table["rows"]], [str(index) for index in range(14)])
+            cells = [cell for row in table["rows"] for values in row["values"] for cell in values]
+            self.assertEqual(len(cells), 70)
+            self.assertEqual({cell["value"] for cell in cells}, {"ZX-742", *range(1, 15),
+                *(f"R-{index:03d}" for index in range(14)),
+                *(f"2030-05-{index:02d}" for index in range(1, 15)),
+                *(f"2031-04-{index:02d}" for index in range(1, 15))})
+            self.assertEqual(sum(len(cell.get("times", ())) for cell in cells), 56)
+            sources = {sha256_json(obs.to_dict()): obs for obs in observations}
+            refs = {entry["ref"]: entry for entry in table["citations"]}
+            used = set()
+            for row in table["rows"]:
+                quotes = row["quotes"]
+                self.assertEqual(len({entry[0] for entry in quotes}), len(quotes))
+                for cells in row["values"]:
+                    for cell in cells:
+                        self.assertLessEqual(set(cell), {"value", "unit", "times", "quotes"})
+                        if "times" in cell:
+                            self.assertEqual(cell["times"], [{"normalized": cell["value"], "role": role}
+                                                           for role in ("recorded", "expected")])
+                        for index, binding_index in cell["quotes"]:
+                            quote, bindings = quotes[index]
+                            reference, span_index = bindings[binding_index]
+                            citation = refs[reference]
+                            source = sources[citation["citation_hash"]]
+                            start, end = citation["spans"][span_index]
+                            self.assertEqual(source.text[start:end], quote)
+                            self.assertEqual(citation["source_extractor_run_id"], source.extractor_run_id)
+                            self.assertEqual(citation["native_locator"], source.to_dict()["location"])
+                            used.add(reference)
+            self.assertEqual(used, set(refs))
+            self.assertLess(len(json.dumps(item, ensure_ascii=False).encode()), 10 * 1024)
+            self.assertLessEqual(len(json.dumps(compact, ensure_ascii=False).encode()), 16 * 1024)
+            self.assertEqual(human_uat_orchestrator.compact_evidence_for_model(compact), compact)
+            print("AS59_TIME_TABLE_BYTES", len(json.dumps(item, ensure_ascii=False).encode()),
+                  len(json.dumps(compact, ensure_ascii=False).encode()), flush=True)
+
+    def test_distinct_quote_full_time_table_remains_whole_overflow(self):
+        from formowl_retrieval.gateway import _SourcePhaseTrace, _source_phase_trace_scope
+        with tempfile.TemporaryDirectory() as directory:
+            _, bound, _ = CandidateFactTablePresentationTests()._fixture(Path(directory), real_times=True, overflow=True)
+            tables = []
+            build = loader._candidate_fact_table
+            def capture(*args, **kwargs):
+                table = build(*args, **kwargs)
+                if kwargs.get("_counts") is None:
+                    tables.append(table if table is not None else build(*args, **{**kwargs, "_counts": (len(args[0]), 0)}))
+                return table
+            trace = _SourcePhaseTrace({})
+            with patch.object(loader, "_candidate_fact_table", side_effect=capture), _source_phase_trace_scope(trace):
+                result = loader._build_source_start_semantic_handler(bound, mail_tool=False)(
+                    CandidateFactTablePresentationTests._arguments())
+            self.assertEqual(len(tables), 1)
+            table = json.loads(tables[0]["snippet"].split("\n", 1)[1])
+            self.assertEqual(len(table["rows"]), 14)
+            self.assertEqual(len(table["citations"]), 14)
+            cells = [cell for row in table["rows"] for values in row["values"] for cell in values]
+            self.assertEqual(len(cells), 70)
+            self.assertEqual(sum(len(cell.get("times", ())) for cell in cells), 56)
+            self.assertGreater(len(json.dumps(tables[0], ensure_ascii=False).encode()), 10 * 1024)
+            self.assertNotIn("candidate_fact_group", json.dumps(result))
+            self.assertIn("table_over_reserved_budget", trace.snapshot())
+            print("AS59_DISTINCT_QUOTE_OVERFLOW_BYTES", len(json.dumps(tables[0], ensure_ascii=False).encode()), flush=True)
+
+    def test_same_quote_different_observations_keeps_each_cells_original_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, bound, observations = CandidateFactTablePresentationTests()._fixture(Path(directory))
+            rows = copy.deepcopy(list(bound.candidate_fact_rows))
+            fields = []
+            for source in observations[:2]:
+                fact = copy.deepcopy(rows[0]["fields"]["ticket_code"][0])
+                span = fact["evidence_spans"][0]
+                digest = sha256_json(source.to_dict())
+                start = source.text.index("Ticket")
+                span.update(observation_id=source.observation_id, observation_hash=digest, quote="Ticket",
+                    start=start, end=start+6, native_locator=source.to_dict()["location"],
+                    source_extractor_run_id=source.extractor_run_id)
+                fact.update(value="Ticket", source_observation_ids=[source.observation_id],
+                            observation_hashes={source.observation_id: digest})
+                fields.append(fact)
+            rows[0]["fields"]["ticket_code"] = fields
+            result = loader._build_source_start_semantic_handler(replace(bound, candidate_fact_rows=tuple(rows[:1])),
+                mail_tool=False)(CandidateFactTablePresentationTests._arguments())
+            compact = human_uat_orchestrator.compact_evidence_for_model(result)
+            self.assertEqual(compact["evidence"][0].get("source_type"), "candidate_fact_table")
+            table = json.loads(compact["evidence"][0]["snippet"].split("\n", 1)[1])
+            row = table["rows"][0]
+            self.assertIn("quotes", row)
+            self.assertEqual(sum(quote == "Ticket" for quote, _ in row["quotes"]), 1)
+            cells = row["values"][table["columns"].index("ticket_code")]
+            refs = {entry["ref"]: entry for entry in table["citations"]}
+            for cell, source in zip(cells, observations[:2]):
+                self.assertEqual(len(cell["quotes"]), 1)
+                quote_index, binding_index = cell["quotes"][0]
+                quote, bindings = row["quotes"][quote_index]
+                reference, span_index = bindings[binding_index]
+                self.assertEqual(quote, "Ticket")
+                self.assertEqual(refs[reference]["citation_hash"], sha256_json(source.to_dict()))
+                self.assertEqual(refs[reference]["spans"][span_index], [source.text.index("Ticket"), source.text.index("Ticket")+6])
+            self.assertNotEqual(cells[0]["quotes"], cells[1]["quotes"])
+
+    @staticmethod
+    def _generic_fixture(root):
+        revision, config, _, export, _ = CandidateFactRuntimeTests()._fixture(root)
+        rows_path = export / "rows.jsonl"
+        rows = [json.loads(line) for line in rows_path.read_bytes().splitlines()]
+        for row, generic in zip(rows, ("bracket", "frame")):
+            row["fields"]["asset_code"][0]["value"] = generic
+            row["fields"]["ticket_code"][0]["value"] = "ZX-742"
+        rows_path.write_bytes(b"".join(json.dumps(row).encode() + b"\n" for row in rows))
+        digest = CandidateFactDiskIndexTests._reseal(config, export, len(rows))
+        return revision, issue56_sealed_source.bind_issue56_candidate_fact_exports(
+            revision, configuration_path=config, expected_sha256=digest)
+
+    def test_empty_intersection_fallback_uses_only_digit_identity_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, bound = self._generic_fixture(Path(directory))
+            for selected in (bound, replace(bound, candidate_fact_rows=tuple(bound.candidate_fact_rows))):
+                with self.subTest(indexed=selected is bound):
+                    lookup = issue56_sealed_source.lookup_issue56_candidate_fact_rows
+                    self.assertEqual(len(lookup(selected, ["bracket", "frame", "ZX-742"])), 2)
+                    self.assertFalse(lookup(selected, ["bracket", "frame"]))
+                    self.assertFalse(lookup(selected, ["bracket", "frame", "ZX742"]))
+                    self.assertEqual(len(lookup(selected, ["bracket"])), 1)
+
+    def test_no_digit_fallback_records_reason_in_actual_trace_and_keeps_ordinary(self):
+        from formowl_retrieval.gateway import _SourcePhaseTrace, _source_phase_trace_scope
+        with tempfile.TemporaryDirectory() as directory:
+            revision, bound = self._generic_fixture(Path(directory))
+            args = {**CandidateFactRuntimeTests._arguments(), "required_terms": ["bracket", "frame"]}
+            ordinary = loader._build_source_start_semantic_handler(revision, mail_tool=False)(args)
+            trace = _SourcePhaseTrace({})
+            with _source_phase_trace_scope(trace):
+                result = loader._build_source_start_semantic_handler(bound, mail_tool=False)(args)
+            self.assertEqual(result, ordinary)
+            self.assertNotIn("candidate_fact_group", json.dumps(result))
+            self.assertIn("no_identifier_term", trace.snapshot())
+
+
+
+class CandidateFactOrderedDisplayTests(unittest.TestCase):
+    def test_longest_fallback_term_and_safe_trace_hash(self):
+        from formowl_retrieval.gateway import _SourcePhaseTrace, _source_phase_trace_scope
+        with tempfile.TemporaryDirectory() as directory:
+            revision, config, _, export, _ = CandidateFactRuntimeTests()._fixture(Path(directory))
+            rows = [json.loads(line) for line in (export / "rows.jsonl").read_bytes().splitlines()]
+            rows[0]["fields"]["ticket_code"][0]["value"] = "Q-02"
+            rows[1]["fields"]["ticket_code"][0]["value"] = "frame"
+            (export / "rows.jsonl").write_bytes(b"".join(json.dumps(row).encode()+b"\n" for row in rows))
+            bound = issue56_sealed_source.bind_issue56_candidate_fact_exports(revision, configuration_path=config,
+                expected_sha256=CandidateFactDiskIndexTests._reseal(config, export, 2))
+            for selected in (bound, replace(bound, candidate_fact_rows=tuple(bound.candidate_fact_rows))):
+                trace = _SourcePhaseTrace({})
+                with _source_phase_trace_scope(trace):
+                    found = issue56_sealed_source.lookup_issue56_candidate_fact_rows(selected, ["ZX-742", "Q-02", "frame"],
+                        reason_callback=human_uat_orchestrator._candidate_fact_table_status)
+                self.assertEqual(len(found), 2)
+                self.assertIn(sha256_json("zx-742"), trace.snapshot())
+                self.assertNotIn("zx-742", trace.snapshot())
+
+    def test_identity_only_rows_are_display_omissions_and_all_identity_falls_back(self):
+        from formowl_retrieval.gateway import _SourcePhaseTrace, _source_phase_trace_scope
+        with tempfile.TemporaryDirectory() as directory:
+            bound, _ = CandidateFactReachabilityTests()._captured(Path(directory))
+            rows = copy.deepcopy(list(bound.candidate_fact_rows))
+            identity = {**rows[0], "row_id": "factrow_identity_only", "fields": {"asset_code": rows[0]["fields"]["asset_code"]}}
+            for selected, expected in ((rows+[identity], 2), ([identity], 0)):
+                trace = _SourcePhaseTrace({})
+                with _source_phase_trace_scope(trace):
+                    result = loader._build_source_start_semantic_handler(replace(bound, candidate_fact_rows=tuple(selected)),
+                        mail_tool=False)({**CandidateFactRuntimeTests._arguments(), "required_terms": ["ZX-742"], "query_text": "Find Clienta ZX-742 expected date"})
+                tables = [item for item in result["evidence"] if item.get("source_type") == "candidate_fact_table"]
+                self.assertEqual(len(tables), int(bool(expected)))
+                if tables:
+                    table = json.loads(tables[0]["snippet"].split("\n", 1)[1])
+                    self.assertEqual(len(table["rows"]), expected)
+                    self.assertIn("identity-only", table["disclosure"])
+                self.assertIn("identity_only_rows_omitted", trace.snapshot())
+                notice = next(d for d in json.loads(trace.snapshot())["details"] if d.get("candidate_fact_status"))
+                self.assertEqual(notice["identity_only_row_count"], 1)
+                self.assertTrue(result["citations"])
+                self.assertIsNot(result.get("coverage", {}).get("absence_claim"), True)
+                self.assertEqual(len(selected), expected+1)
+
+    def test_ordered_whole_row_prefix_fits_and_discloses_remaining_answer_rows(self):
+        from formowl_retrieval.gateway import _SourcePhaseTrace, _source_phase_trace_scope
+        with tempfile.TemporaryDirectory() as directory:
+            _, bound, _ = CandidateFactTablePresentationTests()._fixture(Path(directory), real_times=True)
+            rows = copy.deepcopy(list(bound.candidate_fact_rows))
+            rows[-1]["fields"].pop("quantity")
+            rows[0]["fields"]["target_date"][0]["times"].append({"normalized": "unknown", "role": "expected"})
+            rows.append({**rows[12], "row_id": "factrow_tied_copy", "item_or_row": "12copy"})
+            trace = _SourcePhaseTrace({})
+            with _source_phase_trace_scope(trace):
+                result = loader._build_source_start_semantic_handler(replace(bound, candidate_fact_rows=tuple(rows)),
+                    mail_tool=False)(CandidateFactTablePresentationTests._arguments())
+                compact = human_uat_orchestrator.compact_evidence_for_model(result)
+            self.assertEqual(compact["evidence"][0].get("source_type"), "candidate_fact_table")
+            item = compact["evidence"][0]
+            table = json.loads(item["snippet"].split("\n", 1)[1])
+            shown = len(table["rows"])
+            self.assertTrue(0 < shown < 15)
+            self.assertEqual([row["item"] for row in table["rows"]], (["12", "12copy"]+[str(i) for i in range(11, -1, -1)]+["13"])[:shown])
+            self.assertIn(f"Shown {shown} of 15 answer-bearing rows", table["disclosure"])
+            self.assertIn("not evidence of absence", table["disclosure"])
+            self.assertTrue(all(len(row["values"]) == 5 and all(row["values"]) for row in table["rows"]))
+            self.assertEqual(set(item["source_context"]["required_citation_hashes"]), {c["citation_hash"] for c in table["citations"]})
+            self.assertLessEqual(len(json.dumps(item, ensure_ascii=False).encode()), 10240)
+            self.assertLessEqual(len(json.dumps(compact, ensure_ascii=False).encode()), 16384)
+            self.assertIn("table_rows_truncated_to_budget", trace.snapshot())
+            notice = next(d for d in json.loads(trace.snapshot())["details"] if d.get("candidate_fact_status"))
+            self.assertEqual((notice["shown_row_count"], notice["answer_row_count"]), (shown, 15))
+            self.assertEqual(human_uat_orchestrator.compact_evidence_for_model(compact), compact)
 
 
 class CandidateFactDiskIndexTests(unittest.TestCase):
@@ -7052,6 +7894,46 @@ class CandidateFactDiskIndexTests(unittest.TestCase):
         config["exports"][0]["manifest_sha256"] = "sha256:" + hashlib.sha256(manifest_path.read_bytes()).hexdigest()
         config_path.write_text(json.dumps(config))
         return "sha256:" + hashlib.sha256(config_path.read_bytes()).hexdigest()
+
+    def test_composite_identity_postings_use_whole_digit_tokens_and_same_row_intersection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            revision, config, _, export, _ = self._fixture(Path(directory))
+            rows_path = export / "rows.jsonl"
+            rows = [json.loads(line) for line in rows_path.read_bytes().splitlines()]
+            value = "ZX-742 [redacted_path] Clienta bracket ZX-742 a Q9 123 1234"
+            rows[0]["fields"]["asset_code"][0]["value"] = value
+            rows[1]["fields"]["asset_code"][0]["value"] = "ZX-843 [redacted_path] Clienta bracket"
+            rows_path.write_bytes(b"".join(json.dumps(row).encode() + b"\n" for row in rows))
+            digest = self._reseal(config, export, len(rows))
+            bound = issue56_sealed_source.bind_issue56_candidate_fact_exports(
+                revision, configuration_path=config, expected_sha256=digest)
+            self.assertEqual(bound.candidate_fact_rows.postings.get("zx-742"), (0,))
+            lookup = issue56_sealed_source.lookup_issue56_candidate_fact_rows
+            for selected in (bound, replace(bound, candidate_fact_rows=tuple(bound.candidate_fact_rows))):
+                self.assertEqual(lookup(selected, [" ＺＸ-７４２ "])[0]["fields"]["asset_code"][0]["value"], value)
+                self.assertEqual(len(lookup(selected, [value])), 1)
+                self.assertEqual(len(lookup(selected, ["ZX-742", "R-007"])), 1)
+                self.assertEqual(len(lookup(selected, ["1234"])), 1)
+                self.assertEqual(lookup(selected, ["ZX-742", "R-008"])[0]["row_id"], "factrow_clienta_0")
+                for terms in (["ZX742"], ["ZX-74"], ["742"], ["Clienta"],
+                              ["a"], ["Q9"], ["123"], ["[redacted_path]"]):
+                    with self.subTest(terms=terms, indexed=selected is bound):
+                        self.assertFalse(lookup(selected, terms))
+            self.assertEqual([json.loads(line) for line in rows_path.read_bytes().splitlines()], rows)
+
+    def test_composite_subject_identity_adds_the_same_exact_token_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            value = "ZX-742 [redacted_path] Clienta bracket"
+            revision, config, digest, _, _ = self._fixture(Path(directory), subject_only=True, subject_surface=value)
+            bound = issue56_sealed_source.bind_issue56_candidate_fact_exports(
+                revision, configuration_path=config, expected_sha256=digest)
+            lookup = issue56_sealed_source.lookup_issue56_candidate_fact_rows
+            self.assertEqual(len(lookup(bound, ["ZX-742"])), 2)
+            self.assertEqual(len(lookup(bound, [value])), 2)
+            self.assertEqual(len(lookup(bound, ["ZX-742", "R-008"])), 1)
+            for term in ("Clienta", "a", "ZX-74", "ZX742", "[redacted_path]"):
+                self.assertNotIn(term.casefold(), bound.candidate_fact_rows.postings)
+                self.assertFalse(lookup(bound, [term]))
 
     def test_streamed_above_old_cap_indexes_exact_same_row_identities_without_cache(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -7088,7 +7970,7 @@ class CandidateFactDiskIndexTests(unittest.TestCase):
             self.assertEqual(lookup(bound, ["ZX-742", "R-007"])[0]["fields"]["target_date"][0]["value"], "2031-04-02")
             self.assertEqual(len(lookup(bound, ["ZX-742"])), 2)
             self.assertEqual(len(lookup(bound, ["R-008"])), 1)
-            self.assertFalse(lookup(bound, ["Clienta-000000", "R-008"]))
+            self.assertEqual(lookup(bound, ["Clienta-000000", "R-008"])[0]["row_id"], "factrow_clienta_extra_0")
             self.assertFalse(lookup(bound, ["ZX742"]))
             self.assertFalse(lookup(bound, ["ZX-742"], deadline_monotonic=0))
 

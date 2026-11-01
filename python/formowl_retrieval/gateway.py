@@ -309,6 +309,10 @@ _TRACE_VALUES = frozenset((*_TRACE_COUNTERS,
     "source_table_shortlist", "annotation_identity_hints", "annotation_identity_reads",
     "email_message", "email_body_segment", "email_header",
     "email_attachment_occurrence", "paragraph", "heading", "annotation_nomination_fallback",
+    "candidate_fact_contract_validation_failed",
+    "table_over_reserved_budget", "citation_validation_failed",
+    "grouping_not_reached", "final_envelope_rejected", "no_identifier_term",
+    "identity_only_rows_omitted", "table_rows_truncated_to_budget",
 ))
 
 

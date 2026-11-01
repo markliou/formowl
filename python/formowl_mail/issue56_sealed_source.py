@@ -1069,15 +1069,26 @@ def _candidate_fact_normalize(value):
 
 
 def _candidate_fact_identity_values(row, properties, deadline=None):
+    from itertools import chain
+
     subject = row.get("subject_identity")
+    values = (fact_field.get("value") for prop in properties for fact_field in row["fields"].get(prop, ()))
     if subject is not None:
-        yield subject["value"]
-    for prop in properties:
-        for fact_field in row["fields"].get(prop, ()):
+        values = chain((subject["value"],), values)
+    for value in values:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("candidate fact deadline")
+        if not isinstance(value, str):
+            continue
+        normalized = _candidate_fact_normalize(value)
+        yield normalized
+        # Keep the full cell/subject key and add only complete digit-bearing
+        # whitespace tokens. Query matching remains exact posting intersection.
+        for token in normalized.split():
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError("candidate fact deadline")
-            if isinstance(fact_field.get("value"), str):
-                yield _candidate_fact_normalize(fact_field["value"])
+            if len(token) >= 4 and any(character.isdigit() for character in token):
+                yield token
 
 
 @dataclass(frozen=True)
@@ -1218,7 +1229,7 @@ def bind_issue56_candidate_fact_exports(
 
 
 def lookup_issue56_candidate_fact_rows(revision: Issue56IngestionRevision, required_terms: Sequence[str], *,
-                                      deadline_monotonic: float | None = None):
+                                      deadline_monotonic: float | None = None, reason_callback=None):
     """Exact identity lookup only; unsupported/missing terms leave ordinary retrieval intact."""
     if not required_terms:
         return ()
@@ -1226,30 +1237,54 @@ def lookup_issue56_candidate_fact_rows(revision: Issue56IngestionRevision, requi
     rows, selected = revision.candidate_fact_rows, []
     try:
         if isinstance(rows, _CandidateFactRows):
-            posting_lists = sorted((rows.postings.get(term, ()) for term in terms), key=len)
-            if not posting_lists[0]:
-                return ()
-            indexes = []
-            for index in posting_lists[0]:
+            postings = rows.postings
+        else:
+            # Explicit in-memory fixture replacements use the same posting policy.
+            postings = {term: [] for term in terms}
+            for index, row in enumerate(rows):
                 if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                     return ()
-                if all((position := bisect_left(other, index)) < len(other) and other[position] == index
-                       for other in posting_lists[1:]):
-                    indexes.append(index)
-                    if len(indexes) > 128:
-                        return ()
+                values = set(_candidate_fact_identity_values(row, row["_identity_properties"], deadline_monotonic))
+                for term in terms & values:
+                    postings[term].append(index)
+        # Descriptions with no exact key cannot veto a recognized identity.
+        keys = sorted((term for term in terms if postings.get(term)), key=lambda term: (len(postings[term]), term))
+        if not keys:
+            return ()
+        posting_lists = [postings[term] for term in keys]
+        indexes = []
+        for index in posting_lists[0]:
+            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                return ()
+            if all((position := bisect_left(other, index)) < len(other) and other[position] == index
+                   for other in posting_lists[1:]):
+                indexes.append(index)
+                if len(indexes) > 128:
+                    return ()
+        if not indexes:
+            identifier_keys = [term for term in keys if len(term) >= 4 and any(char.isdigit() for char in term)]
+            if not identifier_keys:
+                if reason_callback is not None:
+                    try:
+                        reason_callback("no_identifier_term")
+                    except Exception:
+                        pass  # Observer failures cannot change the lookup result.
+                return ()
+            chosen = min(identifier_keys, key=lambda term: (-len(term), len(postings[term]), term))
+            if reason_callback is not None:
+                try:
+                    reason_callback(None, selected_term_hash=sha256_json(chosen))
+                except Exception:
+                    pass  # Observer failures cannot change the lookup result.
+            indexes = postings[chosen]
+            if len(indexes) > 128:
+                return ()
+        if isinstance(rows, _CandidateFactRows):
             selected = [rows._read(index, deadline_monotonic) for index in indexes]
             for export_index in {rows.references[index][0] for index in indexes}:
                 rows._unchanged(export_index)
         else:
-            # Explicit in-memory fixture replacements retain the same exact contract.
-            for row in rows:
-                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
-                    return ()
-                if terms <= set(_candidate_fact_identity_values(row, row["_identity_properties"], deadline_monotonic)):
-                    selected.append(row)
-                    if len(selected) > 128:
-                        return ()
+            selected = [rows[index] for index in indexes]
     except (OSError, ValueError, ContractValidationError):
         # A changed/unavailable disk row cannot lend candidate values to this lookup.
         return ()
