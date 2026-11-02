@@ -311,36 +311,66 @@ class ReportTests(unittest.TestCase):
 
 
 class CandidateProjectionCommandTests(unittest.TestCase):
-    def fixture(self):
+    def fixture(self, members=None, mapping=None):
         from test_graph_reconciliation import CandidateFactRowTests
         from formowl_graph.storage import CandidateAtomStore, CandidateRelationStore, SemanticMetadataStore
         from formowl_ingestion.storage.records import ObservationStore
         root = _paths.fresh_test_dir("semantic-candidate-projection")
-        members = CandidateFactRowTests().members(partial=True)
+        members = members or CandidateFactRowTests().members(partial=True)
         source, ann = root / "source", root / "annotation"
         CandidateRelationStore(ann)
         for member in members:
             CandidateAtomStore(ann).create(member["atom"])
-        SemanticMetadataStore(ann).create(members[0]["ledger"])
-        for observation in members[0]["observations"].values():
-            ObservationStore(source).create(observation)
+        by_unit = {m["unit_id"]: m for m in members}
+        units, progress = [], []
+        for member in by_unit.values():
+            ledger = member["ledger"]
+            SemanticMetadataStore(ann).create(ledger)
+            for observation in member["observations"].values():
+                ObservationStore(source).create(observation)
+            units.append({"unit_id": member["unit_id"], "store": str(source), "kind": "mail",
+                "observation_ids": list(member["observations"]),
+                "focus_observation_ids": ledger["value"]["pins"]["focus_observation_ids"]})
+            progress.append({"run": ledger["extractor_run_id"], "unit": member["unit_id"],
+                "status": ledger["value"]["annotation_status"], "validation_status": ledger["value"]["validation_status"],
+                "ledger": ledger["semantic_metadata_id"]})
         ledger = members[0]["ledger"]
         run = ledger["extractor_run_id"]
-        unit = {"unit_id": members[0]["unit_id"], "store": str(source), "kind": "mail",
-                "observation_ids": list(members[0]["observations"]),
-                "focus_observation_ids": ledger["value"]["pins"]["focus_observation_ids"]}
-        scope = (json.dumps(unit) + "\n" + json.dumps({**unit, "unit_id": "unit-failed"}) + "\n").encode()
+        scope = ("".join(json.dumps(u) + "\n" for u in units)
+                 + json.dumps({**units[0], "unit_id": "unit-failed"}) + "\n").encode()
         (root / "units").write_bytes(scope)
         (ann / f"run-{run}.configuration.json").write_text(json.dumps({
             "units_sha256": "sha256:" + hashlib.sha256(scope).hexdigest(),
             "source_revision": ledger["value"]["pins"]["source_revision_fingerprint"]}))
-        (ann / "progress.jsonl").write_text(json.dumps({"run": run, "unit": unit["unit_id"],
-            "status": "pending", "validation_status": "partial", "ledger": ledger["semantic_metadata_id"]}) + "\n"
+        (ann / "progress.jsonl").write_text("".join(json.dumps(p) + "\n" for p in progress)
             + json.dumps({"run": run, "unit": "unit-failed", "status": "failed"}) + "\n" + '{"unfinished":')
-        (root / "mapping").write_text(json.dumps(CandidateFactRowTests.mapping().data))
+        (root / "mapping").write_text(json.dumps(mapping or CandidateFactRowTests.mapping().data))
         args = SimpleNamespace(units=str(root / "units"), annotation_output=str(ann), run_id=run,
                                mapping=str(root / "mapping"), output=str(root / "export"))
         return root, args
+
+    def test_project_command_inherits_across_units_and_keeps_per_unit_coverage(self):
+        from test_graph_reconciliation import CandidateFactRowTests
+        helper = CandidateFactRowTests()
+        header = helper.members("header", document="service", row=None, run_id="semrun_service",
+            property_values=(("Ticket", "R-007"),))
+        detail = helper.members("rows", document="service", partial=True, run_id="semrun_service",
+            property_values=(("Asset Code", "ZX-742"),))
+        mapping = helper.mapping().data
+        mapping["document_level_properties"] = ["ticket_code"]
+        root, args = self.fixture(header + detail, mapping)
+        with patch("urllib.request.urlopen", side_effect=AssertionError("no model allowed")):
+            self.assertEqual(annotation.project_command(args), 0)
+        manifest = json.loads((root / "export/manifest.json").read_text())
+        self.assertEqual(manifest["units_by_validation"], {"complete": 1, "partial": 1})
+        self.assertEqual(manifest["retained_atoms_by_validation"], {"complete": 1, "partial": 1})
+        self.assertEqual(manifest["rows_by_validation"], {"complete": 1, "partial": 1})
+        self.assertEqual(manifest["field_coverage"]["ticket_code"]["units"], 2)
+        self.assertFalse(manifest["scope_complete"])
+        rows = [json.loads(line) for line in (root / "export/rows.jsonl").read_text().splitlines()]
+        self.assertTrue(next(r for r in rows if r["unit_id"] == "rows")["fields"]["ticket_code"][0]["inherited_from_document_header"])
+        labels = [json.loads(line) for line in (root / "export/labels.jsonl").read_text().splitlines()]
+        self.assertTrue(all(label["atoms"] == label["units"] == 1 for label in labels))
 
     def test_partial_export_uses_complete_prefix_and_never_claims_complete_coverage(self):
         root, args = self.fixture()

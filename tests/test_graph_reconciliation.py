@@ -50,13 +50,22 @@ def _annotate(temp_dir, observation: Observation, value: str, quote: str):
 
 class CandidateFactRowTests(unittest.TestCase):
     def members(self, unit="unit-clienta", *, row="row-1", partial=False, header_properties=(),
-                subject="ZX-742", subject_label=None, identity_text=None):
+                subject="ZX-742", subject_label=None, identity_text=None, text=None, property_values=None,
+                document=None, revision="revision-clienta", scope="ws_recon", run_id=None):
         root = _paths.fresh_test_dir("candidate-fact-row")
-        observation = _observation("obs_" + unit, "Clienta ZX-742 ticket R-007 expected 2030-06-01")
+        observation = _observation("obs_" + unit, text or "Clienta ZX-742 ticket R-007 expected 2030-06-01")
+        observation = Observation.from_dict({**observation.to_dict(), "permission_scope": {
+            **observation.to_dict()["permission_scope"], "scope_id": scope}})
+        if document:
+            observation = Observation.from_dict({**observation.to_dict(), "asset_id": "asset_" + document,
+                "modality": "document", "observation_type": "paragraph", "location": {"block_index": 0}})
         header = Observation.from_dict({**observation.to_dict(), "observation_id": "obs_date_" + unit,
             "observation_type": "email_header", "text": "Wed, 01 Jan 2031 00:00:00 +0000",
             "payload": {"header_name": "Date", "header_value": "Wed, 01 Jan 2031 00:00:00 +0000"}})
         identity_source = _observation("obs_identity_" + unit, identity_text) if identity_text else observation
+        if identity_text:
+            identity_source = Observation.from_dict({**observation.to_dict(),
+                "observation_id": "obs_identity_" + unit, "text": identity_text})
         sources = [observation, header] + ([identity_source] if identity_text else [])
         records = [{"record_type": "claim", "topic": "Clienta", "subject": subject, "subject_label": subject_label,
                     "subject_quote": {"observation_id": identity_source.observation_id,
@@ -65,7 +74,8 @@ class CandidateFactRowTests(unittest.TestCase):
                     "property": prop, "value": value, "unit": None, "event_type": None,
                     "state": None, "actor": None, "times": [], "confidence": 0.9,
                     "evidence": [{"observation_id": observation.observation_id, "quote": observation.text}]}
-                   for prop, value in (("Asset Code", "ZX-742"), ("Ticket", "R-007"), ("Expected Date", "2030-06-01"))]
+                   for prop, value in (property_values or (
+                       ("Asset Code", "ZX-742"), ("Ticket", "R-007"), ("Expected Date", "2030-06-01")))]
         body = json.dumps({"model": "m", "done_reason": "stop", "message": {"content": json.dumps(
             {"read_status": "complete", "records": records, "relations": []})}})
         reader = LocalOllamaReader("http://127.0.0.1:1", "m")
@@ -73,9 +83,9 @@ class CandidateFactRowTests(unittest.TestCase):
             result = read_and_store_source_unit(
                 source_unit_id="su_" + sha256_json(unit)[7:39], observations=sources,
                 expected_observation_hashes={o.observation_id: sha256_json(o.to_dict()) for o in sources},
-                source_revision_fingerprint=sha256_json("revision-clienta"),
+                source_revision_fingerprint=sha256_json(revision),
                 permission_scope_fingerprint=sha256_json(observation.to_dict()["permission_scope"]),
-                source_complete=True, extractor_run_id="semrun_" + unit, ontology_revision_id="ontology_clienta",
+                source_complete=True, extractor_run_id=run_id or "semrun_" + unit, ontology_revision_id="ontology_clienta",
                 model_name="m", reasoning_effort="none", reader=reader.extract_structured_json,
                 configuration=reader.configuration, semantic_metadata_store=SemanticMetadataStore(root),
                 candidate_atom_store=CandidateAtomStore(root), candidate_relation_store=CandidateRelationStore(root))
@@ -111,6 +121,144 @@ class CandidateFactRowTests(unittest.TestCase):
             self.assertTrue(r["fields"]["target_date"][0]["evidence_spans"][0]["quote"])
             self.assertEqual(r["outer_mail_date"]["value"], "2031-01-01T00:00:00+00:00")
             self.assertTrue(r["outer_mail_date"]["evidence"])
+
+    def test_cross_unit_headers_preserve_every_donor_in_purchase_and_lab_documents(self):
+        for domain, target, code, labels in (
+            ("purchase", "ZX-742", "ZX74200001", ("Part", "PO No.", "Order Date")),
+            ("lab", "SAMPLE-7", "LAB009", ("Specimen", "Report ID", "Report Date")),
+        ):
+            with self.subTest(domain=domain):
+                mapping = ontology.CandidatePropertyMapping.from_dict({
+                    "artifact_id": "formowl_candidate_property_mapping_v1", "mapping_id": domain,
+                    "review_status": "pending_review", "properties": ["item", "document", "date"],
+                    "aliases": [{"label": label, "property_id": prop, "qualifiers": {}}
+                                for label, prop in zip(labels, ("item", "document", "date"))],
+                    "document_level_properties": ["document", "date"],
+                    "identity_groups": [{"name": "item_document", "properties": ["item", "document"]}]})
+                headers = []
+                for suffix in ("a", "b"):
+                    headers += self.members(domain + "-header-" + suffix, document=domain, row=None,
+                        subject=code, text=f"{labels[1]} {code}; {labels[2]} 2030-06-01",
+                        property_values=((labels[1], code), (labels[2], "2030-06-01")))
+                detail = self.members(domain + "-rows", document=domain, partial=True, subject=target,
+                    text=f"{labels[0]} {target}", property_values=((labels[0], target),))
+                members, before = headers + detail, deepcopy(headers + detail)
+                rows = reconciliation.project_candidate_fact_rows(members, mapping=mapping)
+                result = next(r for r in rows if r["item_or_row"] is not None)
+                self.assertEqual(members, before)
+                self.assertEqual(len(rows), 5)
+                self.assertEqual(result["unit_validation_status"], "partial")
+                for prop, value in (("document", code), ("date", "2030-06-01")):
+                    fields = result["fields"][prop]
+                    self.assertEqual(len(fields), 2)
+                    self.assertEqual({f["value"] for f in fields}, {value})
+                    for field in fields:
+                        donor = next(r["fields"][prop][0] for r in rows if r["item_or_row"] is None
+                                     and prop in r["fields"] and r["fields"][prop][0]["candidate_atom_id"] == field["candidate_atom_id"])
+                        self.assertEqual({k: v for k, v in field.items() if k != "inherited_from_document_header"}, donor)
+                        self.assertTrue(field["inherited_from_document_header"])
+                        self.assertEqual(field["unit_validation_status"], "complete")
+                self.assertTrue(result["identity_candidates"])
+
+    def test_cross_unit_conflicts_and_detail_only_values_never_fill_headers(self):
+        config = self.mapping().data
+        config["document_level_properties"] = ["ticket_code"]
+        mapping = ontology.CandidatePropertyMapping.from_dict(config)
+        header = self.members("header", document="contract", row=None, property_values=(("Ticket", "R-007"),))
+        missing = self.members("missing", document="contract", property_values=(("Asset Code", "ZX-742"),))
+        for row in (None, "another-row"):
+            with self.subTest(conflicting_item=row):
+                conflict = self.members("conflict", document="contract", row=row,
+                    text="ZX-742 ticket R-008", property_values=(("Ticket", "R-008"),))
+                rows = reconciliation.project_candidate_fact_rows(header + conflict + missing, mapping=mapping)
+                result = next(r for r in rows if r["unit_id"] == "missing")
+                self.assertNotIn("ticket_code", result["fields"])
+                self.assertEqual(set(result["document_header_conflicts"]["ticket_code"]),
+                    {m["atom"]["candidate_atom_id"] for m in header + conflict})
+                self.assertFalse(result["identity_candidates"])
+        detail_only = self.members("detail-only", document="contract", property_values=(("Ticket", "R-007"),))
+        rows = reconciliation.project_candidate_fact_rows(detail_only + missing, mapping=mapping)
+        self.assertNotIn("ticket_code", next(r for r in rows if r["unit_id"] == "missing")["fields"])
+
+    def test_cross_unit_headers_require_document_revision_and_permission_boundaries(self):
+        config = self.mapping().data
+        config["document_level_properties"] = ["ticket_code"]
+        mapping = ontology.CandidatePropertyMapping.from_dict(config)
+        for change in ({"document": None}, {"document": "other"},
+                       {"revision": "other"}, {"scope": "ws_other"}):
+            with self.subTest(change=change):
+                header = self.members("header", document=None if change.get("document", "same") is None else "same",
+                    row=None, property_values=(("Ticket", "R-007"),))
+                detail = self.members("rows", **({"document": "same"} | change),
+                    property_values=(("Asset Code", "ZX-742"),))
+                before = reconciliation.project_candidate_fact_rows(detail, mapping=mapping)
+                after = reconciliation.project_candidate_fact_rows(header + detail, mapping=mapping)
+                self.assertEqual(next(r for r in after if r["unit_id"] == "rows"), before[0])
+
+    def test_larger_document_context_removes_prior_inheritance_when_a_conflict_appears(self):
+        config = self.mapping().data
+        config["document_level_properties"] = ["ticket_code"]
+        mapping = ontology.CandidatePropertyMapping.from_dict(config)
+        header = self.members("header", document="contract", row=None, property_values=(("Ticket", "R-007"),))
+        detail = self.members("rows", document="contract", property_values=(("Asset Code", "ZX-742"),))
+        conflict = self.members("other-export", document="contract", row=None,
+            text="ZX-742 ticket R-008", property_values=(("Ticket", "R-008"),))
+        rows = reconciliation.project_candidate_fact_rows(header + detail, mapping=mapping)
+        self.assertTrue(next(r for r in rows if r["unit_id"] == "rows")["identity_candidates"])
+        rows += reconciliation.project_candidate_fact_rows(conflict, mapping=mapping)
+        keys = {r["row_id"]: {reconciliation._fact_document_key(next(iter(detail[0]["observations"].values())))} for r in rows}
+        reconciliation._inherit_document_headers(rows, ["ticket_code"], keys)
+        reconciliation._finalize_candidate_fact_rows(rows, mapping=mapping)
+        result = next(r for r in rows if r["unit_id"] == "rows")
+        self.assertNotIn("ticket_code", result["fields"])
+        self.assertIn("ticket_code", result["document_header_conflicts"])
+        self.assertFalse(result["identity_candidates"])
+        before = deepcopy(rows)
+        reconciliation._inherit_document_headers(rows, ["ticket_code"], keys)
+        reconciliation._finalize_candidate_fact_rows(rows, mapping=mapping)
+        self.assertEqual(rows, before)
+
+    def test_entity_projection_uses_existing_label_match_and_own_surface_evidence(self):
+        member = self.members(subject="R-007", subject_label="Ticket", identity_text="Ticket R-007")[0]
+        atom = member["atom"]
+        atom["atom_type"] = "entity"
+        atom["properties"]["assertion"].update(property=None, value=None)
+        member["ledger"]["value"]["candidate_hashes"][atom["candidate_atom_id"]] = sha256_json(atom)
+        rows = reconciliation.project_candidate_fact_rows([member], mapping=self.mapping())
+        field = rows[0]["fields"]["ticket_code"][0]
+        self.assertEqual((field["raw_property"], field["value"], field["value_origin"]), ("Ticket", "R-007", "entity_surface"))
+        self.assertEqual(field["evidence_spans"], atom["properties"]["target_identity"]["evidence_spans"])
+        self.assertNotEqual(field["evidence_spans"], atom["properties"]["evidence_spans"])
+        for kind in ("unmapped", "claim", "existing_property", "surface"):
+            with self.subTest(kind=kind):
+                bad = deepcopy(member)
+                props = bad["atom"]["properties"]
+                if kind == "unmapped":
+                    props["target_identity"]["type_surface"] = "Unmapped document label"
+                elif kind == "claim":
+                    bad["atom"]["atom_type"] = "claim"
+                elif kind == "existing_property":
+                    props["assertion"]["property"] = "Unmapped property"
+                else:
+                    props["target_identity"]["value_surface"] = "UNSUPPORTED"
+                bad["ledger"]["value"]["candidate_hashes"][atom["candidate_atom_id"]] = sha256_json(bad["atom"])
+                if kind == "surface":
+                    with self.assertRaisesRegex(ContractValidationError, "entity surface"):
+                        reconciliation.project_candidate_fact_rows([bad], mapping=self.mapping())
+                else:
+                    self.assertEqual(reconciliation.project_candidate_fact_rows([bad], mapping=self.mapping()), [])
+
+    def test_entity_field_does_not_replace_the_original_item_subject(self):
+        members = self.members(subject="ZX-742", identity_text="Ticket R-007 ZX-742")
+        atom = next(m["atom"] for m in members if m["atom"]["properties"]["assertion"]["property"] == "Asset Code")
+        atom["atom_type"] = "entity"
+        atom["properties"]["assertion"].update(property=None, value=None, target="R-007")
+        atom["properties"]["target_identity"].update(type_surface="Ticket", value_surface="R-007")
+        for member in members:
+            member["ledger"]["value"]["candidate_hashes"][atom["candidate_atom_id"]] = sha256_json(atom)
+        rows = reconciliation.project_candidate_fact_rows(members, mapping=self.mapping())
+        self.assertEqual(rows[0]["subject_identity"]["value"], "zx-742")
+        self.assertEqual({f["value"] for f in rows[0]["fields"]["ticket_code"]}, {"R-007"})
 
     def test_null_items_do_not_join_and_conflicts_are_not_overwritten(self):
         rows = reconciliation.project_candidate_fact_rows(self.members(row=None), mapping=self.mapping())

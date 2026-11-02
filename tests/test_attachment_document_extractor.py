@@ -402,13 +402,13 @@ class AttachmentDocumentExtractorTests(unittest.TestCase):
                     self.assertEqual([o.text for o in result.observations], ["Earlier encrypted revision"])
 
     def test_native_pdf_and_independent_utf8_preserve_safe_text_around_redacted_spans(self) -> None:
-        pdf_text = "SYN-LEFT Qty 23.75 / / Grade B SYN-RIGHT"
+        pdf_text = "SYN-LEFT Qty 23.75 / /private/fixture Grade B SYN-RIGHT"
         independent_text = "SYN-LEFT 稽核 café Qty 23.75 / / /私密/樣本.txt Grade B SYN-RIGHT"
         for content, mime_type, filename, expected in (
             (_pdf_bytes(pdf_text), "application/pdf", "fixture.pdf",
-             "SYN-LEFT Qty 23.75 [redacted_path] [redacted_path] Grade B SYN-RIGHT"),
+             "SYN-LEFT Qty 23.75 / [redacted_path] Grade B SYN-RIGHT"),
             (independent_text.encode(), "text/plain", "independent.txt",
-             "SYN-LEFT 稽核 café Qty 23.75 [redacted_path] [redacted_path] [redacted_path] Grade B SYN-RIGHT"),
+             "SYN-LEFT 稽核 café Qty 23.75 / / [redacted_path] Grade B SYN-RIGHT"),
         ):
             with self.subTest(mime_type=mime_type):
                 result = self._run_registered(content, mime_type, filename)

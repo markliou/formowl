@@ -37,7 +37,9 @@ class Issue56UatConversationStabilityTests(unittest.TestCase):
 
     def test_unsafe_expanded_query_is_rejected_before_mcp_with_private_hash_trace(self):
         prompt = "Find the review condition for UNIT-Q7 in authorized records."
-        for suffix in (" / cite evidence", " /private/fixture", " secret=synthetic"):
+        for suffix in (" / cite evidence", " /"):
+            self.assertEqual(deterministic_query_class(prompt + suffix), "evidence_lookup")
+        for suffix in (" /private/fixture", " C:\\private\\fixture", " secret=synthetic"):
             with self.subTest(suffix=suffix):
                 query = prompt + suffix
                 self.assertEqual(deterministic_query_class(prompt), "evidence_lookup")
@@ -99,7 +101,7 @@ class Issue56UatConversationStabilityTests(unittest.TestCase):
                 "query_text": query, "required_terms": ["UNIT-Q7"],
                 "request_contract": contract, "table_query": None,
             }),
-        }]} for index, query in enumerate((safe_query + " / cite evidence", safe_query))]
+        }]} for index, query in enumerate((safe_query + " /private/fixture", safe_query))]
         responses.append({"status": "completed", "output_text": json.dumps({
             "response_kind": "answer", "answer_text": "The review condition is verified by the cited record.",
             "display_format": "narrative", "citation_ids": [citation],

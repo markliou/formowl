@@ -178,7 +178,6 @@ class ContractEdgeCaseTests(unittest.TestCase):
     def test_path_span_redaction_preserves_unrelated_multilingual_values(self) -> None:
         prefix, suffix = "SYN-LEFT 稽核 café Qty 23.75 ", " Grade B SYN-RIGHT"
         for span, replacement, count in (
-            ("/ /", "[redacted_path] [redacted_path]", 2),
             ("/私密/樣本.txt", "[redacted_path]", 1),
             ("/private/樣本.txt", "[redacted_path]", 1),
             ("/private/O'Brien.txt", "[redacted_path]", 1),
@@ -210,6 +209,26 @@ class ContractEdgeCaseTests(unittest.TestCase):
         safe = "SYN-SAFE 稽核 café Qty 23.75 A/B kg/unit"
         public_safety.assert_no_public_raw_references(safe)
         self.assertEqual(public_safety.redact_public_raw_references(safe), (safe, 0))
+
+    def test_spaced_and_terminal_slashes_preserve_values_without_exempting_paths(self) -> None:
+        for value in ("A / B", "ZX-742 / ZX74200001", "Lab sample A / B", "A /", "/", "/ /", "A /\tB", "A /\nB"):
+            with self.subTest(value=value):
+                public_safety.assert_no_public_raw_references(value)
+                self.assertEqual(public_safety.redact_public_raw_references(value), (value, 0))
+                self.assertEqual(public_safety.private_public_safety_rejection_summary(
+                    answer_text=value, coverage_note="")["rule_codes"], [])
+        for path in ("/private/file.txt", "/私密/檔案", "C:/private/file", r"C:\private\file",
+                     r"\\host\share\file", "smb://nas.invalid/share/file", "nfs://nas.invalid/share/file",
+                     "https://example.invalid/private/file", "formowl://scratch/file", "formowl://asset/example",
+                     "料號 /版序/品名規格"):
+            with self.subTest(path=path):
+                value = "ZX-742 / ZX74200001; " + path + " SAFE"
+                redacted, count = public_safety.redact_public_raw_references(value)
+                self.assertGreater(count, 0)
+                self.assertNotIn(path, redacted)
+                self.assertIn("ZX-742 / ZX74200001; ", redacted)
+                self.assertTrue(redacted.endswith(" SAFE"))
+                public_safety.assert_no_public_raw_references(redacted)
 
     def test_span_redaction_retains_secret_sql_backend_guards_and_final_fallback(self) -> None:
         for unsafe in (

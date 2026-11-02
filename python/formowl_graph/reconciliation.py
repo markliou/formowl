@@ -169,37 +169,80 @@ def _fact_outer_mail_date(sources: Mapping[str, dict], pins: Mapping[str, Any]) 
             "status": "verified" if known else "ambiguous" if len(dates) > 1 else "unavailable"}
 
 
-def _inherit_document_headers(rows: Sequence[dict], properties: Sequence[str]) -> None:
-    """Only explicitly configured, unique header values in this exact source unit.
+def _fact_document_key(source: Mapping[str, Any]) -> str | None:
+    """Native document identity; callers must validate the Observation hash first.
+
+    Ledger source_unit_id identifies a semantic chunk, not its source document.
+    Keep asset/run, nested occurrence and permission boundaries independent of it.
+    """
+    loc, payload = source.get("location") or {}, source.get("payload") or {}
+    key = {k: source.get(k) for k in ("asset_id", "extractor_run_id", "permission_scope")}
+    if not all(key.values()):
+        return None
+    key["embedded_message"] = loc.get("embedded_message")
+    if source.get("modality") == "document":
+        lineage = payload.get("lineage") or {}
+        key.update(child_asset_id=lineage.get("child_asset_id"),
+                   child_content_hash=lineage.get("child_content_hash"),
+                   container_members=loc.get("container_members"))
+    elif source.get("observation_type") == "email_body_segment" and loc.get("message_occurrence_id"):
+        key["message_occurrence_id"] = loc["message_occurrence_id"]
+    else:
+        return None
+    return sha256_json(key)
+
+
+def _inherit_document_headers(rows: Sequence[dict], properties: Sequence[str],
+                              document_keys: Mapping[str, set[str]]) -> None:
+    """Only explicit headers with one distinct value in the verified document.
 
     Singleton header rows remain intact. Inherited fields retain every original
     atom/evidence record; conflicts neither fill nor overwrite detail fields.
     """
     def document_key(row):
-        return tuple(row[k] for k in ("unit_id", "source_unit_id", "source_revision_fingerprint",
-                                       "permission_scope_fingerprint"))
+        keys = document_keys.get(row["row_id"], set())
+        # Missing/ambiguous boundaries retain the previous same-unit behavior.
+        boundary = ("document", next(iter(keys))) if len(keys) == 1 else ("unit", row["source_unit_id"])
+        return (*boundary, row["source_revision_fingerprint"], row["permission_scope_fingerprint"])
 
     def value_key(field):
         return sha256_json([field["value"], field["unit"], field["qualifiers"]])
 
-    headers: dict[tuple, dict[str, list[dict]]] = {}
+    # Reconciliation over a larger selected export set must reconsider prior
+    # inheritance: a newly visible conflict cannot leave an old fill in place.
     for row in rows:
-        if row["item_or_row"] is not None:
-            continue
         for prop in properties:
-            fields = [f for f in row["fields"].get(prop, []) if f["value"] is not None]
-            headers.setdefault(document_key(row), {}).setdefault(prop, []).extend(fields)
+            if prop in row["fields"]:
+                fields = [f for f in row["fields"][prop] if not f.get("inherited_from_document_header")]
+                if fields:
+                    row["fields"][prop] = fields
+                else:
+                    del row["fields"][prop]
+            row.get("document_header_conflicts", {}).pop(prop, None)
+        if row.get("document_header_conflicts") == {}:
+            del row["document_header_conflicts"]
+    headers: dict[tuple, dict[str, list[dict]]] = {}
+    document_values: dict[tuple, dict[str, list[dict]]] = {}
+    for row in rows:
+        for prop in properties:
+            fields = [f for f in row["fields"].get(prop, []) if f["value"] not in (None, "", [], {})
+                      and not f.get("inherited_from_document_header")]
+            document_values.setdefault(document_key(row), {}).setdefault(prop, []).extend(fields)
+            if row["item_or_row"] is None:
+                headers.setdefault(document_key(row), {}).setdefault(prop, []).extend(fields)
     for row in rows:
         if row["item_or_row"] is None:
             continue
         for prop, fields in headers.get(document_key(row), {}).items():
             if not fields:
                 continue
-            values = {value_key(f) for f in fields}
+            key = document_key(row)
+            all_fields = document_values[key][prop] if key[0] == "document" else fields
+            values = {value_key(f) for f in all_fields}
             local = row["fields"].get(prop, [])
             if len(values) != 1 or local and {value_key(f) for f in local} != values:
                 row.setdefault("document_header_conflicts", {})[prop] = sorted(
-                    {f["candidate_atom_id"] for f in [*fields, *local]})
+                    {f["candidate_atom_id"] for f in [*all_fields, *local]})
             elif not local:
                 row["fields"][prop] = [{**deepcopy(f), "inherited_from_document_header": True} for f in fields]
 
@@ -214,14 +257,25 @@ def project_candidate_fact_rows(members: Sequence[Mapping[str, Any]], *,
     """
     rows: dict[str, dict] = {}
     local_members: dict[str, list[Mapping[str, Any]]] = {}
+    document_keys: dict[str, set[str]] = {}
     for member in members:
         pins = _fact_member_pins(member)
         atom, ledger = member["atom"], member["ledger"]
         props = atom["properties"]
         assertion = props["assertion"]
-        match = mapping.match(assertion.get("property"))
+        label, entity = assertion.get("property"), None
+        if label is None and atom["atom_type"] == "entity":
+            entity = props.get("target_identity", {})
+            label = entity.get("type_surface")
+        match = mapping.match(label)
         if match["status"] != "candidate":
             continue
+        if entity is not None:
+            _fact_validate_spans(member, pins, entity.get("evidence_spans"))
+            surface = entity.get("value_surface")
+            if not isinstance(surface, str) or not surface or not any(
+                    surface in span["quote"] for span in entity["evidence_spans"]):
+                raise ContractValidationError("candidate fact entity surface changed")
         item = assertion.get("item_or_row")
         scope = {k: pins[k] for k in ("source_revision_fingerprint", "permission_scope_fingerprint")}
         row_key = {**scope, "unit_id": member["unit_id"], "source_unit_id": pins["source_unit_id"],
@@ -235,7 +289,7 @@ def project_candidate_fact_rows(members: Sequence[Mapping[str, Any]], *,
             "outer_mail_date": _fact_outer_mail_date(member["observations"], pins),
             "fields": {}, "conflicting_properties": [], "identity_candidates": []})
         field = {k: deepcopy(assertion.get(k)) for k in ("value", "unit", "target", "event_type", "state", "actor")}
-        field.update(raw_property=assertion.get("property"), qualifiers=match["qualifiers"],
+        field.update(raw_property=label, qualifiers=match["qualifiers"],
                      candidate_atom_id=atom["candidate_atom_id"], candidate_atom_hash=sha256_json(atom),
                      ledger_id=ledger["semantic_metadata_id"], ledger_hash=sha256_json(ledger),
                      unit_id=member["unit_id"], source_unit_id=pins["source_unit_id"], **scope,
@@ -246,19 +300,36 @@ def project_candidate_fact_rows(members: Sequence[Mapping[str, Any]], *,
                      identity_bindings=deepcopy(props.get("identity_bindings", [])),
                      unit_validation_status=ledger["value"]["validation_status"],
                      times=deepcopy(props.get("times", [])), evidence_spans=deepcopy(props["evidence_spans"]))
+        if entity is not None:
+            field.update(value=surface, value_origin="entity_surface", evidence_spans=deepcopy(entity["evidence_spans"]))
         row["fields"].setdefault(match["property_id"], []).append(field)
-        if item is not None:
+        identity_spans = props.get("target_identity", {}).get("evidence_spans", [])
+        if identity_spans:
+            _fact_validate_spans(member, pins, identity_spans)
+        for span in [*field["evidence_spans"], *identity_spans]:
+            key = _fact_document_key(member["observations"][span["observation_id"]])
+            if key is not None:
+                document_keys.setdefault(rid, set()).add(key)
+        if item is not None and entity is None:
             local_members.setdefault(rid, []).append(member)
     # Agreement is only over original mapped item atoms, before header context.
     targets = {rid: {" ".join(_normalize(m["atom"]["properties"].get("target_identity", {}).get(
                         "value_surface")).split()) for m in items} for rid, items in local_members.items()}
     subjects = {rid: next(iter(values)) for rid, values in targets.items() if len(values) == 1 and "" not in values}
-    _inherit_document_headers(list(rows.values()), mapping.data.get("document_level_properties", []))
+    _inherit_document_headers(list(rows.values()), mapping.data.get("document_level_properties", []), document_keys)
     for row in rows.values():
         subject = subjects.get(row["row_id"])
         if subject and all(subject != " ".join(_normalize(f["value"]).split())
                            for fields in row["fields"].values() for f in fields):
             row["subject_identity"] = _fact_subject_identity(local_members[row["row_id"]], subject)
+    _finalize_candidate_fact_rows(list(rows.values()), mapping=mapping)
+    return [rows[key] for key in sorted(rows)]
+
+
+def _finalize_candidate_fact_rows(rows: Sequence[dict], *, mapping: CandidatePropertyMapping) -> None:
+    """Refresh derived conflicts/identity proposals after source-bound header context."""
+    for row in rows:
+        row["conflicting_properties"], row["identity_candidates"] = [], []
         for prop, fields in row["fields"].items():
             fields.sort(key=lambda f: f["candidate_atom_id"])
             by_qualifier: dict[str, set[str]] = {}
@@ -286,7 +357,6 @@ def project_candidate_fact_rows(members: Sequence[Mapping[str, Any]], *,
                 key.update(group=group["name"], values=identity)
                 row["identity_candidates"].append({"candidate_identity_id": "factid_" + sha256_json(key)[7:],
                                                     **key, "review_status": "pending_review"})
-    return [rows[key] for key in sorted(rows)]
 
 
 def _contains_value_as_independent_word(quote: Any, value: Any) -> bool:

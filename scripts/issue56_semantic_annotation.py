@@ -771,6 +771,7 @@ def project_command(args) -> int:
                              "document_header_conflict_rows": 0, "conflicting_identity_groups": 0}
                       for prop in mapping.data["properties"]}
     identity_values, identity_rows = {}, {}
+    all_members = []
     with (dest / "rows.partial.jsonl").open("xb") as output:
         os.fchmod(output.fileno(), 0o600)
         for unit_id, unit in sorted(units.items()):
@@ -805,38 +806,44 @@ def project_command(args) -> int:
                 members.append({"atom": data, "ledger": ledger, "unit_id": unit_id, "observations": sources})
                 assertion = data["properties"].get("assertion", {})
                 label = assertion.get("property")
+                if label is None and data["atom_type"] == "entity":
+                    label = data["properties"].get("target_identity", {}).get("type_surface")
                 key = sha256_json(label)
                 tally = labels.setdefault(key, {"label": label, **mapping.match(label),
-                    "atoms": 0, "null_item_or_row": 0, "by_validation": {}})
+                    "atoms": 0, "units": set(), "null_item_or_row": 0, "by_validation": {}})
                 tally["atoms"] += 1
+                tally["units"].add(unit_id)
                 tally["null_item_or_row"] += assertion.get("item_or_row") is None
                 tally["by_validation"][state] = tally["by_validation"].get(state, 0) + 1
-            projected = project_candidate_fact_rows(members, mapping=mapping)
+            all_members.extend(members)
             validations[state] += 1
             retained[state] += len(members)
-            row_coverage[state] += len(projected)
-            for row in projected:
-                for prop, coverage in field_coverage.items():
-                    fields = row["fields"].get(prop, [])
-                    coverage["rows"] += bool(fields)
-                    coverage["values"] += len(fields)
-                    if fields:
-                        coverage["units"].add(unit_id)
-                    coverage["conflicting_rows"] += prop in row["conflicting_properties"]
-                    coverage["document_header_conflict_rows"] += prop in row.get("document_header_conflicts", {})
-                for identity in row["identity_candidates"]:
-                    key = identity["candidate_identity_id"]
-                    identity_rows.setdefault(key, set()).add(row["row_id"])
-                    for prop, fields in row["fields"].items():
-                        for field in fields:
-                            slot = (key, prop, sha256_json(field["qualifiers"]))
-                            identity_values.setdefault(slot, set()).add(sha256_json([field["value"], field["unit"]]))
-                line = encode(row)
-                output.write(line)
-                row_hash.update(line)
-                row_count += 1
+        # Project the pinned scope together so chunking cannot hide a document's
+        # explicit header or conflicting detail value. Row identities stay local.
+        projected = project_candidate_fact_rows(all_members, mapping=mapping)
+        for row in sorted(projected, key=lambda r: (r["unit_id"], r["row_id"])):
+            row_coverage[row["unit_validation_status"]] += 1
+            for prop, coverage in field_coverage.items():
+                fields = row["fields"].get(prop, [])
+                coverage["rows"] += bool(fields)
+                coverage["values"] += len(fields)
+                if fields:
+                    coverage["units"].add(row["unit_id"])
+                coverage["conflicting_rows"] += prop in row["conflicting_properties"]
+                coverage["document_header_conflict_rows"] += prop in row.get("document_header_conflicts", {})
+            for identity in row["identity_candidates"]:
+                key = identity["candidate_identity_id"]
+                identity_rows.setdefault(key, set()).add(row["row_id"])
+                for prop, fields in row["fields"].items():
+                    for field in fields:
+                        slot = (key, prop, sha256_json(field["qualifiers"]))
+                        identity_values.setdefault(slot, set()).add(sha256_json([field["value"], field["unit"]]))
+            line = encode(row)
+            output.write(line)
+            row_hash.update(line)
+            row_count += 1
     (dest / "rows.partial.jsonl").rename(dest / "rows.jsonl")
-    write("labels.jsonl", b"".join(encode(labels[k]) for k in sorted(labels)))
+    write("labels.jsonl", b"".join(encode({**labels[k], "units": len(labels[k]["units"])}) for k in sorted(labels)))
     conflicting_identities = {(key, prop) for (key, prop, _), values in identity_values.items()
                               if len(identity_rows[key]) > 1 and len(values) > 1}
     for _, prop in conflicting_identities:

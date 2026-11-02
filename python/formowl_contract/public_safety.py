@@ -5,7 +5,7 @@ from typing import Any
 
 from .primitives import ContractValidationError
 
-_RAW_PATH = re.compile(r"(^|[\s'\"([{=,:;])(/|[A-Za-z]:[\\/]|\\\\)", re.IGNORECASE)
+_RAW_PATH = re.compile(r"(^|[\s'\"([{=,:;])(/(?=\S)|[A-Za-z]:[\\/]|\\\\)", re.IGNORECASE)
 _BACKEND_LOCATOR = re.compile(
     r"\b(?:"
     r"file|s3|gs|gcs|minio|object|webdav|dav|smb|nfs|"
@@ -70,10 +70,10 @@ _SECRET_FIELD_NAMES = {
     "token",
 }
 _SECRET_COMPACT_FIELD_NAMES = {name.replace("_", "") for name in _SECRET_FIELD_NAMES}
-# Detection admits bare roots and Unicode paths. Consume those same spans so
+# Detection admits drive/UNC roots and Unicode paths. Consume those same spans so
 # unrelated evidence survives; the final unsafe-string guard remains fail closed.
 _RAW_PATH_TOKEN = re.compile(
-    r"(?:(?<=^)|(?<=[\s'\"([{=,:;]))(?:/[^\s\"<>]*|"
+    r"(?:(?<=^)|(?<=[\s'\"([{=,:;]))(?:/(?=\S)[^\s\"<>]*|"
     r"[A-Za-z]:[\\/][^\s'\"<>]*|\\\\[^\s'\"<>]*)",
     re.IGNORECASE,
 )
