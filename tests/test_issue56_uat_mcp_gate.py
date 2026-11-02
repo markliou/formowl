@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 import _paths  # noqa: F401
+from formowl_contract import ContractValidationError
 from formowl_gateway.issue56_diagnostic import (
     _SYNTHETIC_BEARER,
     Issue56DiagnosticConfig,
@@ -24,6 +25,7 @@ from formowl_gateway.remote import create_connected_mcp_application
 from formowl_gateway.semantic import SemanticMcpGateway
 from formowl_gateway.issue56_uat_runtime import _run_gpt_query_agent
 from formowl_mail.human_uat_http import _safe_query_failure_diagnostic
+from formowl_mail.semantic_plan import requires_workspace_evidence
 from formowl_mail.human_uat_orchestrator import (
     UatConversationOutcome,
     UatEvidenceToolRequest,
@@ -130,6 +132,64 @@ class _MailEvidenceModel:
             tool_requests=(self.request,),
             tool_results=(evidence,),
         )
+
+
+class BusinessIdentifierEvidenceGateTests(unittest.TestCase):
+    def test_business_identifier_questions_dispatch_without_phrase_grammar(self):
+        for prompt in (
+            "電容 ZX74200001 原廠是誰",
+            "ZX74200001 這顆料什麼時候到貨",
+            "螺絲 ZX74200001 最近一次是什麼時候開 PO 的？",
+            "ZX74200001 什麼時候開 PO",
+            "螺絲 ZX74200001 最近一次採購是什麼時候？",
+            "ZX74200001 最近一次是什麼時候開 PO 的？",
+            "螺絲 ZX74200001 的 PO 是什麼時候開的？",
+            "ZX74200001 是什麼？",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertTrue(requires_workspace_evidence(prompt, query_class="evidence_lookup"))
+                request = UatEvidenceToolRequest(query_text=prompt, required_terms=("zx74200001",))
+                citation = "sha256:fictional-identifier-evidence"
+                mcp_call = mock.Mock(return_value={"status": "complete", "citations": [citation]})
+                result, responses, _ = _run_gpt_query_agent(
+                    _MailEvidenceModel(request), prompt=prompt, history=(), latest_evidence=None,
+                    safety_identifier="fictional-identifier", formowl_tool_descriptor=None,
+                    authorized_capability_summary=None, mcp_call=mcp_call,
+                )
+                mcp_call.assert_called_once_with(request)
+                self.assertEqual(len(responses), 1)
+                self.assertEqual(result["citations"], [citation])
+
+    def test_supplied_text_jokes_arithmetic_and_quoted_topics_stay_ordinary(self):
+        for prompt in (
+            'Translate the supplied text into French: "ZX74200001"',
+            'Rewrite this supplied text: "ZX74200001 is a fictional example."',
+            "Tell me a joke.",
+            'Tell me a joke about "ZX74200001 unicorns".',
+            "Calculate 742 + 3.",
+            'Explain "ZX74200001 warehouse folklore".',
+            "你好，今天天氣真不錯。",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertFalse(requires_workspace_evidence(prompt, query_class="evidence_lookup"))
+                mcp_call = mock.Mock()
+                with self.assertRaisesRegex(ContractValidationError,
+                                            "^uat_mcp_not_authorized_for_conversation$"):
+                    _run_gpt_query_agent(
+                        _ForgedToolCallModel(UatEvidenceToolRequest(query_text="forged lookup")),
+                        prompt=prompt, history=(), latest_evidence=None,
+                        safety_identifier="fictional-ordinary", formowl_tool_descriptor=None,
+                        authorized_capability_summary=None, mcp_call=mcp_call,
+                    )
+                mcp_call.assert_not_called()
+
+    def test_cited_prior_presentation_and_interpretation_stay_ordinary(self):
+        for prompt in ("Summarize the above in a table.", "Explain the meaning of the cited date."):
+            with self.subTest(prompt=prompt):
+                self.assertFalse(requires_workspace_evidence(
+                    prompt, query_class="evidence_lookup", prior_evidence_present=True,
+                    prior_evidence_citeable=True,
+                ))
 
 
 class Issue56UatMcpGateTests(unittest.TestCase):
@@ -296,7 +356,7 @@ class Issue56UatMcpGateTests(unittest.TestCase):
         mcp_call = mock.Mock(return_value={"status": "complete", "citations": []})
 
         with self.assertRaisesRegex(
-            RuntimeError,
+            ContractValidationError,
             r"^uat_mcp_not_authorized_for_conversation$",
         ):
             _run_gpt_query_agent(
@@ -326,7 +386,7 @@ class Issue56UatMcpGateTests(unittest.TestCase):
         ):
             with self.subTest(prompt=prompt):
                 with self.assertRaisesRegex(
-                    RuntimeError,
+                    ContractValidationError,
                     r"^uat_mcp_not_authorized_for_conversation$",
                 ):
                     _run_gpt_query_agent(
@@ -493,7 +553,7 @@ class Issue56UatMcpGateTests(unittest.TestCase):
             return_value=False,
         ) as requires_workspace_evidence:
             with self.assertRaisesRegex(
-                RuntimeError,
+                ContractValidationError,
                 r"^uat_mcp_not_authorized_for_conversation$",
             ) as raised:
                 _run_gpt_query_agent(

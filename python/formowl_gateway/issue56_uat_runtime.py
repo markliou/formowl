@@ -1802,7 +1802,7 @@ def _run_gpt_query_agent(
             prior_evidence_citeable=prior_evidence_citeable,
             prior_evidence_present=prior_evidence_present,
         ):
-            raise RuntimeError(_UAT_MCP_NOT_AUTHORIZED_FOR_CONVERSATION)
+            raise ContractValidationError(_UAT_MCP_NOT_AUTHORIZED_FOR_CONVERSATION)
         if len(responses) >= _MAX_MCP_CALLS_PER_TURN:
             raise RuntimeError("UAT Query Agent exceeded the MCP call budget")
         expected_placement = request_contract_binder.placement_for_request(request)

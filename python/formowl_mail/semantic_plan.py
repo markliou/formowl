@@ -629,6 +629,10 @@ def requires_workspace_evidence(
         return False
     if prior_evidence_present and prior_evidence_citeable and is_prior_evidence_interpretation(normalized):
         return False
+    # Business identifiers in the instruction need governed evidence regardless
+    # of the surrounding question grammar; quoted examples remain excluded.
+    if protected_reference_identifiers(_identifier_request_instruction(normalized, drop_topics=True)):
+        return True
     if _original_attachment_page(_normalize_routing_text(query_text))[0] is not None:
         return True
     if _has_source_quantified_operation(normalized) or _bounded_selection_view(normalized)[1]:

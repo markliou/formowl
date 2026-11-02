@@ -486,6 +486,55 @@ def _use_short_citation_fixtures(case):
         case.addCleanup(patcher.stop)
 
 
+class ConversationEvidenceAuthorizationTests(unittest.TestCase):
+    def _run(self, prompt, mcp_call):
+        transport = _RecordingTransport(
+            calls=({"query_text": "Find purchase order number for ZX-742",
+                    "required_terms": ["ZX-742"],
+                    "request_contract": {"query_class": "evidence_lookup",
+                        "source_family_scope": ["mail"], "requested_fields": ["po_number"],
+                        "maximum_claim_strength": "cited_evidence"}},),
+            final_message=_decision(response_kind="clarification", coverage_status="incomplete",
+                                    coverage_note="No source evidence was established."),
+        )
+        provider = CodexAppServerConversationModel(transport, workspace_dir="/tmp")
+        result = _run_gpt_query_agent(
+            provider, prompt=prompt, history=(), latest_evidence=None,
+            safety_identifier="fictional-authorization", formowl_tool_descriptor=_actual_query_tool_descriptor(),
+            authorized_capability_summary={"source_families": ["mail"]}, mcp_call=mcp_call,
+        )
+        return transport, result
+
+    def test_conversation_authorization_denial_returns_rejection_without_mcp(self):
+        prompt = 'Translate the supplied text into French: "ZX-742"'
+        self.assertFalse(requires_workspace_evidence(prompt))
+        mcp_call = mock.Mock()
+        with mock.patch.object(orchestrator, "_private_planner_rejection",
+                               wraps=orchestrator._private_planner_rejection) as rejection:
+            transport, (browser, responses, outcome) = self._run(prompt, mcp_call)
+        mcp_call.assert_not_called()
+        self.assertEqual(rejection.call_args.kwargs["validation_stage"], "evidence_tool")
+        self.assertIsInstance(rejection.call_args.args[0], ContractValidationError)
+        self.assertEqual(str(rejection.call_args.args[0]), "uat_mcp_not_authorized_for_conversation")
+        self.assertEqual(transport.tool_outputs[0]["trust"], "untrusted_tool_rejection")
+        self.assertEqual(transport.tool_outputs[0]["data"]["status"], "rejected")
+        self.assertEqual(responses, ())
+        self.assertEqual(browser["status"], "clarification_required")
+        self.assertEqual(browser["citations"], [])
+        self.assertEqual(outcome.response_kind, "clarification")
+        self.assertEqual(outcome.coverage_status, "incomplete")
+        self.assertEqual(outcome.citation_ids, ())
+        self.assertEqual(outcome.tool_results, ())
+
+    def test_unrelated_runtime_failure_remains_fatal(self):
+        prompt = "Find purchase order number for ZX-742 in mail."
+        self.assertTrue(requires_workspace_evidence(prompt))
+        mcp_call = mock.Mock(side_effect=RuntimeError("fictional unrelated source failure"))
+        with self.assertRaisesRegex(RuntimeError, "fictional unrelated source failure"):
+            self._run(prompt, mcp_call)
+        mcp_call.assert_called_once()
+
+
 class Issue56CodexProviderBridgeTests(unittest.TestCase):
     def setUp(self):
         _use_short_citation_fixtures(self)
