@@ -7743,8 +7743,10 @@ class CandidateFactCompactDisplayTests(unittest.TestCase):
                             observation_hashes={source.observation_id: digest})
                 fields.append(fact)
             rows[0]["fields"]["ticket_code"] = fields
+            original_rows = copy.deepcopy(rows)
             result = loader._build_source_start_semantic_handler(replace(bound, candidate_fact_rows=tuple(rows[:1])),
                 mail_tool=False)(CandidateFactTablePresentationTests._arguments())
+            self.assertEqual(rows, original_rows)
             compact = human_uat_orchestrator.compact_evidence_for_model(result)
             self.assertEqual(compact["evidence"][0].get("source_type"), "candidate_fact_table")
             table = json.loads(compact["evidence"][0]["snippet"].split("\n", 1)[1])
@@ -7753,15 +7755,19 @@ class CandidateFactCompactDisplayTests(unittest.TestCase):
             self.assertEqual(sum(quote == "Ticket" for quote, _ in row["quotes"]), 1)
             cells = row["values"][table["columns"].index("ticket_code")]
             refs = {entry["ref"]: entry for entry in table["citations"]}
-            for cell, source in zip(cells, observations[:2]):
-                self.assertEqual(len(cell["quotes"]), 1)
-                quote_index, binding_index = cell["quotes"][0]
+            self.assertEqual(len(cells), 1)
+            self.assertEqual(len(cells[0]["quotes"]), 2)
+            for pair, source in zip(cells[0]["quotes"], observations[:2]):
+                quote_index, binding_index = pair
                 quote, bindings = row["quotes"][quote_index]
                 reference, span_index = bindings[binding_index]
                 self.assertEqual(quote, "Ticket")
                 self.assertEqual(refs[reference]["citation_hash"], sha256_json(source.to_dict()))
+                self.assertEqual(refs[reference]["source_observation_id"], source.observation_id)
+                self.assertEqual(refs[reference]["native_locator"], source.to_dict()["location"])
+                self.assertEqual(refs[reference]["source_extractor_run_id"], source.extractor_run_id)
                 self.assertEqual(refs[reference]["spans"][span_index], [source.text.index("Ticket"), source.text.index("Ticket")+6])
-            self.assertNotEqual(cells[0]["quotes"], cells[1]["quotes"])
+            self.assertNotEqual(cells[0]["quotes"][0], cells[0]["quotes"][1])
 
     @staticmethod
     def _generic_fixture(root):
@@ -7800,6 +7806,98 @@ class CandidateFactCompactDisplayTests(unittest.TestCase):
             self.assertNotIn("candidate_fact_group", json.dumps(result))
             self.assertIn("no_identifier_term", trace.snapshot())
 
+
+
+class CandidateFactCellGroupingTests(unittest.TestCase):
+    def test_repeated_inherited_cells_fit_whole_table_and_keep_all_bindings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, bound, observations = CandidateFactTablePresentationTests()._fixture(Path(directory), real_times=True)
+            rows = copy.deepcopy(list(bound.candidate_fact_rows)[:2])
+            donors = []
+            for source in observations[:3]:
+                fact = copy.deepcopy(rows[0]["fields"]["ticket_code"][0])
+                digest, start = sha256_json(source.to_dict()), source.text.index("Ticket")
+                fact.update(value="Ticket", source_observation_ids=[source.observation_id],
+                            observation_hashes={source.observation_id: digest})
+                fact["evidence_spans"][0].update(observation_id=source.observation_id,
+                    observation_hash=digest, quote="Ticket", start=start, end=start+6,
+                    native_locator=source.to_dict()["location"], source_extractor_run_id=source.extractor_run_id)
+                donors.append(fact)
+            for row in rows:
+                row["fields"] = {prop: copy.deepcopy(facts * 12) for prop, facts in row["fields"].items()}
+                row["fields"]["ticket_code"] = copy.deepcopy(donors * 12)
+            original = copy.deepcopy(rows)
+            staged = []
+            build = loader._candidate_fact_table
+            def capture(*args, **kwargs):
+                if kwargs.get("_counts") is None:
+                    staged.append(build(*args, **{**kwargs, "_counts": (len(args[0]), 0)}))
+                    print("AS69_FULL_TABLE_BYTES", len(json.dumps(staged[-1], ensure_ascii=False).encode()), flush=True)
+                return build(*args, **kwargs)
+            with patch.object(loader, "_candidate_fact_table", side_effect=capture):
+                result = loader._build_source_start_semantic_handler(
+                    replace(bound, candidate_fact_rows=tuple(rows)), mail_tool=False)(
+                        CandidateFactTablePresentationTests._arguments())
+            compact = human_uat_orchestrator.compact_evidence_for_model(result)
+            self.assertEqual(rows, original)
+            self.assertEqual(len(staged), 1)
+            item = compact["evidence"][0]
+            self.assertEqual(item.get("source_type"), "candidate_fact_table")
+            table = json.loads(item["snippet"].split("\n", 1)[1])
+            self.assertEqual([row["item"] for row in table["rows"]], ["0", "1"])
+            self.assertNotIn("disclosure", table)
+            self.assertEqual(sum(len(cells) for row in table["rows"] for cells in row["values"]), 10)
+            refs = {citation["ref"]: citation for citation in table["citations"]}
+            for row in table["rows"]:
+                cell = row["values"][table["columns"].index("ticket_code")][0]
+                self.assertEqual(cell["value"], "Ticket")
+                self.assertEqual(len(cell["quotes"]), 3)
+                for (quote_index, binding_index), source in zip(cell["quotes"], observations[:3]):
+                    quote, bindings = row["quotes"][quote_index]
+                    reference, span_index = bindings[binding_index]
+                    citation = refs[reference]
+                    self.assertEqual(quote, "Ticket")
+                    self.assertEqual(citation["citation_hash"], sha256_json(source.to_dict()))
+                    self.assertEqual(citation["source_observation_id"], source.observation_id)
+                    self.assertEqual(citation["native_locator"], source.to_dict()["location"])
+                    self.assertEqual(citation["source_extractor_run_id"], source.extractor_run_id)
+                    self.assertEqual(citation["spans"][span_index], [source.text.index("Ticket"), source.text.index("Ticket")+6])
+            self.assertEqual(set(item["source_context"]["required_citation_hashes"]),
+                             {citation["citation_hash"] for citation in table["citations"]})
+            self.assertLessEqual(len(json.dumps(staged[0], ensure_ascii=False).encode()), 10240)
+            self.assertLessEqual(len(json.dumps(compact, ensure_ascii=False).encode()), 16384)
+            self.assertEqual(human_uat_orchestrator.compact_evidence_for_model(compact), compact)
+
+    def test_distinct_typed_values_units_and_exact_time_roles_do_not_merge(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, bound, _ = CandidateFactTablePresentationTests()._fixture(Path(directory))
+            rows = copy.deepcopy(list(bound.candidate_fact_rows)[:2])
+            recorded = {"normalized": "2030-05-01", "role": "recorded"}
+            expected = {**recorded, "role": "expected"}
+            specs = [{"value": True}, {"value": 1}, {"value": "1"}, {"value": 1.0},
+                     {"value": 1, "unit": "pcs"}, {"value": 1, "unit": "kg"},
+                     {"value": 1, "times": [recorded]}, {"value": 1, "times": [expected]},
+                     {"value": 1, "times": [recorded, expected]},
+                     {"value": 1, "times": [expected, recorded]}]
+            for row in rows:
+                template = row["fields"]["ticket_code"][0]
+                row["fields"]["ticket_code"] = [{**copy.deepcopy(template), "unit": None, "times": [], **spec}
+                                               for spec in specs for _ in range(2)]
+            original = copy.deepcopy(rows)
+            result = loader._build_source_start_semantic_handler(replace(bound, candidate_fact_rows=tuple(rows)),
+                mail_tool=False)(CandidateFactTablePresentationTests._arguments())
+            compact = human_uat_orchestrator.compact_evidence_for_model(result)
+            table = json.loads(compact["evidence"][0]["snippet"].split("\n", 1)[1])
+            self.assertEqual([row["item"] for row in table["rows"]], ["0", "1"])
+            for row in table["rows"]:
+                cells = row["values"][table["columns"].index("ticket_code")]
+                self.assertEqual(len(cells), len(specs))
+                self.assertEqual(json.dumps([{key: value for key, value in cell.items() if key != "quotes"}
+                                             for cell in cells]), json.dumps(specs))
+                self.assertTrue(all(len(cell["quotes"]) == 1 for cell in cells))
+                self.assertEqual(len(row["values"][table["columns"].index("quantity")]), 1)
+            self.assertEqual(rows, original)
+            self.assertEqual(human_uat_orchestrator.compact_evidence_for_model(compact), compact)
 
 
 class CandidateFactOrderedDisplayTests(unittest.TestCase):

@@ -1624,6 +1624,7 @@ def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None):
         values = []
         for prop in columns:
             cells = []
+            grouped = {}
             for fact in row["fields"].get(prop, ()):
                 cell = {"value": fact["value"], "quotes": quotes(fact["evidence_spans"])}
                 if fact.get("unit") not in (None, ""):
@@ -1631,7 +1632,14 @@ def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None):
                 if fact.get("times"):
                     cell["times"] = [{"normalized": entry.get("normalized"), "role": entry.get("role")}
                                      for entry in fact["times"]]
-                cells.append(cell)
+                key = json.dumps({name: value for name, value in cell.items() if name != "quotes"},
+                                 ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                if key in grouped:
+                    bindings = grouped[key]["quotes"]
+                    bindings.extend(pair for pair in cell["quotes"] if pair not in bindings)
+                else:
+                    grouped[key] = cell
+                    cells.append(cell)
             values.append(cells)
         entry = {"item": row["item_or_row"], "values": values, "quotes": catalog}
         subject = row.get("subject_identity")
