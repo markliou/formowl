@@ -71,6 +71,503 @@ class _PreparedPackage:
         self.candidate_safe_sha256 = candidate_safe_sha256
 
 
+class NativeColumnSchemaIndexTests(unittest.TestCase):
+    def _revision(self):
+        profile = gateway_loader.load_issue56_target_mail_tokenizer_profile()
+        def h(number):
+            return "sha256:" + f"{number:064x}"
+        columns = [(" Ｌａｂ ID ", 2, False), ("lab id", 1, False),
+                   ("LAB ID", 2, False), ("lab id", 3, True),
+                   ("ＬＡＢ ID", 3, True), ("   ", 4, False),
+                   ("\t", 5, True), ("Contract Ref", 6, True),
+                   ("Measurement Ref", 7, False)]
+        columns.extend((f"Fictional unrelated {i}", i + 20, False) for i in range(200))
+        manifest = {"artifact_id": "formowl_issue56_ingestion_exact_cell_lookup_v1",
+                    "schema_version": 1, "source_authority_fingerprint": h(900),
+                    "tokenizer_profile_fingerprint": profile.profile_fingerprint,
+                    "job_count": 0, "columns": [
+                        {"field": field, "column_hash": h(number), "inline_table": inline,
+                         "structure_status": "source_provided", "candidate_hashes": [h(901)]}
+                        for field, number, inline in columns],
+                    "shards": [], "counts": {"inline_authorized_row": 0, "attachment_authorized_row": 0}}
+        manifest["manifest_fingerprint"] = sha256_json(manifest)
+        return SimpleNamespace(exact_lookup_manifest=manifest,
+            exact_lookup_directory=Path("/tmp/fictional-column-index"),
+            safe_binding={"source_authority_fingerprint": h(900)}, job_authorities=(),
+            source_records=None, authorized_source=object(),
+            session=SimpleNamespace(authorized_observations=(), occurrence_lineages=()))
+
+    def test_family_column_binding_matches_full_scan_and_normalizes_once_per_binding(self):
+        import time
+        lookup = gateway_loader._IngestionExactCellLookup(self._revision())
+        normalize = gateway_loader.normalize_source_occurrence_structured_surface
+        for field in ("lab id", " ", "contract ref", "measurement ref"):
+            normalized = normalize(field)
+            attachment = tuple(dict.fromkeys(item["column_hash"] for item in lookup._columns
+                if normalize(item["field"]) == normalized and not item["inline_table"]))
+            inline = tuple(dict.fromkeys(item["column_hash"] for item in lookup._columns
+                if normalize(item["field"]) == normalized and item["inline_table"]))
+            for families in (("attachment_table",), ("mail",), ("mail", "attachment_table")):
+                expected = (attachment if families == ("attachment_table",) else
+                    (inline or lookup._normalized_columns.get(normalized, ())) if families == ("mail",)
+                    else (attachment or lookup._normalized_columns.get(normalized, ())))
+                with self.subTest(field=field, families=families):
+                    # Compare ordered tuples separately from the eventual set
+                    # of value hashes, so source order/duplicate rules matter.
+                    if hasattr(lookup, "_attachment_columns"):
+                        self.assertEqual(lookup._attachment_columns.get(normalized, ()), attachment)
+                        self.assertEqual(lookup._inline_columns.get(normalized, ()), inline)
+                    bindings = (("unmatched first binding", "old"), (field, "fictional-value"))
+                    with (mock.patch.object(gateway_loader, "bind_typed_identifier_to_source_schema", return_value=bindings),
+                          mock.patch.object(lookup, "_read_matching_shard_records", return_value=()) as reads):
+                        lookup.scan_source_rows(required_terms=("ZX-742",), query_text="fictional",
+                            source_families=families, mail_import_session_id=None,
+                            max_observations=128, deadline_monotonic=time.monotonic() + 2,
+                            observation_callback=lambda *_: True, evidence_by_id={})
+                    expected_hashes = {gateway_loader.source_occurrence_exact_cell_value_hash(column, "fictional-value")
+                                       for column in expected}
+                    observed = set().union(*(call.kwargs["matching_keys"] for call in reads.call_args_list))
+                    self.assertEqual(observed, expected_hashes)
+        with (mock.patch.object(gateway_loader, "bind_typed_identifier_to_source_schema",
+                                return_value=(("lab id", "fictional-value"),) * 20),
+              mock.patch.object(lookup, "_read_matching_shard_records", return_value=()),
+              mock.patch.object(gateway_loader, "normalize_source_occurrence_structured_surface", wraps=normalize) as normalizations):
+            lookup.scan_source_rows(required_terms=("ZX-742",), query_text="fictional",
+                source_families=("attachment_table",), mail_import_session_id=None,
+                max_observations=128, deadline_monotonic=time.monotonic() + 2,
+                observation_callback=lambda *_: True, evidence_by_id={})
+            self.assertLess(normalizations.call_count, 100,
+                            "query must not renormalize the whole column inventory per binding")
+        self.assertEqual(lookup._attachment_columns["lab id"],
+                         ("sha256:" + f"{2:064x}", "sha256:" + f"{1:064x}"))
+        with self.assertRaises(TypeError):
+            lookup._attachment_columns["lab id"] = ()
+
+    def test_schema_classifications_are_precomputed_without_changing_order(self):
+        import time
+        revision = self._revision()
+        fields = ["PO Number", "Header PO No.", "Customer P/N", "customer p/n", "   ", "PO Number"]
+        manifest = revision.exact_lookup_manifest
+        for index, field in enumerate(fields):
+            manifest["columns"].append({"field": field, "column_hash": "sha256:" + f"{index+600:064x}",
+                "inline_table": False, "structure_status": "source_provided",
+                "candidate_hashes": ["sha256:" + "f" * 64]})
+        manifest.pop("manifest_fingerprint")
+        manifest["manifest_fingerprint"] = sha256_json(manifest)
+        lookup = gateway_loader._IngestionExactCellLookup(revision)
+        all_fields = tuple(item["field"] for item in lookup._columns)
+        expected_part = gateway_loader._part_identifier_schema_fields(all_fields)
+        expected = (tuple(field for field in all_fields if field == "Header PO No."), expected_part, all_fields)
+        with (mock.patch.object(gateway_loader, "_part_identifier_schema_fields", side_effect=AssertionError("query reclassified schema")),
+              mock.patch.object(gateway_loader, "bind_typed_identifier_to_source_schema", return_value=()) as bind,
+              mock.patch.object(lookup, "_read_matching_shard_records", return_value=())):
+            for term in ("PO987654321", "987.ZZ", "ZX-742"):
+                lookup.scan_source_rows(required_terms=(term,), query_text="fictional",
+                    source_families=("attachment_table",), mail_import_session_id=None,
+                    max_observations=128, deadline_monotonic=time.monotonic()+2,
+                    observation_callback=lambda *_: True, evidence_by_id={})
+        self.assertEqual(tuple(call.args[1] for call in bind.call_args_list), expected)
+
+    def test_column_precomputation_keeps_constructor_binding_validation(self):
+        revision = self._revision()
+        revision.exact_lookup_manifest["manifest_fingerprint"] = "sha256:" + "0" * 64
+        with self.assertRaisesRegex(ContractValidationError, "binding is invalid"):
+            gateway_loader._IngestionExactCellLookup(revision)
+        revision = self._revision()
+        manifest = revision.exact_lookup_manifest
+        manifest["columns"][0]["inline_table"] = "not-a-bool"
+        manifest.pop("manifest_fingerprint")
+        manifest["manifest_fingerprint"] = sha256_json(manifest)
+        with self.assertRaisesRegex(ContractValidationError, "column is invalid"):
+            gateway_loader._IngestionExactCellLookup(revision)
+
+
+class NativeShardVerifiedCacheTests(unittest.TestCase):
+    def setUp(self):
+        cls = gateway_loader._IngestionExactCellLookup
+        if hasattr(cls, "_verified_shards"):
+            cls._verified_shards.clear()
+            cls._verified_shard_bytes = 0
+            cls._cache_allocations = 0
+
+    def _lookup(self, directory, payload, *, kind="row", count=None):
+        lookup = object.__new__(gateway_loader._IngestionExactCellLookup)
+        lookup._directory = Path(directory)
+        folder = lookup._directory / ("rows" if kind == "row" else "values")
+        folder.mkdir(exist_ok=True)
+        (folder / "aa.jsonl").write_bytes(payload)
+        lookup._shards = {(kind, "aa"): {
+            "size_bytes": len(payload), "sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
+            "record_count": count if count is not None else len(payload.splitlines()),
+        }}
+        return lookup
+
+    def test_native_shortlist_fixture_equality_across_wire_shapes(self):
+        selected, other = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        for kind in ("row", "value"):
+            record = (["row", selected, 0, "fictional-observation", other, False]
+                      if kind == "row" else [selected, other, False])
+            unrelated = (["cell", other, 0, "fictional-other", selected, False]
+                         if kind == "row" else [other, selected, False])
+            for ending in (b"\n", b"\r\n", b""):
+                with self.subTest(kind=kind, ending=ending), tempfile.TemporaryDirectory() as directory:
+                    canonical = json.dumps(record, separators=(",", ":")).encode()
+                    escaped = canonical.replace(b"sha256:", b"\\u0073ha256:", 1)
+                    payload = (json.dumps(unrelated).encode() + b"\n" + canonical + b"\r\n"
+                               + b" \t" + escaped + ending)
+                    lookup = self._lookup(directory, payload, kind=kind)
+                    full = lookup._read_shard_records(kind, "aa", cache={})
+                    expected = tuple(r for r in full if r[1 if kind == "row" else 0] == selected)
+                    self.assertEqual(lookup._read_matching_shard_records(
+                        kind, "aa", matching_keys={selected}), expected)
+                    self.assertEqual(len(expected), 2)
+                    self.assertIsNone(lookup._read_matching_shard_records(
+                        kind, "aa", matching_keys={selected}, maximum_matching_records=1))
+
+    def test_native_shortlist_preserves_seals_size_and_deadline(self):
+        selected, other = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        line = json.dumps(["row", selected, 0, "fictional-observation", other, False]).encode()
+        unrelated = json.dumps(["row", other, 0, "fictional-other", selected, False]).encode()
+        with tempfile.TemporaryDirectory() as directory:
+            payload = line + b"\n" + unrelated + b"\n"
+            for key, value, message in (("sha256", "sha256:" + "0" * 64, "seal mismatch"),
+                                        ("record_count", 1, "count mismatch"),
+                                        ("record_count", 3, "count mismatch"),
+                                        ("size_bytes", len(payload) - 1, "seal mismatch")):
+                with self.subTest(binding=key, value=value):
+                    lookup = self._lookup(directory, payload)
+                    lookup._shards[("row", "aa")][key] = value
+                    with self.assertRaisesRegex(ContractValidationError, message):
+                        lookup._read_matching_shard_records("row", "aa", matching_keys={selected})
+            for prefix in (line, unrelated):
+                for ending in (b"\n", b""):
+                    with self.subTest(oversized_selected=prefix == line, ending=ending):
+                        lookup = self._lookup(directory, prefix + b" " * (16385 - len(prefix)) + ending)
+                        with self.assertRaisesRegex(ContractValidationError, "oversized"):
+                            lookup._read_matching_shard_records("row", "aa", matching_keys={selected})
+            lookup = self._lookup(directory, line + b"\n" + b"not-json\n")
+            with self.assertRaisesRegex(ContractValidationError, "shard is invalid"):
+                lookup._read_matching_shard_records("row", "aa", matching_keys={selected})
+            lookup = self._lookup(directory, payload)
+            checks = 0
+            def expire():
+                nonlocal checks
+                checks += 1
+                if checks == 2:
+                    raise RuntimeError("fictional deadline")
+            with self.assertRaisesRegex(RuntimeError, "fictional deadline"):
+                lookup._read_matching_shard_records("row", "aa", matching_keys={selected}, check=expire)
+            # A warm absent-key search must poll even before merge yields a
+            # selected record; no selected-record callback can save this case.
+            lookup._read_matching_shard_records("row", "aa", matching_keys={selected})
+            checks = 0
+            with self.assertRaisesRegex(RuntimeError, "fictional deadline"):
+                lookup._read_matching_shard_records("row", "aa", matching_keys={"sha256:" + "c" * 64}, check=expire)
+
+    def test_prefix_partition_preserves_collisions_duplicates_and_file_order(self):
+        cls = gateway_loader._IngestionExactCellLookup
+        keys = ["sha256:aa123" + f"{n:059x}" for n in (1,2,3)]
+        other = "sha256:aafff" + "0" * 59
+        records = [["row", key, 0, f"fictional-{i}", other, False]
+                   for i, key in enumerate((keys[1], other, keys[0], keys[1], keys[2], keys[0]))]
+        payload = b"".join(json.dumps(record).encode()+b"\n" for record in records)
+        with tempfile.TemporaryDirectory() as directory:
+            lookup = self._lookup(directory, payload)
+            for selected in ({keys[0],keys[1]}, {keys[2]}, {"sha256:aa123"+"f"*59}, {other}):
+                expected = tuple(record for record in records if record[1] in selected)
+                self.assertEqual(lookup._read_matching_shard_records("row", "aa", matching_keys=selected), expected)
+            selected = {keys[0], keys[1]}
+            self.assertEqual(lookup._read_matching_shard_records("row", "aa", matching_keys=selected),
+                             tuple(record for record in records if record[1] in selected))
+            entry = next(iter(cls._verified_shards.values()))
+            prefix = entry["prefix_index"]
+            self.assertEqual(len(prefix), 4097*4+len(records)*4)
+            ordinals = [int.from_bytes(prefix[i:i+4], "big") for i in range(4097*4,len(prefix),4)]
+            self.assertEqual(sorted(ordinals), list(range(len(records))))
+            self.assertEqual(ordinals, [0, 2, 3, 4, 5, 1])
+            prefix = None
+            self.assertIsNone(lookup._read_matching_shard_records("row", "aa", matching_keys=set(keys), maximum_matching_records=1))
+            # Retired readers keep both arrays charged until the last unpin.
+            original_charge = cls._verified_shard_bytes
+            entry["readers"] += 1
+            cls._drop_cache_entry(next(iter(cls._verified_shards)))
+            self.assertEqual(cls._verified_shard_bytes, original_charge)
+            cls._unpin_cache_entry(entry)
+            self.assertIsNone(entry["index"])
+            self.assertIsNone(entry["prefix_index"])
+            self.assertEqual(cls._verified_shard_bytes, 0)
+            build = lookup._build_prefix_index
+            def interrupted(index, check=None):
+                calls = 0
+                def abort():
+                    nonlocal calls
+                    calls += 1
+                    if calls == 2:
+                        raise RuntimeError("fictional prefix build interruption")
+                return build(index, abort)
+            with mock.patch.object(lookup, "_build_prefix_index", side_effect=interrupted):
+                with self.assertRaisesRegex(RuntimeError, "prefix build interruption"):
+                    lookup._read_matching_shard_records("row", "aa", matching_keys=set(keys))
+            self.assertFalse(cls._verified_shards)
+            self.assertEqual(cls._verified_shard_bytes, 0)
+
+    def test_verified_cache_warm_reads_and_identity_change_fail_closed(self):
+        selected, other = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        record = ["row", selected, 0, "fictional-observation", other, False]
+        unrelated = ["cell", other, 0, "fictional-other", selected, False]
+        payload = json.dumps(record).encode() + b"\n" + (json.dumps(unrelated).encode() + b"\n") * 500
+        with tempfile.TemporaryDirectory() as directory:
+            lookup = self._lookup(directory, payload)
+            self.assertEqual(lookup._read_matching_shard_records("row", "aa", matching_keys={selected}), (record,))
+            original = gateway_loader.hashlib.sha256
+            with mock.patch.object(gateway_loader.hashlib, "sha256", wraps=original) as hashes:
+                self.assertEqual(lookup._read_matching_shard_records("row", "aa", matching_keys={selected}), (record,))
+            self.assertFalse(any(not call.args for call in hashes.call_args_list),
+                             "warm use must read sealed selected lines without hashing the full shard")
+            # Another owner instance reuses the same process verification;
+            # do not rewrite the already verified file during this assertion.
+            second = object.__new__(gateway_loader._IngestionExactCellLookup)
+            second._directory, second._shards = lookup._directory, dict(lookup._shards)
+            with mock.patch.object(gateway_loader.hashlib, "sha256", wraps=original) as hashes:
+                self.assertEqual(second._read_matching_shard_records("row", "aa", matching_keys={selected}), (record,))
+            self.assertFalse(any(not call.args for call in hashes.call_args_list))
+            path = Path(directory) / "rows/aa.jsonl"
+            before = path.stat()
+            path.write_bytes(payload.replace(b"fictional-other", b"fictional-otHer", 1))
+            # Ensure a metadata delta even on a filesystem with coarse ctime.
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+            with self.assertRaisesRegex(ContractValidationError, "seal mismatch"):
+                lookup._read_matching_shard_records("row", "aa", matching_keys={selected})
+            self.assertFalse(gateway_loader._IngestionExactCellLookup._verified_shards)
+
+    def test_verified_cache_periodic_bound_and_interrupted_admission(self):
+        cls = gateway_loader._IngestionExactCellLookup
+        selected, other = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        record = ["row", selected, 0, "fictional-observation", other, False]
+        payload = json.dumps(record).encode() + b"\n"
+        with tempfile.TemporaryDirectory() as directory:
+            lookup = self._lookup(directory, payload)
+            scan = lookup._scan_matching_shard_records
+            with (mock.patch.object(cls, "_CACHE_REVERIFY_USES", 2),
+                  mock.patch.object(lookup, "_scan_matching_shard_records", wraps=scan) as reads):
+                for _ in range(3):
+                    self.assertEqual(lookup._read_matching_shard_records("row", "aa", matching_keys={selected}), (record,))
+                self.assertEqual(reads.call_count, 2)
+            with (mock.patch.object(gateway_loader.time, "monotonic", return_value=10**12),
+                  mock.patch.object(lookup, "_scan_matching_shard_records", wraps=scan) as reads):
+                lookup._read_matching_shard_records("row", "aa", matching_keys={selected})
+                self.assertEqual(reads.call_count, 1)
+            cls._verified_shards.clear()
+            cls._verified_shard_bytes = 0
+            checks = 0
+            def interrupted():
+                nonlocal checks
+                checks += 1
+                if checks == 4:
+                    raise RuntimeError("fictional interrupted verification")
+            with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                lookup._read_matching_shard_records("row", "aa", matching_keys={selected}, check=interrupted)
+            self.assertFalse(cls._verified_shards)
+            with mock.patch.object(cls, "_CACHE_MAX_BYTES", 10000):
+                for index in range(4):
+                    child = Path(directory) / str(index)
+                    child.mkdir()
+                    item = self._lookup(child, payload)
+                    item._read_matching_shard_records("row", "aa", matching_keys={selected})
+                self.assertLessEqual(cls._verified_shard_bytes, 10000)
+                self.assertLess(len(cls._verified_shards), 4)
+            cls._verified_shards.clear()
+            cls._verified_shard_bytes = 0
+            with mock.patch.object(cls, "_CACHE_ENTRY_MAX_BYTES", 1):
+                for _ in range(2):
+                    lookup._read_matching_shard_records("row", "aa", matching_keys={selected})
+                self.assertFalse(cls._verified_shards)
+
+    def test_verified_cache_rejects_symlink_and_selected_line_change(self):
+        cls = gateway_loader._IngestionExactCellLookup
+        selected, other = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        record = ["row", selected, 0, "fictional-observation", other, False]
+        payload = json.dumps(record).encode() + b"\n"
+        with tempfile.TemporaryDirectory() as directory:
+            lookup = self._lookup(directory, payload)
+            lookup._read_matching_shard_records("row", "aa", matching_keys={selected})
+            path = Path(directory) / "rows/aa.jsonl"
+            original_identity = cls._shard_identity(path.stat())
+            path.write_bytes(payload.replace(b"fictional-observation", b"fictional-Observation"))
+            # Even forged cheap metadata cannot replace the selected-line seal.
+            with mock.patch.object(cls, "_shard_identity", return_value=original_identity):
+                with self.assertRaisesRegex(ContractValidationError, "seal mismatch"):
+                    lookup._read_matching_shard_records("row", "aa", matching_keys={selected})
+            self.assertFalse(cls._verified_shards)
+            target = Path(directory) / "target.jsonl"
+            target.write_bytes(payload)
+            path.unlink()
+            path.symlink_to(target)
+            with self.assertRaisesRegex(ContractValidationError, "unavailable"):
+                lookup._read_matching_shard_records("row", "aa", matching_keys={selected})
+
+
+
+class NativeShardCacheLifecycleTests(unittest.TestCase):
+    _lookup = NativeShardVerifiedCacheTests._lookup
+
+    def _fixture(self, directory):
+        key, other = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        record = ["row", key, 0, "fictional-cache", other, False]
+        payload = json.dumps(record).encode() + b"\n"
+        lookup = self._lookup(directory, payload)
+        (Path(directory) / "rows/bb.jsonl").write_bytes(payload)
+        lookup._shards[("row", "bb")] = dict(lookup._shards[("row", "aa")])
+        return lookup, key, record
+
+    def test_startup_seals_every_shard_and_failure_never_ready(self):
+        cls = gateway_loader._IngestionExactCellLookup
+        with tempfile.TemporaryDirectory() as directory:
+            lookup, key, record = self._fixture(directory)
+            before = cls.cache_receipt()
+            lease = lookup.start_cache()
+            try:
+                after = cls.cache_receipt()
+                self.assertEqual(after["prewarm_success"] - before["prewarm_success"], 2)
+                self.assertEqual(after["background_workers"], 1)
+                second = object.__new__(cls)
+                second._directory, second._shards = lookup._directory, dict(lookup._shards)
+                second.start_cache()
+                self.assertEqual(cls.cache_receipt()["background_workers"], 1)
+                self.assertEqual(cls.cache_receipt()["prewarm_success"], after["prewarm_success"])
+                second.close_cache()
+                self.assertEqual(cls.cache_receipt()["background_workers"], 1)
+                self.assertEqual(lookup._read_matching_shard_records("row", "bb", matching_keys={key}), (record,))
+                self.assertEqual(cls.cache_receipt()["hit_success"] - after["hit_success"], 1)
+            finally:
+                lease.close_cache()
+            self.assertEqual(cls.cache_receipt()["background_workers"], 0)
+        with tempfile.TemporaryDirectory() as directory:
+            lookup, _, _ = self._fixture(directory)
+            lookup._shards[("row", "bb")]["sha256"] = "sha256:" + "0" * 64
+            with self.assertRaises(ContractValidationError):
+                lookup.start_cache()
+            self.assertEqual(cls.cache_receipt()["managed_shards"], 0)
+            self.assertEqual(cls.cache_receipt()["background_workers"], 0)
+        with tempfile.TemporaryDirectory() as directory:
+            lookup, _, _ = self._fixture(directory)
+            (Path(directory) / "rows/aa.jsonl").unlink()
+            with self.assertRaisesRegex(ContractValidationError, "shard is unavailable"):
+                lookup._verify_cache_shard("row", "aa", matching_keys=set(), origin="prewarm")
+            with self.assertRaisesRegex(ContractValidationError, "startup is unavailable"):
+                lookup.start_cache()
+            self.assertEqual(cls.cache_receipt()["managed_shards"], 0)
+            self.assertEqual(cls.cache_receipt()["background_workers"], 0)
+
+    def test_background_refresh_is_nonblocking_and_expiry_fails_closed(self):
+        import threading
+        import time
+        cls = gateway_loader._IngestionExactCellLookup
+        with tempfile.TemporaryDirectory() as directory:
+            lookup, key, record = self._fixture(directory)
+            lease = lookup.start_cache()
+            entered, release = threading.Event(), threading.Event()
+            scan = lookup._scan_matching_shard_records
+            def paused(*args, **kwargs):
+                if threading.current_thread().name == "formowl-native-shard-cache":
+                    entered.set()
+                    if not release.wait(3):
+                        raise RuntimeError("fictional background gate timed out")
+                return scan(*args, **kwargs)
+            try:
+                with mock.patch.object(lookup, "_scan_matching_shard_records", side_effect=paused):
+                    with cls._verified_shard_lock:
+                        for entry in cls._verified_shards.values():
+                            entry["verified_at"] = time.monotonic() - 250
+                    cls._cache_wake.set()
+                    self.assertTrue(entered.wait(2))
+                    with cls._verified_shard_lock:
+                        active_key, token = next(iter(cls._cache_inflight.items()))
+                        context = cls._managed_shards[active_key]
+                    with self.assertRaisesRegex(ContractValidationError, "in progress"):
+                        lookup._verify_cache_shard(context["kind"], context["shard"],
+                            matching_keys=set(), origin="reverify", expected_context=context)
+                    self.assertFalse(token["cancelled"])
+                    self.assertFalse(context["failed"])
+                    deadline = time.monotonic() + 0.5
+                    def check():
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError("fictional query blocked by background scan")
+                    self.assertEqual(lookup._read_matching_shard_records("row", "aa", matching_keys={key}, check=check), (record,))
+                    with cls._verified_shard_lock:
+                        for entry in cls._verified_shards.values():
+                            entry["verified_at"] = time.monotonic() - 301
+                    with self.assertRaises(ContractValidationError):
+                        lookup._read_matching_shard_records("row", "bb", matching_keys={key}, check=check)
+                    self.assertGreater(cls.cache_receipt()["expired_reject"], 0)
+                    release.set()
+            finally:
+                release.set()
+                lease.close_cache()
+
+
+    def test_background_failure_quarantines_once_and_invalidated_generation_cannot_publish(self):
+        import threading
+        import time
+        cls = gateway_loader._IngestionExactCellLookup
+        with tempfile.TemporaryDirectory() as directory:
+            lookup, key, _ = self._fixture(directory)
+            lease = lookup.start_cache()
+            entered, release = threading.Event(), threading.Event()
+            scan = lookup._scan_matching_shard_records
+            def paused(*args, **kwargs):
+                result = scan(*args, **kwargs)
+                if threading.current_thread().name == "formowl-native-shard-cache":
+                    entered.set()
+                    if not release.wait(3):
+                        raise RuntimeError("fictional publication gate timed out")
+                return result
+            try:
+                with mock.patch.object(lookup, "_scan_matching_shard_records", side_effect=paused):
+                    with cls._verified_shard_lock:
+                        cache_key = next(iter(cls._verified_shards))
+                        cls._verified_shards[cache_key]["uses"] = 64
+                    before = cls.cache_receipt()["reverify_success"]
+                    cls._cache_wake.set()
+                    self.assertTrue(entered.wait(2))
+                    path = Path(cache_key)
+                    info = path.stat()
+                    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+                    with self.assertRaisesRegex(ContractValidationError, "identity changed"):
+                        lookup._read_matching_shard_records("row", "aa", matching_keys={key})
+                    # Remove the lease while verification is in flight. The old
+                    # generation must never publish or revive a closed lease.
+                    cls._cache_stop.set()
+                    release.set()
+                    lease.close_cache()
+                    self.assertNotIn(cache_key, cls._verified_shards)
+                    self.assertEqual(cls.cache_receipt()["reverify_success"], before)
+            finally:
+                release.set()
+                lease.close_cache()
+        with tempfile.TemporaryDirectory() as directory:
+            lookup, key, _ = self._fixture(directory)
+            lease = lookup.start_cache()
+            try:
+                with mock.patch.object(lookup, "_scan_matching_shard_records", side_effect=RuntimeError("fictional failure")) as scans:
+                    with cls._verified_shard_lock:
+                        cache_key = next(iter(cls._verified_shards))
+                        context = cls._managed_shards[cache_key]
+                        cls._verified_shards[cache_key]["uses"] = 64
+                    cls._cache_wake.set()
+                    until = time.monotonic() + 2
+                    while not context["failed"] and time.monotonic() < until:
+                        time.sleep(0.01)
+                    self.assertTrue(context["failed"])
+                    cls._cache_wake.set()
+                    time.sleep(0.05)
+                    self.assertEqual(scans.call_count, 1)
+                    with self.assertRaisesRegex(ContractValidationError, "unavailable"):
+                        lookup._read_matching_shard_records("row", "aa", matching_keys={key})
+            finally:
+                lease.close_cache()
+
+
 class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
     def test_recovery_summary_distinguishes_unread_terms_from_observed_zero(self):
         for observed, complete in ((0, False), (0, True), (3, False), (3, True)):
@@ -1665,6 +2162,167 @@ def _sha256_bytes(payload: bytes) -> str:
 
 def _sha256_path(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
+
+
+
+
+class CandidateFactPartialVerificationTests(unittest.TestCase):
+    def _bound(self, root, *, subject=False):
+        from test_issue56_uat_handler_composition import CandidateFactRuntimeTests
+        revision, config, digest, _, observations = CandidateFactRuntimeTests()._fixture(
+            root, subject_only=subject, filler_count=0, fixture_code="code019")
+        return sealed_source.bind_issue56_candidate_fact_exports(
+            revision, configuration_path=config, expected_sha256=digest), observations
+
+    @staticmethod
+    def _arguments():
+        return {"query_text": "ZX-742 target date", "required_terms": ["ZX-742"],
+                "requester_user_id": gateway_loader.APPROVER_ACTOR,
+                "workspace_id": gateway_loader.WORKSPACE_ID,
+                "session_id": "rc19-fictional-007", "page_size": 10}
+
+    def _run(self, bound, *, allowed=None, clock=None, turn_deadline=None, drop_table=False):
+        from contextlib import ExitStack
+        from formowl_retrieval.gateway import _SourcePhaseTrace, _source_phase_trace_scope
+        original = bound.source_records.scan_authorized_observations
+        def scan(**kwargs):
+            if kwargs.get("preferred_observation_hashes"):
+                callback = kwargs["observation_callback"]
+                def filtered(observation, scope):
+                    if allowed is None or sha256_json(observation.to_dict()) in allowed:
+                        return callback(observation, scope)
+                    return True
+                kwargs["observation_callback"] = filtered
+            return original(**kwargs)
+        trace = _SourcePhaseTrace({})
+        with ExitStack() as stack:
+            stack.enter_context(_source_phase_trace_scope(trace))
+            if allowed is not None:
+                stack.enter_context(mock.patch.object(bound.source_records, "scan_authorized_observations", side_effect=scan))
+            if clock is not None:
+                stack.enter_context(mock.patch.object(gateway_loader.time, "monotonic", side_effect=lambda: clock[0]))
+                token = gateway_loader._SOURCE_EVIDENCE_DEADLINE.set(turn_deadline)
+                stack.callback(gateway_loader._SOURCE_EVIDENCE_DEADLINE.reset, token)
+                def expire_after_verified(**kwargs):
+                    if kwargs.get("preferred_observation_hashes"):
+                        # One real source passes the actual projection/guard callback.
+                        first = clock[2]
+                        kwargs["observation_callback"](first, clock[3])
+                        clock[0] = clock[1]
+                        raise gateway_loader._SourceEvidenceDeadlineExceeded()
+                    return original(**kwargs)
+                stack.enter_context(mock.patch.object(bound.source_records, "scan_authorized_observations", side_effect=expire_after_verified))
+            if drop_table:
+                from formowl_mail import human_uat_orchestrator
+                compact = human_uat_orchestrator.compact_evidence_for_model
+                def without_table(payload, **kwargs):
+                    payload = compact(payload, **kwargs)
+                    return {**payload, "evidence": [item for item in payload.get("evidence", ())
+                            if item.get("source_type") != "candidate_fact_table"]}
+                stack.enter_context(mock.patch.object(human_uat_orchestrator, "compact_evidence_for_model", side_effect=without_table))
+            result = gateway_loader._build_source_start_semantic_handler(bound, mail_tool=False)(self._arguments())
+        tables = [item for item in result.get("evidence", ()) if item.get("source_type") == "candidate_fact_table"]
+        details = json.loads(trace.snapshot())["details"]
+        status = next((item for item in details if item.get("candidate_fact_status")), {})
+        flags = status["pre_group_reason_flags"]
+        self.assertEqual(set(flags), {
+            "deadline_before_hydration", "deadline_during_hydration", "source_admission_rejected",
+            "projection_incomplete", "source_limit", "all_sources_verified", "presentation_deadline"})
+        self.assertTrue(all(type(value) is bool for value in flags.values()))
+        self.assertEqual(sum(flags.values()), 1)
+        return result, tables, status
+
+    def test_partial_verification_has_whole_rows_and_disclosure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bound, observations = self._bound(Path(directory))
+            result, tables, status = self._run(bound, allowed={sha256_json(observations[0].to_dict())})
+            self.assertEqual(len(tables), 1)
+            display = json.loads(tables[0]["snippet"].split("\n", 1)[1])
+            self.assertEqual([row["item"] for row in display["rows"]], ["0"])
+            self.assertIn("Shown 1 of 2", display["disclosure"])
+            self.assertIn("withheld", display["disclosure"])
+            self.assertEqual(result["coverage"]["status"], "incomplete")
+            self.assertEqual(status["selected_row_count"], 2)
+            self.assertEqual(status["admitted_row_count"], 1)
+            self.assertEqual(status["fitted_row_count"], 1)
+            self.assertEqual(status["shown_row_count"], 1)
+            # Optional native fallback applies a mail permission guard to
+            # these withheld non-native targets before checking their type.
+            self.assertEqual(next(key for key, value in status["pre_group_reason_flags"].items() if value), "source_admission_rejected")
+            self.assertEqual(status["rejected_row_count"], 0)
+            from formowl_mail.human_uat_orchestrator import evidence_citation_ids
+            self.assertTrue(set(tables[0]["source_context"]["required_citation_hashes"]).issubset(evidence_citation_ids(result)))
+
+    def test_rejected_source_row_does_not_suppress_independent_valid_row(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bound, _ = self._bound(Path(directory))
+            rows = deepcopy(list(bound.candidate_fact_rows))
+            rows[1]["fields"]["target_date"][0]["evidence_spans"][0]["quote"] = "invalid-019"
+            result, tables, status = self._run(replace(bound, candidate_fact_rows=tuple(rows)))
+            self.assertEqual(len(tables), 1)
+            display = json.loads(tables[0]["snippet"].split("\n", 1)[1])
+            self.assertEqual([row["item"] for row in display["rows"]], ["0"])
+            self.assertNotIn("invalid-019", json.dumps(result))
+            self.assertEqual(status["rejected_row_count"], 1)
+            self.assertEqual(next(key for key, value in status["pre_group_reason_flags"].items() if value), "source_admission_rejected")
+
+    def test_all_verified_preserves_rows_values_and_citations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bound, observations = self._bound(Path(directory))
+            result, tables, status = self._run(bound)
+            self.assertEqual(len(tables), 1)
+            display = json.loads(tables[0]["snippet"].split("\n", 1)[1])
+            self.assertEqual([row["item"] for row in display["rows"]], ["0", "1"])
+            self.assertNotIn("disclosure", display)
+            self.assertEqual(set(result["citations"]), {sha256_json(o.to_dict()) for o in observations})
+            self.assertEqual(status["selected_row_count"], status["admitted_row_count"])
+            self.assertEqual(status["fitted_row_count"], status["shown_row_count"])
+
+    def test_none_verified_declines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bound, _ = self._bound(Path(directory))
+            _, tables, status = self._run(bound, allowed=set())
+            self.assertFalse(tables)
+            self.assertEqual(status["admitted_row_count"], 0)
+            self.assertEqual(status["shown_row_count"], 0)
+            self.assertEqual(status["rejected_row_count"], 0)  # Hidden scanner subcause is unknown.
+            with mock.patch.object(gateway_loader, "authorized_permission_scope_matches", return_value=False):
+                _, denied, denied_status = self._run(bound)
+            self.assertFalse(denied)
+            self.assertEqual(denied_status["rejected_row_count"], 2)
+
+    def test_subject_identity_is_part_of_whole_row_source_closure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bound, observations = self._bound(Path(directory), subject=True)
+            arguments = self._arguments()
+            arguments["required_terms"] = ["ZX-007"]
+            with mock.patch.object(self, "_arguments", return_value=arguments):
+                _, missing, _ = self._run(bound, allowed={sha256_json(observations[0].to_dict())})
+                self.assertFalse(missing)
+                _, tables, _ = self._run(bound, allowed={sha256_json(observations[0].to_dict()), sha256_json(observations[3].to_dict())})
+            self.assertEqual(len(tables), 1)
+            display = json.loads(tables[0]["snippet"].split("\n", 1)[1])
+            self.assertEqual(len(display["rows"]), 1)
+            self.assertIn("subject", display["rows"][0])
+
+    def test_source_expiry_uses_only_existing_absolute_presentation_window(self):
+        for expired in (False, True):
+            with self.subTest(absolute_expired=expired), tempfile.TemporaryDirectory() as directory:
+                bound, observations = self._bound(Path(directory))
+                scope = bound.authorized_source.source_scope_ids[0]
+                clock = [0.0, 101.0 if expired else 3.0, observations[0], scope]
+                _, tables, status = self._run(bound, clock=clock, turn_deadline=100.0)
+                self.assertEqual(bool(tables), not expired)
+                self.assertEqual(status["shown_row_count"], 0 if expired else 1)
+                self.assertIn(next(key for key, value in status["pre_group_reason_flags"].items() if value), {"deadline_during_hydration", "presentation_deadline"})
+
+    def test_constructed_table_is_not_reported_shown_if_presentation_declines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bound, observations = self._bound(Path(directory))
+            _, tables, status = self._run(bound, allowed={sha256_json(observations[0].to_dict())}, drop_table=True)
+            self.assertFalse(tables)
+            self.assertEqual(status["fitted_row_count"], 1)
+            self.assertEqual(status["shown_row_count"], 0)
 
 
 if __name__ == "__main__":

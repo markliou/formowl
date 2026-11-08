@@ -2269,6 +2269,7 @@ class CodexAppServerTurn:
     turn_id: str
     final_message: str
     tool_invocations: tuple[CodexDynamicToolInvocation, ...]
+    deadline_monotonic: float | None = None
 
 
 @dataclass(frozen=True)
@@ -2982,6 +2983,7 @@ class CodexAppServerStdioTransport:
                     turn_id=turn_id,
                     final_message=final_message,
                     tool_invocations=tuple(context.tool_invocations),
+                    deadline_monotonic=deadline,
                 )
             finally:
                 with context.lock:
@@ -3576,6 +3578,7 @@ class CodexAppServerConversationModel:
                 finalization_validation: list[dict[str, Any]] = []
                 split_guidance_injection: dict[str, Any] = {}
                 finalization_retry: dict[str, Any] = {}
+                provider_request_count = 0
 
                 def attach_citation_diagnostics(
                     diagnostic: Mapping[str, Any] | None = None,
@@ -3825,6 +3828,7 @@ class CodexAppServerConversationModel:
 
                 try:
                     try:
+                        provider_request_count += 1
                         turn = self._transport.run_turn(
                             thread_id=thread.thread_id,
                             user_text=user_text,
@@ -3848,6 +3852,7 @@ class CodexAppServerConversationModel:
                             and receipt.thread_id == thread.thread_id and receipt.turn_id
                             and current_thread
                             and time.monotonic() < min(turn_deadline, receipt.deadline_monotonic)
+                            and provider_request_count < _MAX_PROVIDER_REQUESTS_PER_TURN
                             and not tool_budget_exhausted and not rejected_tool_attempt_count
                             and not presentation_failed and not request_contract_binder.comparison_pending
                             and not request_contract_binder._split_refinement_armed
@@ -3884,6 +3889,7 @@ class CodexAppServerConversationModel:
                             ),
                         }}
                         try:
+                            provider_request_count += 1
                             turn = self._transport.run_turn(
                                 thread_id=thread.thread_id,
                                 user_text="Finish the pending final answer without calling tools.",
@@ -3946,6 +3952,7 @@ class CodexAppServerConversationModel:
                     raise
                 decision = None
                 finalization_started = False
+                final_repair_attempted = False
                 available_citation_ids: tuple[str, ...] = ()
                 try:
                     execution_turn = completed_tool_turn or turn
@@ -4013,13 +4020,15 @@ class CodexAppServerConversationModel:
                     )
                     available_citation_ids = evidence_citation_ids(evidence_results)
                     finalization_started = True
-                    decision = _parse_decision(turn.final_message, citation_presentation=citation_presentation)
-                    decision = request_contract_binder.validate_comparison_decision(decision, evidence_records)
-                    _validate_evidence_bound_decision(
-                        decision,
-                        evidence_results=evidence_results,
-                    )
-                    decision = _disclose_bounded_exact_downgrade(decision, evidence_records)
+                    def validate_final_message(final_message: str) -> dict[str, Any]:
+                        nonlocal decision
+                        _validate_bounded_exact_downgrade_bindings(evidence_records)
+                        decision = _parse_decision(final_message, citation_presentation=citation_presentation)
+                        decision = request_contract_binder.validate_comparison_decision(decision, evidence_records)
+                        _validate_evidence_bound_decision(decision, evidence_results=evidence_results)
+                        return _disclose_bounded_exact_downgrade(decision, evidence_records)
+
+                    decision = validate_final_message(turn.final_message)
                 except _CodexAppServerContractFailure as exc:
                     self._discard_thread(safety_identifier, thread.thread_id)
                     if finalization_retry:
@@ -4027,9 +4036,36 @@ class CodexAppServerConversationModel:
                         exc.provider_diagnostic = attach_citation_diagnostics(exc.provider_diagnostic)
                     raise
                 except Exception as exc:
-                    self._discard_thread(safety_identifier, thread.thread_id)
+                    stop_reason = _finalization_stop_reason(exc)
+                    repair_succeeded = False
                     if finalization_started:
-                        stop_reason = _finalization_stop_reason(exc)
+                        reason_code = _finalization_validation_reason(exc)
+                        # The successful transport receipt retains its original absolute
+                        # deadline; an overload recovery also retains the failed turn's.
+                        repair_deadline = turn_deadline
+                        for receipt in (turn, completed_tool_turn):
+                            if receipt is not None and receipt.deadline_monotonic is not None:
+                                bound = receipt.deadline_monotonic
+                                if type(bound) not in (int, float) or not math.isfinite(bound):
+                                    repair_deadline = 0.0
+                                    break
+                                repair_deadline = min(repair_deadline, bound)
+                        with self._lock:
+                            current_thread = self._threads.get(safety_identifier) is thread
+                        final_repair_attempted = (
+                            reason_code in _APP_SERVER_FINALIZATION_REPAIR_RULES
+                            and current_thread
+                            and not tool_budget_exhausted
+                            and provider_request_count < _MAX_PROVIDER_REQUESTS_PER_TURN
+                            and time.monotonic() < repair_deadline
+                        )
+                        # Only this opt-in private sink retains rejected prose/status.
+                        # Neither safe diagnostics nor repair prompts receive the draft.
+                        _record_private_citation_stage({
+                            "stage": "finalization_rejected_draft",
+                            "reason_code": reason_code,
+                            "draft": turn.final_message,
+                        })
                         finalization_validation.append(_finalization_validation_diagnostic(
                             final_citation_ids=decision["citation_ids"] if decision is not None else (),
                             available_citation_ids=available_citation_ids,
@@ -4038,25 +4074,83 @@ class CodexAppServerConversationModel:
                                 else "citation_rejected" if stop_reason == "citation_validation_failed"
                                 else "parse_rejected"
                             ),
-                            # App-server runs one turn; it has no final-answer repair loop.
-                            repair_attempted=False,
-                            reason_code=_finalization_validation_reason(exc),
+                            repair_attempted=final_repair_attempted,
+                            repair_result=None if final_repair_attempted else "not_attempted",
+                            reason_code=reason_code,
+                            binding_failure_code=getattr(exc, "binding_failure_code", None),
                             citation_presentation=citation_presentation,
                         ))
-                    if not evidence_records:
-                        raise
-                    return _safe_stop_outcome(
-                        reason=_finalization_stop_reason(exc),
-                        model_name=f"codex:{thread.model_name}",
-                        evidence_records=evidence_records,
-                        suppress_evidence_citations=request_contract_binder._native_page is not None,
-                        provider_diagnostic=attach_citation_diagnostics(),
-                    )
+                        if final_repair_attempted:
+                            original_turn_id = turn.turn_id
+                            decision = None
+                            repaired_turn = None
+                            try:
+                                provider_request_count += 1
+                                repaired_turn = self._transport.run_turn(
+                                    thread_id=thread.thread_id,
+                                    user_text="Repair the rejected final decision using the same evidence, without tools.",
+                                    additional_context={"formowl_finalization_repair": {
+                                        "kind": "application",
+                                        "value": json.dumps({
+                                            "reason_code": reason_code,
+                                            "rule": _APP_SERVER_FINALIZATION_REPAIR_RULES[reason_code],
+                                            "tools_allowed": False,
+                                            "evidence": "Use only already presented evidence and citation handles.",
+                                            "coverage": "Preserve incomplete evidence limits; do not add facts or claim completeness beyond the same evidence.",
+                                        }, separators=(",", ":")),
+                                    }},
+                                    output_schema=_DECISION_SCHEMA,
+                                    reasoning_effort=self._reasoning_effort,
+                                    client_metadata={"surface": "formowl_uat", "safety_identifier": safety_identifier},
+                                    tool_handler=deny_retry_tool, tools_allowed=False,
+                                    deadline_monotonic=repair_deadline,
+                                )
+                                if (repaired_turn.thread_id != thread.thread_id
+                                        or not repaired_turn.turn_id
+                                        or repaired_turn.turn_id == original_turn_id
+                                        or repaired_turn.tool_invocations):
+                                    raise _CodexAppServerContractFailure("Codex finalization repair turn is inconsistent")
+                                decision = validate_final_message(repaired_turn.final_message)
+                                repair_succeeded = True
+                            except Exception as repair_error:
+                                if repaired_turn is not None:
+                                    _record_private_citation_stage({
+                                        "stage": "finalization_rejected_draft",
+                                        "reason_code": _finalization_validation_reason(repair_error),
+                                        "draft": repaired_turn.final_message,
+                                    })
+                                repair_stop_reason = _finalization_stop_reason(repair_error)
+                                finalization_validation.append(_finalization_validation_diagnostic(
+                                    final_citation_ids=decision["citation_ids"] if decision is not None else (),
+                                    available_citation_ids=available_citation_ids,
+                                    validation_result=(
+                                        "coverage_rejected" if repair_stop_reason == "coverage_validation_failed"
+                                        else "citation_rejected" if repair_stop_reason == "citation_validation_failed"
+                                        else "parse_rejected"
+                                    ),
+                                    repair_attempted=True,
+                                    repair_result="rejected" if repaired_turn is not None else "failed",
+                                    reason_code=_finalization_validation_reason(repair_error),
+                                    binding_failure_code=getattr(repair_error, "binding_failure_code", None),
+                                    citation_presentation=citation_presentation,
+                                ))
+                    if not repair_succeeded:
+                        self._discard_thread(safety_identifier, thread.thread_id)
+                        if not evidence_records:
+                            raise
+                        return _safe_stop_outcome(
+                            reason=stop_reason,
+                            model_name=f"codex:{thread.model_name}",
+                            evidence_records=evidence_records,
+                            suppress_evidence_citations=request_contract_binder._native_page is not None,
+                            provider_diagnostic=attach_citation_diagnostics(),
+                        )
                 finalization_validation.append(_finalization_validation_diagnostic(
                     final_citation_ids=decision["citation_ids"],
                     available_citation_ids=available_citation_ids,
                     validation_result="passed",
-                    repair_attempted=False,
+                    repair_attempted=final_repair_attempted,
+                    repair_result="passed" if final_repair_attempted else None,
                     citation_presentation=citation_presentation,
                 ))
                 return UatConversationOutcome(
@@ -5528,19 +5622,28 @@ def _finalization_validation_diagnostic(
     available_citation_ids: Sequence[str],
     validation_result: str,
     repair_attempted: bool,
+    repair_result: str | None = None,
     reason_code: str | None = None,
+    binding_failure_code: str | None = None,
     citation_presentation: _TurnCitationPresentation | None = None,
 ) -> dict[str, Any]:
+    binding_failure = _safe_enum_value(binding_failure_code, _BOUNDED_DOWNGRADE_FAILURE_CODES)
+    repair = ({"repair_result": repair_result}
+              if isinstance(repair_result, str)
+              and repair_result in {"passed", "rejected", "failed", "not_attempted"} else {})
     reason = ({"reason_code": _safe_finalization_reason(reason_code)}
               if reason_code is not None else {})
     _record_private_citation_stage({
         "stage": "finalization",
+        **({"binding_failure_code": binding_failure}
+           if reason_code == "bounded_downgrade_binding_invalid" and binding_failure else {}),
         **({"citation_presentation": citation_presentation.diagnostic()} if citation_presentation is not None else {}),
         "final_model": (citation_presentation.model_citation_snapshot(private=True) if citation_presentation is not None
                         else _private_citation_ids_snapshot(final_citation_ids)),
         "available_governed": _private_citation_ids_snapshot(available_citation_ids),
         "validation_result": validation_result,
         "repair_attempted": bool(repair_attempted),
+        **repair,
         **reason,
     })
     return {
@@ -5552,6 +5655,7 @@ def _finalization_validation_diagnostic(
             or "parse_rejected"
         ),
         "repair_attempted": bool(repair_attempted),
+        **repair,
         **reason,
     }
 
@@ -5860,6 +5964,9 @@ def safe_provider_loop_diagnostics(value: Mapping[str, Any] | None) -> dict[str,
                     "available_governed": snapshots[1],
                     "validation_result": validation_result,
                     "repair_attempted": repair_attempted,
+                    **({"repair_result": raw["repair_result"]}
+                       if isinstance(raw.get("repair_result"), str)
+                       and raw["repair_result"] in {"passed", "rejected", "failed", "not_attempted"} else {}),
                     **({"reason_code": _safe_finalization_reason(raw["reason_code"])}
                        if "reason_code" in raw else {}),
                 }
@@ -7021,6 +7128,7 @@ class CodexResponsesConversationModel:
             validation_result: str,
             repair_attempted: bool,
             reason_code: str | None = None,
+            binding_failure_code: str | None = None,
         ) -> None:
             available_citation_ids = sorted(
                 {
@@ -7042,6 +7150,7 @@ class CodexResponsesConversationModel:
                     validation_result=validation_result,
                     repair_attempted=repair_attempted,
                     reason_code=reason_code,
+                    binding_failure_code=binding_failure_code,
                     citation_presentation=citation_presentation,
                 ),
                 limit=_MAX_FINALIZATION_VALIDATION_DIAGNOSTICS,
@@ -7628,6 +7737,7 @@ class CodexResponsesConversationModel:
                             validation_result="parse_rejected",
                             repair_attempted=final_repair_attempted,
                             reason_code=_finalization_validation_reason(exc),
+                            binding_failure_code=getattr(exc, "binding_failure_code", None),
                         )
                     else:
                         _record_finalization_validation(
@@ -7645,6 +7755,7 @@ class CodexResponsesConversationModel:
                 parsed_decision: Mapping[str, Any] | None = None
                 finalization_validated = False
                 try:
+                    _validate_bounded_exact_downgrade_bindings(evidence_records)
                     parsed_decision = _parse_decision(
                         self._response_text(response), typed_evidence_notes=typed_notes_active,
                         field_request=field_request,
@@ -7727,6 +7838,7 @@ class CodexResponsesConversationModel:
                             ),
                             repair_attempted=final_repair_attempted,
                             reason_code=_finalization_validation_reason(exc),
+                            binding_failure_code=getattr(exc, "binding_failure_code", None),
                         )
                     # Only validated ordinary no-tool output gains this existing
                     # one-shot slot; lookup and evidence validation stay unchanged.
@@ -7739,9 +7851,9 @@ class CodexResponsesConversationModel:
                         and not prior_evidence_citeable
                         and formowl_attempts == 0 and public_term_attempts == 0
                     )
-                    if not final_repair_attempted and (
-                        evidence_records or prior_evidence_citeable or ordinary_no_tool_repair
-                    ):
+                    if (not final_repair_attempted
+                            and _finalization_validation_reason(exc) != "bounded_downgrade_binding_invalid"
+                            and (evidence_records or prior_evidence_citeable or ordinary_no_tool_repair)):
                         final_repair_attempted = True
                         force_final = True
                         stop_reason = reason_code
@@ -10329,18 +10441,33 @@ _FINALIZATION_REASON_RULES = {
         "unknown coverage or missing field-support metadata does not qualify."
     ),
 }
+# Closed app-server repair classes: structured coverage/disclosure and citation
+# shape only. Unknown rules, unavailable authority, safety and binding failures
+# retain the original safe fallback without another provider turn.
+_APP_SERVER_FINALIZATION_REPAIR_RULES = {
+    **{code: _FINALIZATION_REASON_RULES[code] for code in (
+        "coverage_status_invalid", "coverage_note_invalid", "incomplete_coverage_undisclosed",
+        "citation_ids_not_array", "citation_handle_rejected", "citation_ids_invalid",
+        "citation_ids_duplicate", "citation_ids_limit",
+    )},
+    "incomplete_coverage_hidden": "Set coverage_status=incomplete and disclose the actual evidence limitation in coverage_note.",
+    "coverage_status_missing": "Use coverage_status=incomplete for source-backed answers with incomplete evidence.",
+    "citations_missing": "Cite the smallest sufficient subset of already presented current-turn citation handles.",
+}
+
 _FINALIZATION_REASON_CODES = frozenset(
     {*_FINALIZATION_EXCEPTION_REASONS.values(), *_FINALIZATION_REASON_RULES,
-     "other", "no_citeable_evidence"}
+     "other", "no_citeable_evidence", "bounded_downgrade_binding_invalid"}
 )
 
 
 class _FinalizationValidationError(RuntimeError):
     """Carry a fixed diagnostic code without changing legacy stop-reason text."""
 
-    def __init__(self, message: str, reason_code: str) -> None:
+    def __init__(self, message: str, reason_code: str, *, binding_failure_code: str | None = None) -> None:
         super().__init__(message)
         self.reason_code = _safe_finalization_reason(reason_code)
+        self.binding_failure_code = _safe_enum_value(binding_failure_code, _BOUNDED_DOWNGRADE_FAILURE_CODES)
 
 
 def _safe_finalization_reason(value: Any) -> str:
@@ -10634,26 +10761,64 @@ def _source_evidence_fallback_text(
 _BOUNDED_EXACT_DOWNGRADE_DISCLOSURE = "無法做完整清單／確定性計算，以下為引用證據"
 
 
+_BOUNDED_DOWNGRADE_FAILURE_CODES = frozenset({
+    "request_contract_invalid", "downgrade_metadata_invalid", "original_query_class_invalid",
+    "attachment_scope_missing", "native_locator_present", "table_query_present",
+    "exact_inventory_kind_present", "exact_field_present", "cursor_present", "required_term_placement_present",
+    "result_status_invalid", "deterministic_exact_invalid", "exact_result_present", "exact_inventory_present",
+    "binding_metadata_invalid", "binding_failure_reason_present", "binding_reason_code_present",
+    "binding_original_query_hash_mismatch", "binding_query_hash_mismatch", "binding_source_family_scope_mismatch",
+    "binding_request_contract_mismatch", "binding_warnings_invalid", "binding_stop_reason_invalid",
+    "binding_warning_rejected", "binding_stop_reason_rejected", "downgrade_keys_invalid",
+    "downgrade_reason_mismatch", "downgrade_query_hash_mismatch", "downgrade_contract_fingerprint_mismatch",
+    "downgrade_terms_fingerprint_mismatch", "downgrade_executed_contract_mismatch", "downgrade_disclosure_mismatch",
+})
+
+
 def _bounded_exact_downgrade_bound(
     request: UatEvidenceToolRequest, result: Mapping[str, Any],
 ) -> bool:
     """Recognize only the trusted executed ceiling bound to the original intent."""
+    return _bounded_exact_downgrade_binding_failure(request, result) is None
+
+
+def _bounded_exact_downgrade_binding_failure(
+    request: UatEvidenceToolRequest, result: Mapping[str, Any],
+) -> str | None:
+    """Return the first failed predicate, without retaining any supplied values."""
     contract = request.request_contract
     metadata = result.get("execution_downgrade")
-    if (not isinstance(contract, Mapping) or not isinstance(metadata, Mapping)
-            or contract.get("query_class") != "exact_set_or_inventory"
-            or "attachment_table" not in contract.get("source_family_scope", ())
-            or "native_locator" in contract
-            or any(getattr(request, key) is not None for key in (
-                "table_query", "exact_inventory_kind", "exact_field", "cursor", "required_term_placement"))
-            or result.get("status") not in {"partial", "pending_review", "incomplete"}
-            or result.get("deterministic_exact") is not False
-            or result.get("exact_result") is not None or "exact_inventory" in result
-            or not _exact_capability_result_bindings_clean(((request, result),))):
-        return False
+    if not isinstance(contract, Mapping):
+        return "request_contract_invalid"
+    if not isinstance(metadata, Mapping):
+        return "downgrade_metadata_invalid"
+    if contract.get("query_class") != "exact_set_or_inventory":
+        return "original_query_class_invalid"
+    if "attachment_table" not in contract.get("source_family_scope", ()):
+        return "attachment_scope_missing"
+    if "native_locator" in contract:
+        return "native_locator_present"
+    for key, code in (
+        ("table_query", "table_query_present"), ("exact_inventory_kind", "exact_inventory_kind_present"),
+        ("exact_field", "exact_field_present"), ("cursor", "cursor_present"),
+        ("required_term_placement", "required_term_placement_present"),
+    ):
+        if getattr(request, key) is not None:
+            return code
+    if result.get("status") not in {"partial", "pending_review", "incomplete"}:
+        return "result_status_invalid"
+    if result.get("deterministic_exact") is not False:
+        return "deterministic_exact_invalid"
+    if result.get("exact_result") is not None:
+        return "exact_result_present"
+    if "exact_inventory" in result:
+        return "exact_inventory_present"
+    binding_failure = _exact_capability_result_binding_failure(((request, result),))
+    if binding_failure is not None:
+        return binding_failure
     terms = tuple(sorted(unicodedata.normalize("NFKC", term.strip()).casefold()
                          for term in request.required_terms or ()))
-    return metadata == {
+    expected = {
         "reason": "exact_table_plan_unavailable", "query_hash": sha256_json(request.query_text),
         "request_contract_fingerprint": sha256_json(contract),
         "required_terms_fingerprint": sha256_json(terms),
@@ -10661,6 +10826,34 @@ def _bounded_exact_downgrade_bound(
                                       "maximum_claim_strength": "cited_evidence"},
         "disclosure": _BOUNDED_EXACT_DOWNGRADE_DISCLOSURE,
     }
+    if set(metadata) != set(expected):
+        return "downgrade_keys_invalid"
+    for key, code in (
+        ("reason", "downgrade_reason_mismatch"), ("query_hash", "downgrade_query_hash_mismatch"),
+        ("request_contract_fingerprint", "downgrade_contract_fingerprint_mismatch"),
+        ("required_terms_fingerprint", "downgrade_terms_fingerprint_mismatch"),
+        ("executed_request_contract", "downgrade_executed_contract_mismatch"),
+        ("disclosure", "downgrade_disclosure_mismatch"),
+    ):
+        if metadata[key] != expected[key]:
+            return code
+    return None
+
+
+def _validate_bounded_exact_downgrade_bindings(
+    evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
+) -> None:
+    # Backend-owned failures precede model validation: rewriting a draft cannot
+    # repair a scope/hash/contract mismatch, even when the draft is also invalid.
+    for request, result in evidence_records:
+        if "execution_downgrade" not in result:
+            continue
+        failure = _bounded_exact_downgrade_binding_failure(request, result)
+        if failure is not None:
+            raise _FinalizationValidationError(
+                "Codex bounded downgrade coverage binding is invalid",
+                "bounded_downgrade_binding_invalid", binding_failure_code=failure,
+            )
 
 
 def _disclose_bounded_exact_downgrade(
@@ -10672,8 +10865,8 @@ def _disclose_bounded_exact_downgrade(
                   if "execution_downgrade" in result]
     if not downgraded:
         return dict(decision)
-    if (decision["coverage_status"] != "incomplete"
-            or not all(_bounded_exact_downgrade_bound(request, result) for request, result in downgraded)):
+    _validate_bounded_exact_downgrade_bindings(downgraded)
+    if decision["coverage_status"] != "incomplete":
         raise RuntimeError("Codex source-backed answer hid incomplete coverage")
     note = decision["coverage_note"]
     return {**decision, "coverage_note": (note if note.startswith(_BOUNDED_EXACT_DOWNGRADE_DISCLOSURE)
@@ -10765,36 +10958,48 @@ def _exact_capability_result_bindings_clean(
     evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
 ) -> bool:
     """Shared error exclusion so a rejected terminal cannot become a late notice."""
+    return _exact_capability_result_binding_failure(evidence_records) is None
+
+
+def _exact_capability_result_binding_failure(
+    evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
+) -> str | None:
     for request, result in evidence_records:
         contract = request.request_contract  # Already validated by the shared presentation guard.
         for metadata in (result, result.get("query_agent")):
             if metadata is None:
                 continue
             if not isinstance(metadata, Mapping):
-                return False
-            if any(metadata.get(key) not in (None, "") for key in ("failure_reason", "reason_code")):
-                return False
-            for key, expected in (
-                ("original_query_hash", contract["original_query_hash"]),
-                ("query_hash", sha256_json(request.query_text)),
-                ("source_family_scope", contract["source_family_scope"]),
-                ("request_contract", contract),
+                return "binding_metadata_invalid"
+            for key, code in (("failure_reason", "binding_failure_reason_present"),
+                              ("reason_code", "binding_reason_code_present")):
+                if metadata.get(key) not in (None, ""):
+                    return code
+            for key, expected, code in (
+                ("original_query_hash", contract["original_query_hash"], "binding_original_query_hash_mismatch"),
+                ("query_hash", sha256_json(request.query_text), "binding_query_hash_mismatch"),
+                ("source_family_scope", contract["source_family_scope"], "binding_source_family_scope_mismatch"),
+                ("request_contract", contract, "binding_request_contract_mismatch"),
             ):
                 if key in metadata and metadata[key] != expected:
-                    return False
+                    return code
             warnings = metadata.get("warnings", ())
             stop = metadata.get("stop_reason", "")
             if (not isinstance(warnings, (list, tuple))
-                    or any(not isinstance(value, str) for value in warnings)
-                    or stop is not None and not isinstance(stop, str)):
-                return False
-            for warning in (*warnings, stop or ""):
+                    or any(not isinstance(value, str) for value in warnings)):
+                return "binding_warnings_invalid"
+            if stop is not None and not isinstance(stop, str):
+                return "binding_stop_reason_invalid"
+            for warning, code in (
+                *((value, "binding_warning_rejected") for value in warnings),
+                (stop or "", "binding_stop_reason_rejected"),
+            ):
                 text = warning.casefold()
                 if any(token in text for token in (
                     "invalid", "ambiguous", "rejected", "permission", "denied", "error", "failed",
                 )) or ("binding" in text and any(token in text for token in ("mismatch", "missing"))):
-                    return False
-    return True
+                    return code
+    return None
 
 
 def _source_recovery_incomplete_display_eligible(
@@ -11757,7 +11962,9 @@ def _final_agent_message(
     return messages[-1]
 
 
-_CANDIDATE_FACT_TABLE_MAX_BYTES = 10 * 1024
+_CANDIDATE_FACT_TABLE_MAX_BYTES = 48 * 1024
+# Preserve the prior 6 KiB table-envelope headroom; ordinary evidence stays 16 KiB.
+_CANDIDATE_FACT_ENVELOPE_MAX_BYTES = _CANDIDATE_FACT_TABLE_MAX_BYTES + 6 * 1024
 
 
 def _candidate_fact_table_status(reason, **fields):
@@ -11784,7 +11991,7 @@ def _candidate_fact_table_refs(item, allowed):
     try:
         context = item["source_context"]
         label, raw = item["snippet"].split("\n", 1)
-        if (label != "候選事實（由標註取得，未經人工審核）" or len(raw.encode()) > _MAX_MODEL_EVIDENCE_BYTES
+        if (label != "候選事實（由標註取得，未經人工審核）" or len(raw.encode()) > _CANDIDATE_FACT_TABLE_MAX_BYTES
                 or any(context.get(key) is not False for key in (
                     "semantic_correctness_verified", "exact_field_proof", "deterministic_exact", "canonical"))
                 or any(not re.fullmatch(r"sha256:[0-9a-f]{64}", context.get(key, ""))
@@ -11890,6 +12097,16 @@ def compact_evidence_for_model(
         result["citations"].extend(item for item in citations if item not in result["citations"])
         return result
 
+    byte_limit = _MAX_MODEL_EVIDENCE_BYTES
+    if _candidate_reservation is not None:
+        table, citations = _candidate_reservation
+        allowed = {item if isinstance(item, str) else item.get("citation_hash", item.get("citation_id"))
+                   for item in citations if isinstance(item, (str, Mapping))}
+        if (len(json.dumps(table, ensure_ascii=False).encode()) > _CANDIDATE_FACT_TABLE_MAX_BYTES
+                or _candidate_fact_table_refs(table, allowed) is None):
+            raise ContractValidationError("candidate fact reservation is invalid")
+        byte_limit = _CANDIDATE_FACT_ENVELOPE_MAX_BYTES
+
     if tables:
         ordinary_items = [item for item in content if item not in tables]
         ordinary_ids = set(evidence_citation_ids(ordinary_items))
@@ -11918,7 +12135,7 @@ def compact_evidence_for_model(
             candidate = reserved_envelope(compact, reservation)
             if (len(evidence_citation_ids(candidate)) <= 128 and
                     len(json.dumps({**candidate, "presentation_truncated": True}, ensure_ascii=False).encode())
-                        <= _MAX_MODEL_EVIDENCE_BYTES):
+                        <= _CANDIDATE_FACT_ENVELOPE_MAX_BYTES):
                 _candidate_fact_table_status(None)
                 if diagnostic is not None:
                     diagnostic["candidate_fact_fallback_reason"] = None
@@ -12011,7 +12228,7 @@ def compact_evidence_for_model(
     item_limit = max(0, item_limit)
     truncated = result.get("presentation_truncated") is True
     counts = dict.fromkeys(_COMPACTION_COUNT_KEYS, 0)
-    counts.update(byte_limit=_MAX_MODEL_EVIDENCE_BYTES, item_limit=item_limit)
+    counts.update(byte_limit=byte_limit, item_limit=item_limit)
     reasons: dict[str, int] = {}
     last_bytes = 0
 
@@ -12036,7 +12253,7 @@ def compact_evidence_for_model(
             rejected("serialization_rejected")
             return False
         counts["max_candidate_bytes"] = max(counts["max_candidate_bytes"], last_bytes)
-        if last_bytes > _MAX_MODEL_EVIDENCE_BYTES:
+        if last_bytes > byte_limit:
             rejected(reason)
             return False
         return True

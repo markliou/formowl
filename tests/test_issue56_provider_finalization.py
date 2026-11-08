@@ -1517,6 +1517,537 @@ class Issue56ProviderFinalizationTests(unittest.TestCase):
 
 
 
+class AppServerFinalizationRepairTests(unittest.TestCase):
+    """Same-evidence repair uses real parser/validator and model-visible handles."""
+
+    def _turn(self, *, first="coverage", repair="valid", budget=None, overload=False):
+        from test_issue56_codex_provider_bridge import _RecordingTransport
+
+        case = self
+        user_text = "Find status for ZX-742 in authorized mail."
+        _, descriptor, arguments, capabilities = Issue56ProviderFinalizationTests._field_plan(
+            self, family="mail", user_text=user_text, field="status", terms=("zx-742",))
+        arguments["query_text"] = "Retrieve status evidence for ZX-742 from authorized mail."
+        citation = "sha256:" + "c" * 64
+        now = [100.0]
+        requests, stages, raw_drafts = [], [], []
+        result = {"status": "partial", "coverage": {"status": "incomplete"},
+                  "evidence": [{"citation_hash": citation, "snippet": "ZX-742 status: reviewed."}],
+                  "citations": [citation]}
+
+        def evidence_tool(request):
+            requests.append(request)
+            return copy.deepcopy(result)
+
+        class Transport(_RecordingTransport):
+            def __init__(self):
+                super().__init__(calls=(), final_message="unused")
+                self.turns = []
+                self.output = None
+
+            def run_turn(self, **kwargs):
+                self.turns.append(kwargs)
+                index = len(self.turns)
+                turn_id = f"turn-{index}"
+                invocations = ()
+                if index == 1:
+                    self.output = kwargs["tool_handler"](descriptor["name"], arguments)
+                    case.assertEqual(self.output["trust"], "untrusted_evidence")
+                    invocations = (orchestrator.CodexDynamicToolInvocation(
+                        kwargs["thread_id"], turn_id, "call-1", descriptor["name"], arguments, self.output),)
+                    if overload:
+                        raise orchestrator._CodexAppServerProviderFailure(
+                            "provider_incomplete", "fixed synthetic overload",
+                            provider_diagnostic={"codex_error_kind": "serverOverloaded"},
+                            completed_tools=orchestrator._CodexCompletedTools(
+                                kwargs["thread_id"], turn_id, invocations, 120.0),
+                        )
+                else:
+                    case.assertIs(kwargs["tools_allowed"], False)
+                    case.assertEqual(kwargs["thread_id"], self.turns[0]["thread_id"])
+                    case.assertEqual(kwargs["output_schema"], self.turns[0]["output_schema"])
+                    case.assertEqual(kwargs["reasoning_effort"], self.turns[0]["reasoning_effort"])
+                is_repair = index > (2 if overload else 1)
+                variant = repair if is_repair else first
+                if is_repair and variant == "provider_failure":
+                    raise orchestrator._CodexAppServerProviderFailure(
+                        "provider_incomplete", "ZX_742_PROVIDER_PRIVATE",
+                        provider_diagnostic={"codex_error_kind": "serverOverloaded"})
+                if is_repair and variant == "tool_call":
+                    kwargs["tool_handler"](descriptor["name"], arguments)
+                handle = self.output["data"]["citations"][0]
+                draft = json.loads(_decision(citation=handle))
+                draft["answer_text"] = "ZX-742 status: reviewed; only the presented scope is supported."
+                if variant == "coverage":
+                    # Prose already discloses limits: the structured status still fails.
+                    draft.update(coverage_status="complete", answer_text="ZX_742_REJECTED_DRAFT; coverage is limited.")
+                elif variant == "disclosure":
+                    draft["coverage_note"] = ""
+                elif variant == "citation_shape":
+                    draft["citation_ids"] = [handle, handle]
+                raw = "ZX_742_INVALID_JSON" if variant == "nonrepairable" else json.dumps(draft)
+                raw_drafts.append(raw)
+                deadline = 110.0 if not overload else 130.0
+                if budget == "transport_time":
+                    deadline = 99.0
+                if budget == "turn_time":
+                    now[0] = 1000.0
+                    deadline = 2000.0
+                return orchestrator.CodexAppServerTurn(
+                    kwargs["thread_id"], turn_id, raw, invocations, deadline)
+
+        transport = Transport()
+        token = orchestrator._PRIVATE_UAT_CITATION_TRACE.set(stages)
+        try:
+            with tempfile.TemporaryDirectory() as workspace, mock.patch.object(
+                orchestrator.time, "monotonic", side_effect=lambda: now[0]
+            ), mock.patch.object(orchestrator, "_MAX_PROVIDER_REQUESTS_PER_TURN",
+                                 2 if budget == "overload_attempts" else 1 if budget == "attempts" else 6):
+                provider = orchestrator.CodexAppServerConversationModel(transport, workspace_dir=workspace)
+                outcome = provider.respond(history=(), user_text=user_text, latest_evidence=None,
+                    safety_identifier="zx742-repair", evidence_tool=evidence_tool,
+                    formowl_tool_descriptor=descriptor, authorized_capability_summary=capabilities)
+        finally:
+            orchestrator._PRIVATE_UAT_CITATION_TRACE.reset(token)
+        self.assertEqual(len(requests), 1)
+        return outcome, transport, stages, raw_drafts, ((requests[0], result),)
+
+    def _assert_original_fallback(self, outcome, records):
+        expected = orchestrator._safe_stop_outcome(reason="coverage_validation_failed",
+            model_name=outcome.model_name, evidence_records=records)
+        for field in ("response_kind", "answer_text", "display_format", "citation_ids", "coverage_status", "coverage_note"):
+            self.assertEqual(getattr(outcome, field), getattr(expected, field), field)
+        self.assertEqual(outcome.tool_results, expected.tool_results)
+
+    def test_app_server_repair_coverage_in_same_thread_without_tools_or_draft_replay(self):
+        outcome, transport, stages, drafts, _ = self._turn()
+        self.assertEqual(len(transport.turns), 2)
+        self.assertEqual(len(transport.thread_starts), 1)
+        self.assertEqual(transport.deleted_threads, [])
+        self.assertEqual(outcome.response_kind, "answer")
+        self.assertEqual(outcome.coverage_status, "incomplete")
+        self.assertEqual(outcome.citation_ids, ("sha256:" + "c" * 64,))
+        repair_call = transport.turns[-1]
+        self.assertEqual(repair_call["deadline_monotonic"], 110.0)
+        context = json.loads(repair_call["additional_context"]["formowl_finalization_repair"]["value"])
+        self.assertEqual(context["reason_code"], "incomplete_coverage_hidden")
+        self.assertIn("coverage_status=incomplete", context["rule"])
+        self.assertNotIn("ZX_742_REJECTED_DRAFT", json.dumps(repair_call, default=str))
+        private = [stage for stage in stages if stage.get("stage") == "finalization_rejected_draft"]
+        self.assertEqual([stage["draft"] for stage in private], [drafts[0]])
+        self.assertEqual(json.loads(private[0]["draft"])["coverage_status"], "complete")
+        records = outcome.provider_diagnostic["finalization_validation"]
+        self.assertEqual([record["validation_result"] for record in records], ["coverage_rejected", "passed"])
+        self.assertTrue(records[-1]["repair_attempted"])
+        self.assertEqual(records[-1]["repair_result"], "passed")
+        safe = _safe_provider_diagnostic(outcome.provider_diagnostic)
+        projected = _browser_projection(outcome, outcome.tool_results, latest_evidence=None)
+        for value in (outcome.provider_diagnostic, safe, projected,
+                      orchestrator.safe_provider_loop_diagnostics({"finalization_validation": private})):
+            self.assertNotIn("ZX_742_REJECTED_DRAFT", json.dumps(value, default=str))
+        self.assertEqual(safe["finalization_validation"][-1]["repair_result"], "passed")
+
+    def test_app_server_one_rejected_repair_preserves_original_fallback(self):
+        outcome, transport, stages, drafts, records = self._turn(repair="coverage")
+        self.assertEqual(len(transport.turns), 2)
+        self.assertEqual(transport.deleted_threads, ["thread-1"])
+        self._assert_original_fallback(outcome, records)
+        self.assertEqual(outcome.provider_diagnostic["finalization_validation"][-1]["repair_result"], "rejected")
+        self.assertEqual([s["draft"] for s in stages if s.get("stage") == "finalization_rejected_draft"], drafts)
+
+    def test_app_server_repair_disclosure_and_citation_shape_use_unchanged_validator(self):
+        for first, reason in (("disclosure", "incomplete_coverage_undisclosed"),
+                              ("citation_shape", "citation_handle_rejected")):
+            with self.subTest(first=first):
+                outcome, transport, _, _, _ = self._turn(first=first)
+                self.assertEqual(len(transport.turns), 2)
+                self.assertEqual(outcome.response_kind, "answer")
+                self.assertEqual(outcome.provider_diagnostic["finalization_validation"][0]["reason_code"], reason)
+                self.assertEqual(outcome.provider_diagnostic["finalization_validation"][-1]["repair_result"], "passed")
+
+    def test_app_server_unclassified_finalization_does_not_repair(self):
+        outcome, transport, _, _, _ = self._turn(first="nonrepairable")
+        self.assertEqual(len(transport.turns), 1)
+        self.assertEqual(outcome.response_kind, "clarification")
+        record, = outcome.provider_diagnostic["finalization_validation"]
+        self.assertEqual(record["reason_code"], "invalid_json")
+        self.assertFalse(record["repair_attempted"])
+        self.assertEqual(record["repair_result"], "not_attempted")
+
+    def test_app_server_exhausted_original_time_or_attempt_budget_does_not_repair(self):
+        for budget in ("transport_time", "turn_time", "attempts"):
+            with self.subTest(budget=budget):
+                outcome, transport, _, _, records = self._turn(budget=budget)
+                self.assertEqual(len(transport.turns), 1)
+                self._assert_original_fallback(outcome, records)
+                self.assertFalse(outcome.provider_diagnostic["finalization_validation"][-1]["repair_attempted"])
+
+    def test_app_server_repair_failure_or_tool_attempt_cannot_replay_tools(self):
+        for repair in ("provider_failure", "tool_call"):
+            with self.subTest(repair=repair):
+                outcome, transport, _, _, records = self._turn(repair=repair)
+                self.assertEqual(len(transport.turns), 2)
+                self._assert_original_fallback(outcome, records)
+                self.assertEqual(outcome.provider_diagnostic["finalization_validation"][-1]["repair_result"], "failed")
+                self.assertNotIn("ZX_742_PROVIDER_PRIVATE", json.dumps(outcome.provider_diagnostic))
+
+    def test_app_server_overload_recovery_and_validation_repair_share_remaining_budgets(self):
+        for budget, expected in ((None, 3), ("overload_attempts", 2)):
+            with self.subTest(budget=budget):
+                outcome, transport, _, _, records = self._turn(overload=True, budget=budget)
+                self.assertEqual(len(transport.turns), expected)
+                self.assertEqual(transport.turns[1]["deadline_monotonic"], 120.0)
+                if budget:
+                    self._assert_original_fallback(outcome, records)
+                    self.assertFalse(outcome.provider_diagnostic["finalization_validation"][-1]["repair_attempted"])
+                else:
+                    self.assertEqual(transport.turns[2]["deadline_monotonic"], 120.0)
+                    self.assertEqual(outcome.response_kind, "answer")
+                    self.assertTrue(outcome.provider_diagnostic["finalization_validation"][-1]["repair_attempted"])
+
+    def test_app_server_transport_receipt_preserves_deadline_and_enforces_tools_disabled(self):
+        wire = object.__new__(orchestrator.CodexAppServerStdioTransport)
+        wire._state_lock = threading.RLock()
+        wire._thread_locks, wire._active_turns = {}, {}
+        wire._timeout_seconds = 10.0
+        wire._fatal_error = False
+        wire._closed = False
+        starts = []
+
+        def request(method, params, **kwargs):
+            self.assertEqual(method, "turn/start")
+            starts.append(kwargs)
+            wire._deliver_turn_completion({"threadId": params["threadId"], "turn": {
+                "id": "turn-deadline", "status": "completed",
+                "items": [{"type": "agentMessage", "text": _decision(citation="C1")}],
+            }})
+            return {"turn": {"id": "turn-deadline"}}
+
+        wire._request = request
+        handler = mock.Mock()
+        with mock.patch.object(orchestrator.time, "monotonic", return_value=100.0):
+            turn = wire.run_turn(thread_id="thread-zx742", user_text="ZX-742", additional_context={},
+                output_schema=orchestrator._DECISION_SCHEMA, reasoning_effort="high", client_metadata={},
+                tool_handler=handler, tools_allowed=False, deadline_monotonic=105.0)
+        self.assertEqual(turn.deadline_monotonic, 105.0)
+        self.assertEqual(starts, [{"timeout_seconds": 5.0}])
+        context = orchestrator._ActiveTurn(thread_id="thread-zx742", tool_handler=handler, tools_allowed=False)
+        context.turn_id = "turn-repair"
+        context.turn_ready.set()
+        wire._active_turns["thread-zx742"] = context
+        wire._send_tool_result = mock.Mock()
+        wire._handle_server_request({"id": 1, "method": "item/tool/call", "params": {
+            "threadId": "thread-zx742", "turnId": "turn-repair", "callId": "call-hostile",
+            "tool": "query_mail_evidence", "arguments": {},
+        }})
+        handler.assert_not_called()
+        wire._send_tool_result.assert_called_once_with(1, success=False, payload={"error": "rejected"})
+        self.assertEqual(context.tool_error_kind, "contract")
+
+    def test_app_server_unknown_repair_result_is_dropped_by_safe_projection(self):
+        for invalid in ("ZX_742_PRIVATE", {"draft": "ZX_742_PRIVATE"}, ["ZX_742_PRIVATE"]):
+            with self.subTest(type=type(invalid).__name__):
+                record = orchestrator._finalization_validation_diagnostic(final_citation_ids=(),
+                    available_citation_ids=(), validation_result="passed", repair_attempted=True,
+                    repair_result=invalid)
+                self.assertNotIn("repair_result", record)
+                record["repair_result"] = invalid
+                safe = orchestrator.safe_provider_loop_diagnostics({"finalization_validation": [record]})
+                self.assertNotIn("ZX_742_PRIVATE", json.dumps(safe))
+
+
+class BoundedDowngradeBindingDiagnosticTests(unittest.TestCase):
+    """Fictional neutral identifiers; no private replay data or live providers."""
+
+    @staticmethod
+    def _result_for(request):
+        contract = request.request_contract
+        terms = tuple(sorted(unicodedata.normalize("NFKC", term.strip()).casefold()
+                             for term in request.required_terms or ()))
+        citation = "sha256:" + "d" * 64
+        return {
+            "status": "partial", "deterministic_exact": False, "exact_result": None,
+            "query_hash": orchestrator.sha256_json(request.query_text),
+            "coverage": {"status": "incomplete", "absence_claim": False},
+            "citations": [citation],
+            "evidence": [{"citation_hash": citation, "snippet": "QR-817 status: pending."}],
+            "query_agent": {"request_contract": copy.deepcopy(contract)},
+            "execution_downgrade": {
+                "reason": "exact_table_plan_unavailable",
+                "query_hash": orchestrator.sha256_json(request.query_text),
+                "request_contract_fingerprint": orchestrator.sha256_json(contract),
+                "required_terms_fingerprint": orchestrator.sha256_json(terms),
+                "executed_request_contract": {**copy.deepcopy(contract), "query_class": "evidence_lookup",
+                                              "maximum_claim_strength": "cited_evidence"},
+                "disclosure": "無法做完整清單／確定性計算，以下為引用證據",
+            },
+        }
+
+    @classmethod
+    def _fixture(cls):
+        request = orchestrator.UatEvidenceToolRequest(
+            query_text="Enumerate QR-817 status from attachment tables.", required_terms=("qr-817",),
+            request_contract={
+                "original_query_hash": "sha256:" + "a" * 64,
+                "query_class": "exact_set_or_inventory", "source_family_scope": ["attachment_table"],
+                "requested_fields": ["status"],
+                "maximum_claim_strength": orchestrator.SEMANTIC_CLAIM_STRENGTH_BY_CLASS["exact_set_or_inventory"],
+            },
+        )
+        return request, cls._result_for(request)
+
+    @classmethod
+    def _failure_cases(cls):
+        # Deliberately malformed backend/request doubles exercise every guard
+        # without granting those shapes admission through the actual binder.
+        from types import SimpleNamespace
+        mutations = [
+            ("request", ("request_contract",), None, "request_contract_invalid"),
+            ("result", ("execution_downgrade",), [], "downgrade_metadata_invalid"),
+            ("request", ("request_contract", "query_class"), "evidence_lookup", "original_query_class_invalid"),
+            ("request", ("request_contract", "source_family_scope"), ["mail"], "attachment_scope_missing"),
+            ("request", ("request_contract", "native_locator"), None, "native_locator_present"),
+            ("result", ("status",), "ok", "result_status_invalid"),
+            ("result", ("deterministic_exact",), 0, "deterministic_exact_invalid"),
+            ("result", ("exact_result",), {}, "exact_result_present"),
+            ("result", ("exact_inventory",), None, "exact_inventory_present"),
+            ("result", ("query_agent",), [], "binding_metadata_invalid"),
+            ("result", ("execution_downgrade", "extra"), None, "downgrade_keys_invalid"),
+        ]
+        for key in ("table_query", "exact_inventory_kind", "exact_field", "cursor", "required_term_placement"):
+            mutations.append(("request", (key,), {}, key + "_present"))
+        for prefix in ((), ("query_agent",)):
+            for key, value, code in (
+                ("failure_reason", "QR817_PRIVATE_SENTINEL", "binding_failure_reason_present"),
+                ("reason_code", "QR817_PRIVATE_SENTINEL", "binding_reason_code_present"),
+                ("original_query_hash", "sha256:" + "b" * 64, "binding_original_query_hash_mismatch"),
+                ("query_hash", "sha256:" + "b" * 64, "binding_query_hash_mismatch"),
+                ("source_family_scope", ["document_text"], "binding_source_family_scope_mismatch"),
+                ("request_contract", {}, "binding_request_contract_mismatch"),
+                ("warnings", "QR817_PRIVATE_SENTINEL", "binding_warnings_invalid"),
+                ("warnings", [42], "binding_warnings_invalid"),
+                ("stop_reason", 42, "binding_stop_reason_invalid"),
+            ):
+                mutations.append(("result", prefix + (key,), value, code))
+            for token in ("invalid", "ambiguous", "rejected", "permission", "denied", "error", "failed",
+                          "binding_mismatch", "binding_missing"):
+                for key in ("warnings", "stop_reason"):
+                    value = [token.upper()] if key == "warnings" else token.upper()
+                    code = "binding_warning_rejected" if key == "warnings" else "binding_stop_reason_rejected"
+                    mutations.append(("result", prefix + (key,), value, code))
+        for key, code in (
+            ("reason", "downgrade_reason_mismatch"), ("query_hash", "downgrade_query_hash_mismatch"),
+            ("request_contract_fingerprint", "downgrade_contract_fingerprint_mismatch"),
+            ("required_terms_fingerprint", "downgrade_terms_fingerprint_mismatch"),
+            ("executed_request_contract", "downgrade_executed_contract_mismatch"),
+            ("disclosure", "downgrade_disclosure_mismatch"),
+        ):
+            mutations.append(("result", ("execution_downgrade", key), "QR817_PRIVATE_SENTINEL", code))
+        for target, path, value, code in mutations:
+            request, result = cls._fixture()
+            attributes = copy.deepcopy(vars(request))
+            parent = attributes if target == "request" else result
+            for key in path[:-1]:
+                parent = parent[key]
+            parent[path[-1]] = value
+            yield target + "." + ".".join(path), SimpleNamespace(**attributes), result, code
+        for key in cls._fixture()[1]["execution_downgrade"]:
+            request, result = cls._fixture()
+            del result["execution_downgrade"][key]
+            yield "missing." + key, request, result, "downgrade_keys_invalid"
+
+    def test_each_failed_predicate_retains_closed_private_subcode(self):
+        decision = json.loads(_decision(citation="sha256:" + "d" * 64))
+        seen = set()
+        for label, request, result, code in self._failure_cases():
+            with self.subTest(predicate=label, code=code):
+                self.assertFalse(orchestrator._bounded_exact_downgrade_bound(request, result))
+                with self.assertRaises(RuntimeError) as caught:
+                    orchestrator._disclose_bounded_exact_downgrade(decision, ((request, result),))
+                error = caught.exception
+                self.assertEqual(orchestrator._finalization_validation_reason(error), "bounded_downgrade_binding_invalid")
+                self.assertEqual(orchestrator._finalization_stop_reason(error), "coverage_validation_failed")
+                self.assertEqual(error.binding_failure_code, code)
+                stages = []
+                token = orchestrator._PRIVATE_UAT_CITATION_TRACE.set(stages)
+                try:
+                    public = orchestrator._finalization_validation_diagnostic(
+                        final_citation_ids=(), available_citation_ids=(), validation_result="coverage_rejected",
+                        repair_attempted=False, reason_code=error.reason_code,
+                        binding_failure_code=error.binding_failure_code,
+                    )
+                finally:
+                    orchestrator._PRIVATE_UAT_CITATION_TRACE.reset(token)
+                self.assertEqual(stages[0]["binding_failure_code"], code)
+                self.assertNotIn("binding_failure_code", public)
+                self.assertNotIn("QR817_PRIVATE_SENTINEL", json.dumps(stages))
+                assert_no_public_raw_references(stages, "rc22_private_diagnostic")
+                seen.add(code)
+        self.assertEqual(seen, orchestrator._BOUNDED_DOWNGRADE_FAILURE_CODES)
+
+    def test_valid_optional_bindings_and_normalized_terms_keep_acceptance_and_disclosure(self):
+        from dataclasses import replace
+        for status in ("partial", "pending_review", "incomplete"):
+            request, result = self._fixture()
+            request = replace(request, required_terms=(" ＱＲ-８１７ ", "bb"))
+            result = self._result_for(request)
+            result.update(status=status, failure_reason="", reason_code=None, warnings=("incomplete",), stop_reason=None)
+            result["query_agent"].update(original_query_hash=request.request_contract["original_query_hash"],
+                query_hash=orchestrator.sha256_json(request.query_text), source_family_scope=["attachment_table"],
+                failure_reason=None, reason_code="", warnings=[], stop_reason="time_budget_exhausted")
+            before = copy.deepcopy(result)
+            self.assertTrue(orchestrator._bounded_exact_downgrade_bound(request, result))
+            decision = json.loads(_decision(citation=result["citations"][0]))
+            disclosed = orchestrator._disclose_bounded_exact_downgrade(decision, ((request, result),))
+            self.assertEqual(disclosed, {**decision, "coverage_note":
+                orchestrator._BOUNDED_EXACT_DOWNGRADE_DISCLOSURE + "。 " + decision["coverage_note"]})
+            self.assertEqual(orchestrator._disclose_bounded_exact_downgrade(disclosed, ((request, result),)), disclosed)
+            self.assertEqual(result, before)
+            self.assertEqual(orchestrator._disclose_bounded_exact_downgrade(decision, ()), decision)
+
+    def _turn(self, kind, *, broken=False, draft_kind="valid"):
+        from test_issue56_codex_provider_bridge import _RecordingTransport
+        user_text = "請列出附件表格中 QR-817 的所有 status"
+        _, descriptor, arguments, capabilities = Issue56ProviderFinalizationTests._field_plan(
+            self, family="attachment_table", user_text=user_text, field="status", terms=("qr-817",))
+        arguments["query_text"] = "Enumerate QR-817 status from attachment tables."
+        tool_requests, turns, stages = [], [], []
+        def evidence_tool(request):
+            tool_requests.append(request)
+            result = self._result_for(request)
+            if broken:
+                result["execution_downgrade"]["required_terms_fingerprint"] = "sha256:" + "e" * 64
+            return result
+        def draft(handle, first):
+            value = json.loads(_decision(citation=handle))
+            value["answer_text"] = "QR-817 status: pending; only presented evidence is supported."
+            if first:
+                if draft_kind == "status":
+                    value["coverage_status"] = "complete"
+                if draft_kind == "note":
+                    value["coverage_note"] = ""
+                if draft_kind == "citation":
+                    value["citation_ids"] = ["C999"]
+                if draft_kind == "json":
+                    return "QR817_INVALID_JSON"
+            return json.dumps(value)
+
+        class Transport(_RecordingTransport):
+            def __init__(self):
+                super().__init__(calls=(), final_message="unused")
+            def run_turn(self, **kwargs):
+                turns.append(kwargs)
+                index = len(turns)
+                invocations = ()
+                if index == 1:
+                    self.output = kwargs["tool_handler"](descriptor["name"], arguments)
+                    invocations = (orchestrator.CodexDynamicToolInvocation(kwargs["thread_id"], "turn-1",
+                        "call-1", descriptor["name"], arguments, self.output),)
+                handle = self.output["data"]["citations"][0]
+                return orchestrator.CodexAppServerTurn(kwargs["thread_id"], f"turn-{index}",
+                    draft(handle, index == 1), invocations, kwargs.get("deadline_monotonic"))
+
+        def response(payload):
+            turns.append(copy.deepcopy(payload))
+            if len(turns) == 1:
+                return {"status": "completed", "output": [{"type": "function_call", "call_id": "qr817",
+                    "name": descriptor["name"], "arguments": json.dumps(arguments)}]}
+            output = next(x["output"] for x in payload["input"] if x.get("type") == "function_call_output")
+            handle = json.loads(output)["data"]["citations"][0]
+            return {"status": "completed", "output_text": draft(handle, len(turns) == 2)}
+
+        token = orchestrator._PRIVATE_UAT_CITATION_TRACE.set(stages)
+        try:
+            with tempfile.TemporaryDirectory() as workspace:
+                transport = Transport()
+                provider = (orchestrator.CodexAppServerConversationModel(transport, workspace_dir=workspace)
+                    if kind == "app_server" else CodexResponsesConversationModel(
+                        base_url="https://provider.example.test/v1", api_key="synthetic"))
+                with mock.patch.object(CodexResponsesConversationModel, "_request_response", side_effect=response):
+                    outcome = provider.respond(history=(), user_text=user_text, latest_evidence=None,
+                        safety_identifier="qr817-finalization", evidence_tool=evidence_tool,
+                        formowl_tool_descriptor=descriptor, authorized_capability_summary=capabilities)
+        finally:
+            orchestrator._PRIVATE_UAT_CITATION_TRACE.reset(token)
+        self.assertEqual(len(tool_requests), 1)
+        return outcome, turns, stages
+
+    def test_backend_binding_failure_never_requests_model_repair(self):
+        from pathlib import Path
+        from formowl_gateway.issue56_uat_runtime import _append_behavior_log
+        for kind in ("app_server", "responses"):
+            for draft_kind in ("valid", "status", "json"):
+                with self.subTest(provider=kind, draft=draft_kind):
+                    outcome, turns, stages = self._turn(kind, broken=True, draft_kind=draft_kind)
+                    self.assertEqual(len(turns), 1 if kind == "app_server" else 2)
+                    self.assertEqual(outcome.response_kind, "clarification")
+                    self.assertEqual(outcome.coverage_status, "incomplete")
+                    records = outcome.provider_diagnostic["finalization_validation"]
+                    self.assertEqual(len(records), 1)
+                    self.assertEqual(records[0]["reason_code"], "bounded_downgrade_binding_invalid")
+                    self.assertEqual(records[0]["validation_result"], "coverage_rejected")
+                    self.assertFalse(records[0]["repair_attempted"])
+                    self.assertEqual(_safe_provider_diagnostic(outcome.provider_diagnostic)[
+                        "finalization_validation"][0]["reason_code"], "bounded_downgrade_binding_invalid")
+                    private = [s for s in stages if s["stage"] == "finalization"]
+                    self.assertEqual(private[0]["binding_failure_code"], "downgrade_terms_fingerprint_mismatch")
+                    for projected in (outcome.provider_diagnostic, _safe_provider_diagnostic(outcome.provider_diagnostic),
+                                      _browser_projection(outcome, outcome.tool_results, latest_evidence=None)):
+                        self.assertNotIn("binding_failure_code", json.dumps(projected))
+                    with tempfile.TemporaryDirectory() as directory:
+                        path = Path(directory) / "trace.jsonl"
+                        _append_behavior_log(path, prompt="QR-817", result=None, request_count=1, statuses=("partial",),
+                            call_traces=(), failure_sha256=None, provider_diagnostic=outcome.provider_diagnostic,
+                            elapsed_ms=1.0, request_id="sha256:" + "f" * 64, citation_stages=stages)
+                        saved = json.loads(path.read_text())
+                        self.assertFalse(saved.get("content_redacted", False))
+                        final = next(s for s in saved["citation_stages"] if s["stage"] == "finalization")
+                        self.assertEqual(final["binding_failure_code"], "downgrade_terms_fingerprint_mismatch")
+
+    def test_model_status_disclosure_and_citation_violations_still_get_one_repair(self):
+        for kind in ("app_server", "responses"):
+            for draft_kind, reason in (("status", "incomplete_coverage_hidden"),
+                                       ("note", "incomplete_coverage_undisclosed"),
+                                       ("citation", "citation_handle_rejected")):
+                with self.subTest(provider=kind, draft=draft_kind):
+                    outcome, turns, stages = self._turn(kind, draft_kind=draft_kind)
+                    self.assertEqual(len(turns), 2 if kind == "app_server" else 3)
+                    self.assertEqual(outcome.response_kind, "answer")
+                    self.assertEqual(outcome.coverage_status, "incomplete")
+                    self.assertEqual(outcome.citation_ids, ("sha256:" + "d" * 64,))
+                    records = outcome.provider_diagnostic["finalization_validation"]
+                    self.assertEqual(records[0]["reason_code"], reason)
+                    self.assertEqual(records[-1]["validation_result"], "passed")
+                    self.assertTrue(records[-1]["repair_attempted"])
+                    self.assertNotIn("binding_failure_code", json.dumps(stages))
+
+    def test_valid_downgrade_needs_no_repair_on_either_provider(self):
+        for kind in ("app_server", "responses"):
+            with self.subTest(provider=kind):
+                outcome, turns, _ = self._turn(kind)
+                self.assertEqual(len(turns), 1 if kind == "app_server" else 2)
+                self.assertEqual(outcome.response_kind, "answer")
+                self.assertEqual(outcome.coverage_status, "incomplete")
+                self.assertEqual(outcome.citation_ids, ("sha256:" + "d" * 64,))
+                self.assertTrue(outcome.coverage_note.startswith(orchestrator._BOUNDED_EXACT_DOWNGRADE_DISCLOSURE))
+                record, = outcome.provider_diagnostic["finalization_validation"]
+                self.assertEqual(record["validation_result"], "passed")
+                self.assertFalse(record["repair_attempted"])
+
+    def test_private_subcode_allowlist_drops_unknown_values(self):
+        for value in ("QR817_PRIVATE_SENTINEL", {}, [], None):
+            stages = []
+            token = orchestrator._PRIVATE_UAT_CITATION_TRACE.set(stages)
+            try:
+                record = orchestrator._finalization_validation_diagnostic(
+                    final_citation_ids=(), available_citation_ids=(), validation_result="coverage_rejected",
+                    repair_attempted=False, reason_code="bounded_downgrade_binding_invalid", binding_failure_code=value)
+            finally:
+                orchestrator._PRIVATE_UAT_CITATION_TRACE.reset(token)
+            self.assertNotIn("binding_failure_code", record)
+            self.assertNotIn("binding_failure_code", stages[0])
+
+
 def setUpModule() -> None:
     import _uat_turn_budget
 

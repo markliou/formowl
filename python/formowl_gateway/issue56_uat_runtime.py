@@ -77,6 +77,7 @@ from .issue56_diagnostic import (
 from .issue56_sealed_source_loader import (
     _citation_for_snippet,
     build_issue56_production_semantic_handlers,
+    start_issue56_native_shard_cache,
 )
 from .remote import (
     ConnectedMcpApplication,
@@ -729,6 +730,7 @@ class Issue56TemporaryLanQueryService:
         record_raw_uat_interactions: bool = False,
         _source_binding_fingerprint: str | None = None,
         _diagnostic_deployment_binding: VerifiedDiagnosticDeployment | None = None,
+        _native_shard_cache: Any | None = None,
     ) -> None:
         if (behavior_log_path is None) != (not record_raw_uat_interactions):
             raise ValueError("raw UAT recording requires both explicit options")
@@ -739,6 +741,7 @@ class Issue56TemporaryLanQueryService:
         self._client = self._client_context.__enter__()
         self._application = application
         self._conversation_model = conversation_model
+        self._native_shard_cache = _native_shard_cache
         # Composition supplies only a frozen digest after normal source validation.
         self._source_binding_fingerprint = _source_binding_fingerprint
         self._diagnostic_deployment_binding = _diagnostic_deployment_binding
@@ -765,12 +768,20 @@ class Issue56TemporaryLanQueryService:
         self.close()
 
     def close(self) -> None:
-        context = getattr(self, "_client_context", None)
-        if context is not None:
-            self._client_context = None
-            self._sessions.clear()
-            context.__exit__(None, None, None)
-            self._conversation_model.close()
+        try:
+            context = getattr(self, "_client_context", None)
+            if context is not None:
+                self._client_context = None
+                self._sessions.clear()
+                try:
+                    context.__exit__(None, None, None)
+                finally:
+                    self._conversation_model.close()
+        finally:
+            cache = getattr(self, "_native_shard_cache", None)
+            self._native_shard_cache = None
+            if cache is not None:
+                cache.close_cache()
 
     def begin_browser_authorization(self) -> tuple[str, str, int]:
         raise RuntimeError("temporary LAN diagnostic has no browser OAuth")
@@ -4115,68 +4126,75 @@ def create_issue56_temporary_lan_query_service(
     unsupported, denied, and error outcomes.
     """
 
-    retrieval_handler, mail_evidence_handler = build_issue56_production_semantic_handlers(
-        **(
-            {
-                **(
-                    {"ingestion_revision": ingestion_revision}
-                    if ingestion_revision is not None
-                    else {}
-                ),
-                **(
-                    {"query_agent_planner": query_agent_planner}
-                    if query_agent_planner is not None
-                    else {}
-                ),
-            }
+    native_cache = start_issue56_native_shard_cache(ingestion_revision)
+    try:
+        retrieval_handler, mail_evidence_handler = build_issue56_production_semantic_handlers(
+            **(
+                {
+                    **(
+                        {"ingestion_revision": ingestion_revision}
+                        if ingestion_revision is not None
+                        else {}
+                    ),
+                    **(
+                        {"query_agent_planner": query_agent_planner}
+                        if query_agent_planner is not None
+                        else {}
+                    ),
+                }
+            )
         )
-    )
-    # Only the explicitly supplied revision has a validated binding seam here.
-    # Do not reopen the source or guess from handlers, disk, or provider fields.
-    source_binding_fingerprint = None
-    if ingestion_revision is not None:
-        safe_binding = deepcopy(dict(ingestion_revision.safe_binding))
-        source_binding_fingerprint = sha256_json(safe_binding)
-    deployment_binding = None
-    binding_options = (
-        diagnostic_deployment_manifest, diagnostic_deployment_manifest_sha256,
-        diagnostic_build_attestation, diagnostic_settings,
-    )
-    if any(option is not None for option in binding_options):
-        if any(option is None for option in binding_options) or source_binding_fingerprint is None:
-            raise ValueError("diagnostic deployment binding requires validated source and all options")
-        deployment_binding = load_verified_diagnostic_deployment(
-            manifest_path=diagnostic_deployment_manifest,
-            expected_manifest_sha256=diagnostic_deployment_manifest_sha256,
-            attestation_path=diagnostic_build_attestation,
-            code_root=Path(__file__).resolve().parents[2],
-            settings=diagnostic_settings,
-            source_binding_fingerprint=source_binding_fingerprint,
+        # Only the explicitly supplied revision has a validated binding seam here.
+        # Do not reopen the source or guess from handlers, disk, or provider fields.
+        source_binding_fingerprint = None
+        if ingestion_revision is not None:
+            safe_binding = deepcopy(dict(ingestion_revision.safe_binding))
+            source_binding_fingerprint = sha256_json(safe_binding)
+        deployment_binding = None
+        binding_options = (
+            diagnostic_deployment_manifest, diagnostic_deployment_manifest_sha256,
+            diagnostic_build_attestation, diagnostic_settings,
         )
-    config = Issue56DiagnosticConfig()
-    state = Issue56DiagnosticState()
-    google_client = object()
-    bridge = Issue56DiagnosticOAuthBridge(
-        config=config,
-        google_client=google_client,
-        state=state,
-    )
-    application = create_connected_mcp_application(
-        bridge=bridge,
-        config=config,
-        google_client=google_client,
-        semantic_gateway=SemanticMcpGateway(
-            retrieval_handler=retrieval_handler,
-            mail_evidence_handler=mail_evidence_handler,
-        ),
-        oauth_route_provider=lambda **_kwargs: (),
-        environ={"FORMOWL_AUTH_MODE": "oauth_google"},
-    )
-    return Issue56TemporaryLanQueryService(
-        application,
-        conversation_model=conversation_model,
-        behavior_log_path=behavior_log_path,
-        record_raw_uat_interactions=record_raw_uat_interactions,
-        _source_binding_fingerprint=source_binding_fingerprint,
-        _diagnostic_deployment_binding=deployment_binding,
-    )
+        if any(option is not None for option in binding_options):
+            if any(option is None for option in binding_options) or source_binding_fingerprint is None:
+                raise ValueError("diagnostic deployment binding requires validated source and all options")
+            deployment_binding = load_verified_diagnostic_deployment(
+                manifest_path=diagnostic_deployment_manifest,
+                expected_manifest_sha256=diagnostic_deployment_manifest_sha256,
+                attestation_path=diagnostic_build_attestation,
+                code_root=Path(__file__).resolve().parents[2],
+                settings=diagnostic_settings,
+                source_binding_fingerprint=source_binding_fingerprint,
+            )
+        config = Issue56DiagnosticConfig()
+        state = Issue56DiagnosticState()
+        google_client = object()
+        bridge = Issue56DiagnosticOAuthBridge(
+            config=config,
+            google_client=google_client,
+            state=state,
+        )
+        application = create_connected_mcp_application(
+            bridge=bridge,
+            config=config,
+            google_client=google_client,
+            semantic_gateway=SemanticMcpGateway(
+                retrieval_handler=retrieval_handler,
+                mail_evidence_handler=mail_evidence_handler,
+            ),
+            oauth_route_provider=lambda **_kwargs: (),
+            environ={"FORMOWL_AUTH_MODE": "oauth_google"},
+        )
+        return Issue56TemporaryLanQueryService(
+            application,
+            conversation_model=conversation_model,
+            behavior_log_path=behavior_log_path,
+            record_raw_uat_interactions=record_raw_uat_interactions,
+            _source_binding_fingerprint=source_binding_fingerprint,
+            _diagnostic_deployment_binding=deployment_binding,
+            _native_shard_cache=native_cache,
+        )
+    except BaseException:
+        if native_cache is not None:
+            native_cache.close_cache()
+        raise

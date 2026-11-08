@@ -604,6 +604,34 @@ class _SessionConversationModel:
         return
 
 
+class NativeShardCacheServiceLifecycleTests(unittest.TestCase):
+    def test_factory_unwinds_cache_when_handler_or_application_construction_fails(self):
+        for owner in ("build_issue56_production_semantic_handlers", "create_connected_mcp_application"):
+            lease = MagicMock()
+            with (patch.object(uat_runtime_module, "start_issue56_native_shard_cache", return_value=lease) as start,
+                  patch.object(uat_runtime_module, "build_issue56_production_semantic_handlers", return_value=(
+                      _with_authorized_source_families(lambda _arguments: {}, "mail"), None)),
+                  patch.object(uat_runtime_module, owner, side_effect=RuntimeError("fictional construction failure"))):
+                with self.assertRaisesRegex(RuntimeError, "fictional construction failure"):
+                    create_issue56_temporary_lan_query_service(_SessionConversationModel())
+                start.assert_called_once_with(None)
+                lease.close_cache.assert_called_once_with()
+
+    def test_service_close_releases_cache_even_when_client_and_model_close_fail(self):
+        service = object.__new__(Issue56TemporaryLanQueryService)
+        service._sessions = {}
+        service._client_context = MagicMock()
+        service._client_context.__exit__.side_effect = RuntimeError("fictional client close")
+        service._conversation_model = MagicMock()
+        service._conversation_model.close.side_effect = RuntimeError("fictional model close")
+        lease = service._native_shard_cache = MagicMock()
+        with self.assertRaisesRegex(RuntimeError, "fictional model close"):
+            service.close()
+        lease.close_cache.assert_called_once_with()
+        service.close()
+        lease.close_cache.assert_called_once_with()
+
+
 class Issue56UatWebE2ETests(unittest.TestCase):
     def test_public_uat_mcp_call_is_bounded_before_http_projection(self) -> None:
         release = threading.Event()

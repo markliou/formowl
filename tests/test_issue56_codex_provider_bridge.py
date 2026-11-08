@@ -342,6 +342,7 @@ class _RecordingTransport:
         self.thread_start = None
         self.thread_starts = []
         self.turn_call = None
+        self.turn_calls = []
         self.tool_outputs = []
         self.deleted_threads = []
         self.split_instruction_threads = []
@@ -381,6 +382,8 @@ class _RecordingTransport:
         reasoning_effort,
         client_metadata,
         tool_handler,
+        tools_allowed=True,
+        deadline_monotonic=None,
     ):
         selected_tool_name = self.thread_start["dynamic_tools"][0]["name"]
         self.turn_call = {
@@ -390,16 +393,20 @@ class _RecordingTransport:
             "output_schema": output_schema,
             "reasoning_effort": reasoning_effort,
             "client_metadata": client_metadata,
+            "tools_allowed": tools_allowed,
+            "deadline_monotonic": deadline_monotonic,
         }
+        self.turn_calls.append(self.turn_call)
+        turn_id = f"turn-{len(self.turn_calls)}"
         invocations = []
-        for index, arguments in enumerate(self.calls):
+        for index, arguments in enumerate(self.calls if tools_allowed else ()):
             requested_tool_name = self.handler_tool_name or selected_tool_name
             result = tool_handler(requested_tool_name, arguments)
             self.tool_outputs.append(result)
             invocations.append(
                 CodexDynamicToolInvocation(
                     thread_id=thread_id,
-                    turn_id="turn-1",
+                    turn_id=turn_id,
                     call_id=f"call-{index}",
                     tool_name=self.invocation_tool_name or selected_tool_name,
                     arguments=arguments,
@@ -410,9 +417,10 @@ class _RecordingTransport:
             raise self.run_error
         return CodexAppServerTurn(
             thread_id=thread_id,
-            turn_id="turn-1",
+            turn_id=turn_id,
             final_message=self.final_message,
             tool_invocations=tuple(invocations),
+            deadline_monotonic=deadline_monotonic,
         )
 
     def delete_thread(self, thread_id):
@@ -6393,7 +6401,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         for snapshot in (stage["raw_governed"], stage["compacted_presented"], final["final_model"]):
             self.assertRegex(snapshot["citation_fingerprint"], r"^sha256:[0-9a-f]{64}$")
 
-    def test_app_server_finalization_rejections_are_diagnosed_without_repair(self) -> None:
+    def test_app_server_finalization_rejections_use_one_classified_no_tools_repair(self) -> None:
         def decision(citations, coverage="incomplete"):
             return _decision(
                 citations=citations, coverage_status=coverage,
@@ -6413,7 +6421,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         for final_message, validation_result, reason_code, submitted_count in cases:
             with self.subTest(reason_code=reason_code), tempfile.TemporaryDirectory() as workspace:
                 transport = _RecordingTransport(
-                    calls=({"query_text": "Clienta source lookup"},), final_message=final_message,
+                    calls=({"query_text": "ZX-742 source lookup"},), final_message=final_message,
                 )
                 with mock.patch.object(transport, "run_turn", wraps=transport.run_turn) as run_turn:
                     outcome = CodexAppServerConversationModel(transport, workspace_dir=workspace).respond(
@@ -6421,20 +6429,30 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                         safety_identifier="app-server-final-rejection",
                         evidence_tool=lambda _: {"status": "partial", "citations": ["synthetic-available"]},
                     )
-                run_turn.assert_called_once()
+                repairable = reason_code != "invalid_json"
+                self.assertEqual(run_turn.call_count, 2 if repairable else 1)
+                self.assertEqual(len(transport.tool_outputs), 1)
+                if repairable:
+                    self.assertIs(run_turn.call_args.kwargs["tools_allowed"], False)
+                    self.assertEqual(run_turn.call_args.kwargs["thread_id"], "thread-1")
                 self.assertEqual(outcome.response_kind, "clarification")
                 self.assertEqual(outcome.citation_ids, ("synthetic-available",))
                 self.assertEqual(transport.deleted_threads, ["thread-1"])
                 diagnostic = outcome.provider_diagnostic or {}
                 self.assertIn("finalization_validation", diagnostic)
-                final, = diagnostic["finalization_validation"]
+                validations = diagnostic["finalization_validation"]
+                self.assertEqual(len(validations), 2 if repairable else 1)
+                final = validations[0]
+                if repairable:
+                    self.assertEqual(validations[-1]["validation_result"], validation_result)
+                    self.assertEqual(validations[-1]["repair_result"], "rejected")
                 self.assertEqual(final["validation_result"], validation_result)
                 self.assertEqual(final["reason_code"], ("citation_handle_rejected"
                 if reason_code in {"citation_unavailable", "citation_ids_duplicate"} else reason_code))
-                self.assertFalse(final["repair_attempted"])
+                self.assertEqual(final["repair_attempted"], repairable)
                 self.assertEqual(final["final_model"]["citation_count"], submitted_count)
                 self.assertEqual(final["available_governed"]["citation_count"], 1)
-                self.assertEqual(runtime_project(diagnostic)["finalization_validation"], [final])
+                self.assertEqual(runtime_project(diagnostic)["finalization_validation"], validations)
                 rendered = json.dumps(diagnostic)
                 self.assertNotIn("synthetic-available", rendered)
                 self.assertNotIn("synthetic-foreign", rendered)
@@ -6449,7 +6467,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
             ],
         }
         transport = _RecordingTransport(
-            calls=({"query_text": "Clienta source lookup"},),
+            calls=({"query_text": "ZX-742 source lookup"},),
             final_message=_decision(
                 citations=("synthetic-overflow",), coverage_status="incomplete",
                 coverage_note="Bounded source coverage.",
@@ -6464,14 +6482,21 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         diagnostic = outcome.provider_diagnostic or {}
         self.assertIn("finalization_validation", diagnostic)
         stage, = diagnostic["mcp_citation_stages"]
-        final, = diagnostic["finalization_validation"]
+        validations = diagnostic["finalization_validation"]
+        self.assertEqual(len(validations), 2)
+        self.assertEqual(len(transport.turn_calls), 2)
+        self.assertIs(transport.turn_calls[-1]["tools_allowed"], False)
+        self.assertEqual(len(transport.tool_outputs), 1)
+        final = validations[-1]
         self.assertEqual(stage["projection_result"], "reduced")
         self.assertEqual(stage["raw_governed"]["citation_count"], 2)
         self.assertEqual(stage["compacted_presented"]["citation_count"], 1)
         self.assertEqual(final["available_governed"], stage["compacted_presented"])
         self.assertEqual(final["validation_result"], "citation_rejected")
         self.assertEqual(final["reason_code"], "citation_handle_rejected")
-        self.assertFalse(final["repair_attempted"])
+        self.assertTrue(final["repair_attempted"])
+        self.assertEqual(final["repair_result"], "rejected")
+        self.assertEqual(validations[0]["available_governed"], stage["compacted_presented"])
 
     def test_app_server_failure_without_diagnostic_stays_error(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:
@@ -6982,9 +7007,9 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         self.assertEqual(snapshot["citation_ids"], [item if item == raw else sha256_json(item) for item in expected])
         self.assertNotIn(private, json.dumps(snapshot))
 
-    def test_app_server_unrepaired_finalization_has_truthful_message(self):
+    def test_app_server_rejected_repair_preserves_original_truthful_fallback(self):
         transport = _RecordingTransport(
-            calls=({"query_text": "clienta evidence"},),
+            calls=({"query_text": "ZX-742 evidence"},),
             final_message=_decision(citations=("synthetic-foreign",), coverage_status="incomplete",
                                     coverage_note="Bounded evidence."),
         )
@@ -6995,7 +7020,12 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                     "status": "partial", "citations": ["synthetic-available"],
                 },
             )
-        self.assertFalse(outcome.provider_diagnostic["finalization_validation"][-1]["repair_attempted"])
+        final = outcome.provider_diagnostic["finalization_validation"][-1]
+        self.assertTrue(final["repair_attempted"])
+        self.assertEqual(final["repair_result"], "rejected")
+        self.assertEqual(len(transport.turn_calls), 2)
+        self.assertIs(transport.turn_calls[-1]["tools_allowed"], False)
+        self.assertEqual(len(transport.tool_outputs), 1)
         self.assertNotIn("修正後", outcome.answer_text)
         self.assertNotIn("修正後", outcome.coverage_note)
         self.assertEqual(transport.deleted_threads, ["thread-1"])
@@ -7518,12 +7548,20 @@ class AppServerOverloadFinalizationTests(unittest.TestCase):
                     self.assertNotIn("finalization_retry", outcome.provider_diagnostic or {})
 
     def test_retry_final_citation_still_must_resolve_presented_authority(self):
-        outcome, starts, calls, _, citation = self._run(bad_citation=True)
-        self.assertEqual(len(starts), 2)
+        outcome, starts, calls, _, citation = self._run(bad_citation=True, errors=("serverOverloaded", None, None))
+        self.assertEqual(len(starts), 3)
+        self.assertEqual(starts[1][0]["threadId"], starts[2][0]["threadId"])
+        self.assertEqual(starts[1][0]["outputSchema"], starts[2][0]["outputSchema"])
+        self.assertLessEqual(starts[2][1]["timeout_seconds"], starts[1][1]["timeout_seconds"])
+        context = json.loads(starts[2][0]["additionalContext"]["formowl_finalization_repair"]["value"])
+        self.assertIs(context["tools_allowed"], False)
         self.assertEqual(len(calls), 1)
         self.assertEqual(outcome.response_kind, "clarification")
         self.assertEqual(outcome.citation_ids, (citation,))
-        self.assertEqual(outcome.provider_diagnostic["finalization_validation"][-1]["validation_result"], "citation_rejected")
+        final = outcome.provider_diagnostic["finalization_validation"][-1]
+        self.assertEqual(final["validation_result"], "citation_rejected")
+        self.assertTrue(final["repair_attempted"])
+        self.assertEqual(final["repair_result"], "rejected")
 
     def test_completed_first_tool_does_not_authorize_retry_while_second_is_inflight(self):
         outcome, starts, calls, wire, citation = self._run(inflight=True)

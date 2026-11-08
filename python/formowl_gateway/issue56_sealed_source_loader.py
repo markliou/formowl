@@ -7,17 +7,21 @@ gateway contract.
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from datetime import date
 from email.headerregistry import HeaderRegistry
 import hashlib
+import heapq
 import json
 import os
 from pathlib import Path
 import re
+import stat
+import sys
+import threading
 import time
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Final
@@ -1566,9 +1570,75 @@ def _bounded_mail_header_groups(items, *, limit, byte_limit=16 * 1024):
     return evidence, truncated
 
 
-def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None):
+_CANDIDATE_FACT_PREGROUP_REASONS = frozenset({
+    "deadline_before_hydration", "deadline_during_hydration", "source_admission_rejected",
+    "projection_incomplete", "source_limit", "all_sources_verified", "presentation_deadline",
+})
+
+
+def _candidate_fact_verified_rows(rows, selected, verified, rejected):
+    """Keep a whole row only after every nominated field/subject span was guarded."""
+    needed = {}
+    for digest, entries in selected.items():
+        for entry in entries:
+            needed.setdefault(entry["row"]["row_id"], set()).add(digest)
+    return [row for row in rows if row["row_id"] not in rejected
+            and needed.get(row["row_id"]) and needed[row["row_id"]].issubset(verified)]
+
+
+def _merge_candidate_fact_rows(rows, selected, deadline):
+    """Coalesce verified display rows by their literal non-identity values."""
+    signatures = {}
+    for row in rows:
+        check_source_evidence_deadline(deadline)
+        signatures[row["row_id"]] = frozenset(
+            (prop, json.dumps(fact["value"], ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+            for prop, facts in row["fields"].items() if prop not in row["_identity_properties"]
+            for fact in facts)
+
+    # Complete rows come first. A subset contributes to just one maximal row,
+    # with original order breaking ties between equally complete survivors.
+    groups = {}
+    for key in sorted(signatures, key=lambda key: len(signatures[key]), reverse=True):
+        check_source_evidence_deadline(deadline)
+        owner = next((other for other in groups if signatures[key] <= signatures[other]), key)
+        groups.setdefault(owner, []).append(key)
+    if len(groups) == len(rows):
+        return rows, selected
+
+    by_id = {row["row_id"]: row for row in rows}
+    survivors, owner_by_id = [], {}
+    for row in rows:
+        member_ids = groups.get(row["row_id"])
+        if member_ids is None:
+            continue
+        check_source_evidence_deadline(deadline)
+        if len(member_ids) > 1:
+            fields, sources = {}, []
+            for member_id in member_ids:
+                member = by_id[member_id]
+                for prop, facts in member["fields"].items():
+                    fields.setdefault(prop, []).extend(facts)
+                sources.extend((member.get("subject_identity") or {}).get("sources", ()))
+            # Keep every original fact and subject binding. The cell formatter
+            # combines quotes only for cells with matching value, unit and times.
+            row = {**row, "fields": fields, "_display_member_ids": member_ids,
+                   "_quote_mention": any(by_id[key].get("_quote_mention") for key in member_ids)}
+            if sources:
+                row["subject_identity"] = {"sources": sources}
+        survivors.append(row)
+        owner_by_id.update((key, row) for key in member_ids)
+    rebound = {digest: [{**entry, "row": owner_by_id[entry["row"]["row_id"]]} for entry in entries
+                        if entry["row"]["row_id"] in owner_by_id] for digest, entries in selected.items()}
+    return survivors, rebound
+
+
+def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None, _verification=None, _status=None,
+                          _merged_count=0, verified_items=None):
     """Display only quoted values and one native citation per guarded Observation."""
-    from formowl_mail.human_uat_orchestrator import _candidate_fact_table_status
+    from formowl_mail.human_uat_orchestrator import _candidate_fact_table_status, _CANDIDATE_FACT_TABLE_MAX_BYTES
+    if _status is not None:
+        _candidate_fact_table_status = _status
     def nonempty(row):
         return {prop for prop, facts in row["fields"].items()
                 if any(fact["value"] not in (None, "", [], {}) for fact in facts)}
@@ -1581,52 +1651,56 @@ def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None):
             _candidate_fact_table_status("identity_only_rows_omitted", identity_only_row_count=counts[1])
         if not rows:
             return None
+        rows, selected = _merge_candidate_fact_rows(rows, selected, deadline)
+        _merged_count = counts[0] - len(rows)
     row_ids = {row["row_id"] for row in rows}
     selected = {key: kept for key, entries in selected.items()
                 if (kept := [entry for entry in entries if entry["row"]["row_id"] in row_ids])}
     columns = list(dict.fromkeys(prop for row in rows for prop in row["fields"]))
     references = {digest: f"c{index+1}" for index, digest in enumerate(selected)}
-    citations = []
-    span_indexes = {}
+    allowed_offsets = {}
     for digest, entries in selected.items():
-        span = entries[0]["span"]
-        indexes = {}
+        offsets = set()
         for entry in entries:
             check_source_evidence_deadline(deadline)
-            pair = (entry["span"]["start"], entry["span"]["end"])
-            indexes.setdefault(pair, len(indexes))
-        offsets = list(indexes)
-        span_indexes[digest] = indexes
-        citations.append({"ref": references[digest], "citation_hash": digest,
-            "source_observation_id": span["observation_id"], "native_locator": span["native_locator"],
-            "source_extractor_run_id": span["source_extractor_run_id"], "spans": offsets})
+            offsets.add((entry["span"]["start"], entry["span"]["end"]))
+        allowed_offsets[digest] = offsets
+    used_offsets = {}
     display = []
     for row in rows:
         check_source_evidence_deadline(deadline)
         catalog = []
         def quotes(spans):
-            result = []
+            # Scope the representative to this displayed value. Equal text
+            # attached to a different value cannot supply its evidence.
+            representatives = {}
             for span in spans:
                 check_source_evidence_deadline(deadline)
+                digest, start, end = span["observation_hash"], span["start"], span["end"]
+                if (start, end) not in allowed_offsets.get(digest, ()):
+                    raise ContractValidationError("candidate fact display span is not bound")
                 quote = span["quote"]
-                index = next((index for index, entry in enumerate(catalog) if entry[0] == quote), None)
+                rank = (digest, start, end)
+                if quote not in representatives or rank < representatives[quote]:
+                    representatives[quote] = rank
+            result = []
+            for quote, (digest, start, end) in representatives.items():
+                index = next((i for i, entry in enumerate(catalog) if entry[0] == quote), None)
                 if index is None:
                     index = len(catalog)
                     catalog.append([quote, []])
-                binding = [references[span["observation_hash"]],
-                    span_indexes[span["observation_hash"]][(span["start"], span["end"])]]
+                offsets = used_offsets.setdefault(digest, {})
+                binding = [references[digest], offsets.setdefault((start, end), len(offsets))]
                 if binding not in catalog[index][1]:
                     catalog[index][1].append(binding)
-                pair = [index, catalog[index][1].index(binding)]
-                if pair not in result:
-                    result.append(pair)
+                result.append([index, catalog[index][1].index(binding)])
             return result
         values = []
         for prop in columns:
             cells = []
             grouped = {}
             for fact in row["fields"].get(prop, ()):
-                cell = {"value": fact["value"], "quotes": quotes(fact["evidence_spans"])}
+                cell = {"value": fact["value"], "quotes": []}
                 if fact.get("unit") not in (None, ""):
                     cell["unit"] = fact["unit"]
                 if fact.get("times"):
@@ -1634,36 +1708,82 @@ def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None):
                                      for entry in fact["times"]]
                 key = json.dumps({name: value for name, value in cell.items() if name != "quotes"},
                                  ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                if key in grouped:
-                    bindings = grouped[key]["quotes"]
-                    bindings.extend(pair for pair in cell["quotes"] if pair not in bindings)
-                else:
-                    grouped[key] = cell
-                    cells.append(cell)
+                grouped.setdefault(key, (cell, []))[1].extend(fact["evidence_spans"])
+            for cell, spans in grouped.values():
+                cell["quotes"] = quotes(spans)
+                cells.append(cell)
             values.append(cells)
         entry = {"item": row["item_or_row"], "values": values, "quotes": catalog}
+        if row.get("_quote_mention"):
+            entry["link"] = "quote_mention"
         subject = row.get("subject_identity")
         if subject is not None:
-            entry["subject"] = {
-                "surfaces": list(dict.fromkeys(source["value_surface"] for source in subject["sources"])),
-                "quotes": quotes(span for source in subject["sources"] for span in source["evidence_spans"])}
+            by_surface = {}
+            for source in subject["sources"]:
+                by_surface.setdefault(source["value_surface"], []).extend(source["evidence_spans"])
+            subject_pairs = []
+            for spans in by_surface.values():
+                subject_pairs.extend(pair for pair in quotes(spans) if pair not in subject_pairs)
+            entry["subject"] = {"surfaces": list(by_surface), "quotes": subject_pairs}
         display.append(entry)
-    group = sha256_json({"pin": pin, "rows": [row["row_id"] for row in rows]})
-    disclosure = ({"disclosure": f"Shown {len(rows)} of {counts[0]} answer-bearing rows; "
-        f"identity-only rows omitted: {counts[1]}. Omitted rows exist; omission is not evidence of absence."}
-        if len(rows) < counts[0] or counts[1] else {})
+    citations = []
+    header_refs = {}
+    for digest, entries in selected.items():
+        if digest not in used_offsets:
+            continue
+        span = entries[0]["span"]
+        citation = {"ref": references[digest], "citation_hash": digest,
+            "source_observation_id": span["observation_id"], "native_locator": span["native_locator"],
+            "source_extractor_run_id": span["source_extractor_run_id"], "spans": list(used_offsets[digest])}
+        item = (verified_items or {}).get(digest, {})
+        columns_for_source = item.get("_native_column_names")
+        if columns_for_source:
+            if columns_for_source not in header_refs:
+                header_refs[columns_for_source] = f"h{len(header_refs) + 1}"
+            citation["h"] = header_refs[columns_for_source]
+        if "_parent_mail_sent_at" in item:
+            citation["mail_sent_at"] = item["_parent_mail_sent_at"]
+        citations.append(citation)
+    duplicate_sources = len(selected) - len(citations)
+    group = sha256_json({"pin": pin, "rows": [
+        key for row in rows for key in row.get("_display_member_ids", [row["row_id"]])]})
+    omitted = len(rows) + _merged_count < counts[0] or counts[1]
+    disclosure = {}
+    if _merged_count or omitted or duplicate_sources:
+        notice = f"Shown {len(rows)} of {counts[0]} answer-bearing rows; identity-only rows omitted: {counts[1]}."
+        if _merged_count:
+            notice += (" 1 row merged as duplicate/subset." if _merged_count == 1 else
+                       f" {_merged_count} rows merged as duplicates/subsets.")
+        if duplicate_sources:
+            notice += (" 1 duplicate source copy omitted." if duplicate_sources == 1 else
+                       f" {duplicate_sources} duplicate source copies omitted.")
+        if omitted:
+            notice += " Omitted rows exist; omission is not evidence of absence."
+        disclosure = {"disclosure": notice}
+    if any(row.get("_quote_mention") for row in rows):
+        disclosure["disclosure"] = (disclosure.get("disclosure", "") +
+            " A quote_mention row includes an identity matched only in a source quote, not an annotated field.").strip()
+    if _verification is not None:
+        disclosure = {"disclosure": (
+            f"Shown {len(rows)} of {_verification['selected_row_count']} selected candidate rows; "
+            f"{_verification['withheld_row_count']} rows withheld because their sources were not "
+            f"verified in time or were rejected; {_verification['rejected_row_count']} rejected rows. "
+            + disclosure.get("disclosure", "") + " Coverage is incomplete; omission is not evidence of absence.")}
+    preamble = dict(disclosure)
+    if header_refs:
+        preamble["headers"] = {ref: names for names, ref in header_refs.items()}
     result = {"source_type": "candidate_fact_table", "citation_hash": citations[0]["citation_hash"],
         "source_observation_id": citations[0]["source_observation_id"],
         "snippet": "候選事實（由標註取得，未經人工審核）\n" + (
-            json.dumps(disclosure, ensure_ascii=False, separators=(",", ":"))[:-1] + ("," if disclosure else "")
+            json.dumps(preamble, ensure_ascii=False, separators=(",", ":"))[:-1] + ("," if preamble else "")
             + '"columns":' + json.dumps(columns, ensure_ascii=False, separators=(",", ":")) + ',"rows":[\n'
             + ",\n".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) for row in display)
             + '\n],"citations":' + json.dumps(citations, ensure_ascii=False, separators=(",", ":")) + "}"),
         "source_context": {"candidate_fact_group": group, "candidate_fact_pin": pin,
-            "required_citation_hashes": list(selected), "semantic_correctness_verified": False,
+            "required_citation_hashes": [c["citation_hash"] for c in citations], "semantic_correctness_verified": False,
             "exact_field_proof": False, "deterministic_exact": False, "canonical": False}}
 
-    if _counts is not None or len(json.dumps(result, ensure_ascii=False).encode()) <= 10240:
+    if _counts is not None or len(json.dumps(result, ensure_ascii=False).encode()) <= _CANDIDATE_FACT_TABLE_MAX_BYTES:
         return result
     def priority(row):
         check_source_evidence_deadline(deadline)
@@ -1680,8 +1800,10 @@ def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None):
     ordered, fitted, shown_count = sorted(rows, key=priority, reverse=True), None, 0
     for count in range(1, len(ordered) + 1):
         check_source_evidence_deadline(deadline)
-        trial = _candidate_fact_table(ordered[:count], selected, pin, deadline=deadline, _counts=counts)
-        if len(json.dumps(trial, ensure_ascii=False).encode()) > 10240:
+        trial = _candidate_fact_table(ordered[:count], selected, pin, deadline=deadline, _counts=counts,
+                                      _verification=_verification, _status=_candidate_fact_table_status,
+                                      _merged_count=_merged_count, verified_items=verified_items)
+        if len(json.dumps(trial, ensure_ascii=False).encode()) > _CANDIDATE_FACT_TABLE_MAX_BYTES:
             break
         fitted, shown_count = trial, count
     if fitted is not None:
@@ -3022,6 +3144,8 @@ def _build_source_start_semantic_handler(
         fact_items = {}
         fact_table = None
         fact_citations = []
+        fact_rejected_rows = set()
+        fact_fitted_count = 0
 
         def prune_outer_dates():
             if not outer_dates:
@@ -3151,28 +3275,36 @@ def _build_source_start_semantic_handler(
                 from formowl_graph.candidates import _semantic_span_text
                 source_dict = observation.to_dict()
                 for entry in entries:
-                    check_source_evidence_deadline(source_budget["deadline"])
-                    field, span = entry["field"], entry["span"]
-                    if entry["property"] is None:
-                        raw = field["value_surface"]
-                        if (" ".join(unicodedata.normalize("NFKC", raw).casefold().split())
-                                != entry["row"]["subject_identity"]["value"]
-                                or field["target_identity"].get("value_surface") != raw
-                                or field["target_identity"].get("evidence_spans") != field["evidence_spans"]
-                                or not any(raw in evidence["quote"] for evidence in field["evidence_spans"])):
-                            raise ContractValidationError("candidate fact subject identity changed")
-                    _, text = _semantic_span_text({key: span.get(key) for key in (
-                        "observation_id", "field_path", "quote", "occurrence_index")},
-                        {observation.observation_id: source_dict})
-                    start, end = span.get("start"), span.get("end")
-                    if (field["permission_scope"] != source_dict["permission_scope"]
-                            or sha256_json(field["permission_scope"]) != field["permission_scope_fingerprint"]
-                            or span.get("observation_hash") != observation_hash
-                            or span.get("source_extractor_run_id") != observation.extractor_run_id
-                            or span.get("native_locator") != source_dict["location"]
-                            or type(start) is not int or type(end) is not int
-                            or not 0 <= start < end <= len(text) or text[start:end] != span["quote"]):
-                        raise ContractValidationError("candidate fact original source binding changed")
+                    row_id = entry["row"]["row_id"]
+                    if row_id in fact_rejected_rows:
+                        continue
+                    try:
+                        check_source_evidence_deadline(source_budget["deadline"])
+                        field, span = entry["field"], entry["span"]
+                        if entry["property"] is None:
+                            raw = field["value_surface"]
+                            if (" ".join(unicodedata.normalize("NFKC", raw).casefold().split())
+                                    != entry["row"]["subject_identity"]["value"]
+                                    or field["target_identity"].get("value_surface") != raw
+                                    or field["target_identity"].get("evidence_spans") != field["evidence_spans"]
+                                    or not any(raw in evidence["quote"] for evidence in field["evidence_spans"])):
+                                raise ContractValidationError("candidate fact subject identity changed")
+                        _, text = _semantic_span_text({key: span.get(key) for key in (
+                            "observation_id", "field_path", "quote", "occurrence_index")},
+                            {observation.observation_id: source_dict})
+                        start, end = span.get("start"), span.get("end")
+                        if (field["permission_scope"] != source_dict["permission_scope"]
+                                or sha256_json(field["permission_scope"]) != field["permission_scope_fingerprint"]
+                                or span.get("observation_hash") != observation_hash
+                                or span.get("source_extractor_run_id") != observation.extractor_run_id
+                                or span.get("native_locator") != source_dict["location"]
+                                or type(start) is not int or type(end) is not int
+                                or not 0 <= start < end <= len(text) or text[start:end] != span["quote"]):
+                            raise ContractValidationError("candidate fact original source binding changed")
+                    except ContractValidationError:
+                        # The actual source/quote/permission guard still rejects
+                        # this whole row; independent complete rows remain eligible.
+                        fact_rejected_rows.add(row_id)
                 fact_items[observation_hash] = item
                 return None
             if observation_hash in annotation_hashes:
@@ -3478,6 +3610,10 @@ def _build_source_start_semantic_handler(
             semantic_hash = sha256_json(observation.to_dict()) if annotation_hashes or fact_projection is not None else None
             semantic_match = not full_read_projection and (semantic_hash in annotation_hashes
                 or fact_projection is not None and semantic_hash in fact_projection)
+            def reject_fact_source():
+                if fact_projection is not None:
+                    for entry in fact_projection.get(semantic_hash, ()):
+                        fact_rejected_rows.add(entry["row"]["row_id"])
             annotation_hint_surfaces = annotation_identity_hints.get(
                 sha256_json(observation.to_dict()),
                 (),
@@ -3535,6 +3671,7 @@ def _build_source_start_semantic_handler(
                             source_kind=AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND,
                         )
                     ):
+                        reject_fact_source()
                         return None
                     if observation.observation_type == "email_attachment_occurrence":
                         child_id = payload.get("child_asset_id")
@@ -3688,6 +3825,9 @@ def _build_source_start_semantic_handler(
                     )
                 ):
                     _trace(trace, "count", "scope_rejected")
+                    if (observation.modality == "mail"
+                            and observation.observation_type in REVISION_SOURCE_FALLBACK_OBSERVATION_TYPES):
+                        reject_fact_source()
                     return None
                 lineage = source_occurrence_lineage_from_observation(
                     observation,
@@ -3843,6 +3983,8 @@ def _build_source_start_semantic_handler(
                         source_kind=AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND,
                     )
                 ):
+                    if observation.modality == "text" and observation.observation_type in {"heading", "paragraph"}:
+                        reject_fact_source()
                     return None
                 text = observation.text or observation.caption or ""
                 if not text:
@@ -4254,11 +4396,26 @@ def _build_source_start_semantic_handler(
             _CANDIDATE_FACT_TABLE_MAX_BYTES, _candidate_fact_table_status,
         )
 
+        fact_terminal_reason = None
+        def fact_status(reason, **fields):
+            nonlocal fact_terminal_reason
+            if ("pre_group_reason" in fields
+                    and fields["pre_group_reason"] not in _CANDIDATE_FACT_PREGROUP_REASONS):
+                raise ContractValidationError("candidate fact pre-group reason is invalid")
+            if "pre_group_reason" in fields:
+                selected_reason = fields.pop("pre_group_reason")
+                # String values outside the trace owner's allowlist become
+                # "unknown". Fixed boolean keys preserve this closed diagnostic.
+                fields["pre_group_reason_flags"] = {
+                    key: key == selected_reason for key in sorted(_CANDIDATE_FACT_PREGROUP_REASONS)}
+            fact_terminal_reason = reason
+            _candidate_fact_table_status(reason, **fields)
+
         def include_fact_table(payload):
             if fact_table is None:
                 return payload
             if time.monotonic() >= presentation_deadline:
-                _candidate_fact_table_status("deadline")
+                fact_status("deadline")
                 return payload
             from formowl_mail.human_uat_orchestrator import compact_evidence_for_model, evidence_citation_ids
             content_key = "evidence_snippets" if mail_tool else "evidence"
@@ -4274,16 +4431,16 @@ def _build_source_start_semantic_handler(
                         and set(fact_table["source_context"]["required_citation_hashes"]).issubset(
                             evidence_citation_ids(compact))):
                     if time.monotonic() >= presentation_deadline:
-                        _candidate_fact_table_status("deadline")
+                        fact_status("deadline")
                         return payload
                     candidate.update({content_key: compact[content_key], "citations": compact["citations"]})
                     if isinstance(candidate.get("answer"), dict):
                         candidate["answer"] = {**candidate["answer"], "status": "partial",
                                                "citation_count": len(compact["citations"])}
-                    _candidate_fact_table_status(None)
+                    fact_status(None, shown_row_count=fact_fitted_count)
                     return candidate
             except ContractValidationError:
-                _candidate_fact_table_status("citation_validation_failed")
+                fact_status("citation_validation_failed")
             return payload
         if (getattr(revision, "candidate_fact_pin", None) and required_terms
                 and query_class == "evidence_lookup"
@@ -4293,44 +4450,50 @@ def _build_source_start_semantic_handler(
                 and not arguments.get("reviewed_annotation_ids") and arguments.get("reviewed_annotation_pin") is None):
             from formowl_mail.issue56_sealed_source import lookup_issue56_candidate_fact_rows
             rows = lookup_issue56_candidate_fact_rows(revision, required_terms,
-                deadline_monotonic=source_budget["deadline"], reason_callback=_candidate_fact_table_status)
+                deadline_monotonic=source_budget["deadline"], reason_callback=fact_status)
             if rows:
-                _candidate_fact_table_status("grouping_not_reached")
+                fact_status("grouping_not_reached")
             selected = {}
             selection_expired = False
             for row in rows:
+                row_selected = {}
                 parts = list(row["fields"].items())
                 if row.get("subject_identity") is not None:
                     parts.append((None, row["subject_identity"]["sources"]))
-                for prop, fields in parts:
-                    for field in fields:
-                        if time.monotonic() >= source_budget["deadline"]:
-                            selection_expired = True
-                            break
-                        # Export metadata never substitutes for the current sealed
-                        # source identity. No annotation/serving revision equality.
-                        if (not field.get("evidence_spans")
-                                or any(records.observation_hash(oid) != key
-                                       for oid, key in field["observation_hashes"].items())):
-                            _candidate_fact_table_status("citation_validation_failed")
-                            raise ContractValidationError("candidate fact source Observation changed")
-                        for span in field["evidence_spans"]:
-                            if time.monotonic() >= source_budget["deadline"]:
-                                selection_expired = True
-                                break
-                            key = span["observation_hash"]
-                            if field["observation_hashes"].get(span["observation_id"]) != key:
-                                raise ContractValidationError("candidate fact source span mismatch")
-                            selected.setdefault(key, []).append({"row": row, "property": prop, "field": field, "span": span})
-                    if selection_expired:
-                        break
-                if selection_expired:
-                    break
-            if selection_expired:
-                _candidate_fact_table_status("deadline")
+                try:
+                    for prop, fields in parts:
+                        for field in fields:
+                            check_source_evidence_deadline(source_budget["deadline"])
+                            # Original current-source hash checks remain mandatory
+                            # for every field and subject before nominating a row.
+                            if (not field.get("evidence_spans") or any(
+                                    records.observation_hash(oid) != key
+                                    for oid, key in field["observation_hashes"].items())):
+                                raise ContractValidationError("candidate fact source Observation changed")
+                            for span in field["evidence_spans"]:
+                                check_source_evidence_deadline(source_budget["deadline"])
+                                key = span["observation_hash"]
+                                if field["observation_hashes"].get(span["observation_id"]) != key:
+                                    raise ContractValidationError("candidate fact source span mismatch")
+                                row_selected.setdefault(key, []).append(
+                                    {"row": row, "property": prop, "field": field, "span": span})
+                except _SourceEvidenceDeadlineExceeded:
+                    selection_expired = True
+                    break  # Never admit an incompletely nominated row.
+                except ContractValidationError:
+                    fact_rejected_rows.add(row["row_id"])
+                    continue
+                for key, entries in row_selected.items():
+                    selected.setdefault(key, []).extend(entries)
+            pre_group_reason = ("deadline_before_hydration" if (selection_expired
+                                or fact_terminal_reason == "deadline" or time.monotonic() >= source_budget["deadline"]) else
+                                "source_limit" if len(selected) > 128 else "projection_incomplete")
+            fact_status("grouping_not_reached" if rows else fact_terminal_reason,
+                pre_group_reason=pre_group_reason, selected_row_count=len(rows), admitted_row_count=0,
+                rejected_row_count=len(fact_rejected_rows), fitted_row_count=0, shown_row_count=0)
             if selected and not selection_expired and len(selected) <= 128:
                 # A bounded preferred scan uses the same guarded owner and remaining
-                # read/time budget. A failed/capped group never publishes a subset.
+                # read/time budget. Publication still requires whole-row closure.
                 fact_projection = selected
                 deadline = source_budget["deadline"]
                 fact_reads = 0
@@ -4351,7 +4514,11 @@ def _build_source_start_semantic_handler(
                         def collect_fact(observation, scope):
                             nonlocal fact_reads
                             fact_reads += 1
-                            project(observation, scope, deadline)
+                            try:
+                                project(observation, scope, deadline)
+                            except ContractValidationError:
+                                for entry in selected.get(sha256_json(observation.to_dict()), ()):
+                                    fact_rejected_rows.add(entry["row"]["row_id"])
                             return not set(selected).issubset(fact_items)
                         remaining = SOURCE_EVIDENCE_OBSERVATION_LIMIT - source_budget["reads"]
                         if remaining <= 0 or time.monotonic() >= deadline:
@@ -4370,7 +4537,11 @@ def _build_source_start_semantic_handler(
                             and remaining > 0 and time.monotonic() < deadline):
                         native_metrics = {}
                         def collect_native_fact(observation, scope):
-                            project(observation, scope, deadline)
+                            try:
+                                project(observation, scope, deadline)
+                            except ContractValidationError:
+                                for entry in selected.get(sha256_json(observation.to_dict()), ()):
+                                    fact_rejected_rows.add(entry["row"]["row_id"])
                             return not set(selected).issubset(fact_items)
                         try:
                             exact_lookup.scan_source_rows(
@@ -4384,8 +4555,38 @@ def _build_source_start_semantic_handler(
                                 _phase_metrics=native_metrics)
                         finally:
                             source_budget["reads"] += native_metrics.get("scanned_observation_count", 0)
-                    if set(selected).issubset(fact_items) and time.monotonic() < deadline:
-                        fact_table = _candidate_fact_table(rows, selected, revision.candidate_fact_pin, deadline=deadline)
+                except _SourceEvidenceDeadlineExceeded:
+                    pre_group_reason = "deadline_during_hydration"
+                    source_budget["reads"] += fact_reads
+                except ContractValidationError:
+                    # Unknown failing source stays unverified; no failed row is
+                    # promoted just because another source was accepted earlier.
+                    pre_group_reason = "source_admission_rejected"
+                    source_budget["reads"] += fact_reads
+                    cell = _trace(trace, "phase", "project", candidate_fact_fallback=True,
+                                  fallback_reason="candidate_fact_contract_validation_failed")
+                    _trace(cell, "finish", state="declined")
+                admitted_rows = []
+                try:
+                    admitted_rows = _candidate_fact_verified_rows(rows, selected, fact_items, fact_rejected_rows)
+                    if fact_rejected_rows:
+                        pre_group_reason = "source_admission_rejected"
+                    elif len(admitted_rows) == len(rows):
+                        pre_group_reason = "all_sources_verified"
+                    elif time.monotonic() >= deadline:
+                        pre_group_reason = "deadline_during_hydration"
+                    if admitted_rows:
+                        # Formatting only cached, fully guarded metadata uses the
+                        # existing absolute presentation phase, never more reads.
+                        check_source_evidence_deadline(presentation_deadline)
+                        verification = ({"selected_row_count": len(rows),
+                            "withheld_row_count": len(rows) - len(admitted_rows),
+                            "rejected_row_count": len(fact_rejected_rows)}
+                            if len(admitted_rows) != len(rows) else None)
+                        fact_status(None)  # Grouping began; preserve any builder's terminal reason.
+                        fact_table = _candidate_fact_table(admitted_rows, selected, revision.candidate_fact_pin,
+                            deadline=presentation_deadline, _verification=verification, _status=fact_status,
+                            verified_items=fact_items)
                         shown = fact_table["source_context"]["required_citation_hashes"] if fact_table else []
                         fact_citations = ([_citation_for_snippet(fact_items[key]) for key in shown]
                                           if mail_tool else list(shown))
@@ -4394,29 +4595,31 @@ def _build_source_start_semantic_handler(
                         table_bytes = len(json.dumps(fact_table, ensure_ascii=False).encode("utf-8"))
                         if table_bytes > _CANDIDATE_FACT_TABLE_MAX_BYTES:
                             fact_table = None
-                            _candidate_fact_table_status("table_over_reserved_budget")
+                            fact_citations = []
+                            fact_status("table_over_reserved_budget")
                         elif fact_table is not None:
+                            check_source_evidence_deadline(presentation_deadline)
+                            fact_fitted_count = len(json.loads(fact_table["snippet"].split("\n", 1)[1])["rows"])
                             source_budget["context_bytes"] += table_bytes
                             admitted_context_bytes += table_bytes
                             source_budget["evidence"] += 1
-                    elif time.monotonic() >= deadline:
-                        _candidate_fact_table_status("deadline")
                 except _SourceEvidenceDeadlineExceeded:
-                    _candidate_fact_table_status("deadline")
-                    source_budget["reads"] += fact_reads
+                    pre_group_reason = "presentation_deadline"
+                    fact_status("deadline")
+                    fact_table, fact_citations = None, []
                 except ContractValidationError:
-                    _candidate_fact_table_status("citation_validation_failed")
-                    fact_table = None
-                    fact_citations = []
-                    # Discard the optional group; ordinary retrieval must still
-                    # pass its own source guards within the remaining budget.
-                    source_budget["reads"] += fact_reads
+                    fact_table, fact_citations = None, []
+                    fact_status("citation_validation_failed")
                     cell = _trace(trace, "phase", "project", candidate_fact_fallback=True,
                                   fallback_reason="candidate_fact_contract_validation_failed")
                     _trace(cell, "finish", state="declined")
                 finally:
                     fact_projection = None
                     active_family, active_selector = None, selector
+                    fact_status(fact_terminal_reason,
+                        pre_group_reason=pre_group_reason, selected_row_count=len(rows),
+                        admitted_row_count=len(admitted_rows), rejected_row_count=len(fact_rejected_rows),
+                        fitted_row_count=fact_fitted_count, shown_row_count=0)
                     fact_items.clear()
 
                     table_evidence.clear()
@@ -7160,6 +7363,9 @@ class _IngestionExactCellLookup:
             parsed_shards[(item["kind"], item["shard"])] = dict(item)
         parsed_columns: list[dict[str, Any]] = []
         normalized_columns: dict[str, set[str]] = {}
+        # Build family-specific ordered indexes from the same sealed columns.
+        # Empty normalized labels remain valid family keys, matching the scan.
+        family_columns: dict[bool, dict[str, dict[str, None]]] = {False: {}, True: {}}
         for item in columns:
             if (
                 not isinstance(item, Mapping)
@@ -7196,6 +7402,9 @@ class _IngestionExactCellLookup:
                 normalized_columns.setdefault(normalized_field, set()).add(
                     item["column_hash"]
                 )
+            family_columns[item["inline_table"]].setdefault(normalized_field, {})[
+                item["column_hash"]
+            ] = None
         self._revision = revision
         self._tokenizer_profile = profile
         self._directory = revision.exact_lookup_directory
@@ -7204,12 +7413,26 @@ class _IngestionExactCellLookup:
         )
         self._shards = MappingProxyType(parsed_shards)
         self._columns = tuple(parsed_columns)
+        self._schema_fields = tuple(item["field"] for item in self._columns)
+        po_fields = tuple(field for field in self._schema_fields
+            if re.search(r"(?<![a-z0-9])po(?![a-z0-9])", field.casefold())
+            and re.search(r"(?<![a-z0-9])(no|number)(?![a-z0-9])", field.casefold()))
+        header_fields = tuple(field for field in po_fields
+            if normalize_source_occurrence_structured_surface(field) == "header po no.")
+        self._po_schema_fields = header_fields or po_fields or self._schema_fields
+        self._part_schema_fields = _part_identifier_schema_fields(self._schema_fields)
         self._normalized_columns = MappingProxyType(
             {
                 key: frozenset(value)
                 for key, value in normalized_columns.items()
             }
         )
+        self._attachment_columns = MappingProxyType({
+            key: tuple(hashes) for key, hashes in family_columns[False].items()
+        })
+        self._inline_columns = MappingProxyType({
+            key: tuple(hashes) for key, hashes in family_columns[True].items()
+        })
         if revision.source_records is not None:
             reader = revision.source_records
             def _source_observation_or_none(key: str) -> Observation | None:
@@ -7333,6 +7556,8 @@ class _IngestionExactCellLookup:
 
         def hydrate() -> None:
             nonlocal context_bytes
+            staged_members = 0
+
             def matched_rows():
                 # Seal one shard, emit its verified rows, then proceed. A later
                 # deadline cannot discard already admitted same-row evidence.
@@ -7466,12 +7691,23 @@ class _IngestionExactCellLookup:
                             raise ContractValidationError("source table cell scope mismatch")
                     if native_group_callback is not None:
                         native_group_callback((parent, *subset))
+                    names = [((cell.payload or {}).get("table_structure") or {}).get("column_name")
+                             for cell in cells]
+                    native_context = {}
+                    if all(isinstance(name, str) and name.strip() for name in names):
+                        native_context["_native_column_names"] = tuple(
+                            redact_public_raw_references(name)[0] for name in names)
+                    if parent.observation_type == "email_message":
+                        sent_at = (parent.payload or {}).get("sent_at")
+                        if isinstance(sent_at, str) and sent_at.strip() and not redact_public_raw_references(sent_at)[1]:
+                            native_context["_parent_mail_sent_at"] = sent_at
                     for member in subset:
                         check()
                         key = sha256_json(member.to_dict())
                         if key not in preferred:
                             continue
                         item = {
+                            **native_context,
                             "snippet": "Source-linked candidate native evidence; not exact field proof.",
                             "source_type": ("mail_inline_" if inline else "attachment_") + member.observation_type,
                             "citation_hash": key, "source_observation_hash": key,
@@ -7486,9 +7722,11 @@ class _IngestionExactCellLookup:
                         }
                         if selector is not None:
                             item["mail_import_session_id"] = selector
-                        context_bytes += len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
-                        if context_bytes > 16 * 1024:
+                        # Candidate verification restores evidence_by_id before presentation.
+                        # Bound its staging by the sealed nominations for this scan.
+                        if staged_members >= len(preferred):
                             raise Stopped("context_limit")
+                        staged_members += 1
                         evidence_by_id[member.observation_id] = item
                         if not observation_callback(member, member.permission_scope["scope_id"]):
                             raise Stopped("callback")
@@ -7642,22 +7880,11 @@ class _IngestionExactCellLookup:
                         # example PO470002002 -> 470002002). Use the sealed
                         # candidate schema to locate that row; hydration keeps
                         # candidate_only status and cannot promote it to exact.
-                        schema_fields = tuple(item["field"] for item in self._columns)
+                        schema_fields = self._schema_fields
                         if re.match(r"po[0-9]+$", normalized_term):
-                            po_fields = tuple(
-                                field for field in schema_fields
-                                if re.search(r"(?<![a-z0-9])po(?![a-z0-9])", field.casefold())
-                                and re.search(r"(?<![a-z0-9])(no|number)(?![a-z0-9])", field.casefold())
-                            )
-                            if po_fields:
-                                header_po_fields = tuple(
-                                    field for field in po_fields
-                                    if normalize_source_occurrence_structured_surface(field)
-                                    == "header po no."
-                                )
-                                schema_fields = header_po_fields or po_fields
+                            schema_fields = self._po_schema_fields
                         elif re.fullmatch(r"[0-9]+\.[a-z0-9][a-z0-9._-]*", normalized_term):
-                            schema_fields = _part_identifier_schema_fields(schema_fields)
+                            schema_fields = self._part_schema_fields
                         bindings = bind_typed_identifier_to_source_schema(
                             term, schema_fields,
                         )
@@ -7668,19 +7895,15 @@ class _IngestionExactCellLookup:
                             typed_term_bindings[term] = bindings
                             for field, value in bindings:
                                 normalized_field = normalize_source_occurrence_structured_surface(field)
-                                attachment_column_hashes = tuple(dict.fromkeys(
-                                    item["column_hash"] for item in self._columns
-                                    if normalize_source_occurrence_structured_surface(item["field"])
-                                    == normalized_field and not item["inline_table"]
-                                ))
+                                attachment_column_hashes = self._attachment_columns.get(
+                                    normalized_field, ()
+                                )
                             if source_families == ("attachment_table",):
                                 column_hashes = attachment_column_hashes
                             elif source_families == ("mail",):
-                                inline_column_hashes = tuple(dict.fromkeys(
-                                    item["column_hash"] for item in self._columns
-                                    if normalize_source_occurrence_structured_surface(item["field"])
-                                    == normalized_field and item["inline_table"]
-                                ))
+                                inline_column_hashes = self._inline_columns.get(
+                                    normalized_field, ()
+                                )
                                 column_hashes = inline_column_hashes or self._normalized_columns.get(
                                     normalized_field, ()
                                 )
@@ -8147,7 +8370,538 @@ class _IngestionExactCellLookup:
             authorized_reference_pairs=tuple(sorted(reference_pairs)),
         )
 
-    def _read_matching_shard_records(
+    # Process-wide native index only; permissions remain query-time decisions.
+    _verified_shards = OrderedDict()
+    _verified_shard_bytes = 0
+    _verified_shard_lock = threading.RLock()
+    _cache_allocations = 0
+    _cache_inflight = {}
+    _managed_shards = {}
+    _cache_counters = Counter()
+    _cache_wake = threading.Event()
+    _cache_stop = threading.Event()
+    _cache_thread = None
+    _CACHE_MAX_BYTES = 9 * 1024**3 // 2
+    _CACHE_ENTRY_MAX_BYTES = 64 * 1024**2
+    _CACHE_MAX_ENTRIES = 640
+    _CACHE_REVERIFY_USES = 128
+    _CACHE_REVERIFY_SECONDS = 300
+    _CACHE_REFRESH_USES = 64
+    _CACHE_REFRESH_SECONDS = 240
+
+    @staticmethod
+    def _shard_identity(info):
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+    def _cache_binding(self, kind, shard):
+        path = self._directory / ("values" if kind == "value" else "rows") / f"{shard}.jsonl"
+        binding = self._shards[(kind, shard)]
+        seal = (kind, shard, binding["sha256"], binding["size_bytes"], binding["record_count"])
+        return path, str(path.absolute()), seal
+
+    @classmethod
+    @contextmanager
+    def _cache_locked(cls, check=None, *, poll=True):
+        while not cls._verified_shard_lock.acquire(timeout=0.05):
+            if check is not None:
+                check()
+        try:
+            if poll and check is not None:
+                check()
+            yield
+        finally:
+            cls._verified_shard_lock.release()
+
+    @classmethod
+    def cache_receipt(cls):
+        # Internal diagnostic seam only; never attach to MCP/business payloads.
+        names = ("hit_attempt", "hit_success", "hit_overflow", "miss", "evict", "oversize",
+                 "reverify_attempt", "reverify_success", "prewarm_attempt", "prewarm_success",
+                 "fullscan_attempt", "fullscan_success", "query_fullscan_attempt", "invalidate",
+                 "expired_reject", "error")
+        with cls._verified_shard_lock:
+            return {**{name: cls._cache_counters[name] for name in names},
+                    "entries": len(cls._verified_shards), "charged_bytes": cls._verified_shard_bytes,
+                    "managed_shards": len(cls._managed_shards),
+                    "background_workers": int(cls._cache_thread is not None and cls._cache_thread.is_alive())}
+
+    @classmethod
+    def _drop_cache_entry(cls, key, *, invalidated=True):
+        entry = cls._verified_shards.pop(key, None)
+        if entry is not None:
+            entry["resident"] = False
+            entry["invalidated"] |= invalidated
+            if not entry["readers"]:
+                entry["index"] = None
+                entry["prefix_index"] = None
+                cls._verified_shard_bytes -= entry["charge"]
+                cls._cache_allocations -= 1
+        if invalidated:
+            task = cls._cache_inflight.get(key)
+            if task is not None:
+                task["cancelled"] = True
+            context = cls._managed_shards.get(key)
+            if context is not None:
+                context["generation"] = object()
+                context["urgent"] = True
+                cls._cache_wake.set()
+            cls._cache_counters["invalidate"] += 1
+
+    @classmethod
+    def _unpin_cache_entry(cls, entry):
+        entry["readers"] -= 1
+        if not entry["readers"] and not entry["resident"]:
+            entry["index"] = None
+            entry["prefix_index"] = None
+            cls._verified_shard_bytes -= entry["charge"]
+            cls._cache_allocations -= 1
+
+    def start_cache(self):
+        cls = _IngestionExactCellLookup
+        paths = []
+        self._cache_lease_closed = False
+        try:
+            with cls._verified_shard_lock:
+                if cls._cache_thread is not None and cls._cache_thread.is_alive() and cls._cache_stop.is_set():
+                    raise ContractValidationError("native shard cache is closing")
+                for kind, shard in self._shards:
+                    _, key, seal = self._cache_binding(kind, shard)
+                    context = cls._managed_shards.get(key)
+                    if context is not None and context["seal"] != seal:
+                        raise ContractValidationError("native shard cache binding changed")
+                    if context is None:
+                        if len(cls._managed_shards) >= cls._CACHE_MAX_ENTRIES or cls._verified_shard_bytes + 4096 > cls._CACHE_MAX_BYTES:
+                            raise ContractValidationError("native shard cache capacity exceeded")
+                        context = {"lookup": self, "kind": kind, "shard": shard, "seal": seal,
+                                   "generation": object(), "leases": 0, "failed": False, "urgent": False, "ready": False}
+                        cls._managed_shards[key] = context
+                        cls._verified_shard_bytes += 4096  # Bounded registration/queue metadata.
+                    context["leases"] += 1
+                    paths.append(key)
+                self._cache_lease_paths = tuple(paths)
+            for kind, shard in self._shards:
+                path, key, seal = self._cache_binding(kind, shard)
+                identity = cls._shard_identity(path.lstat())
+                with cls._verified_shard_lock:
+                    entry = cls._verified_shards.get(key)
+                    fresh = (cls._managed_shards[key]["ready"] and entry is not None and entry["seal"] == seal
+                             and entry["identity"] == identity and not self._cache_expired(entry))
+                if not fresh:
+                    self._verify_cache_shard(kind, shard, matching_keys=set(), origin="prewarm")
+            with cls._verified_shard_lock:
+                if any(key not in cls._verified_shards or self._cache_expired(cls._verified_shards[key])
+                       or cls._managed_shards[key]["failed"] for key in paths):
+                    raise ContractValidationError("native shard cache startup is incomplete")
+                for key in paths:
+                    cls._managed_shards[key]["ready"] = True
+                if cls._cache_thread is None or not cls._cache_thread.is_alive():
+                    cls._cache_stop.clear()
+                    cls._cache_thread = threading.Thread(target=cls._cache_background,
+                        name="formowl-native-shard-cache", daemon=True)
+                    cls._cache_thread.start()
+            cls._cache_wake.set()
+            return self
+        except BaseException as exc:
+            self._cache_lease_paths = tuple(paths)
+            self.close_cache()
+            if isinstance(exc, OSError):
+                raise ContractValidationError("native shard cache startup is unavailable") from exc
+            raise
+
+    def close_cache(self):
+        cls = _IngestionExactCellLookup
+        with cls._verified_shard_lock:
+            if getattr(self, "_cache_lease_closed", True):
+                return
+            self._cache_lease_closed = True
+            for key in self._cache_lease_paths:
+                context = cls._managed_shards.get(key)
+                if context is not None:
+                    context["leases"] -= 1
+                    if not context["leases"]:
+                        cls._drop_cache_entry(key)
+                        del cls._managed_shards[key]
+                        cls._verified_shard_bytes -= 4096
+            thread = cls._cache_thread
+            if not cls._managed_shards:
+                cls._cache_stop.set()
+            cls._cache_wake.set()
+        if thread is not None and cls._cache_stop.is_set() and thread is not threading.current_thread():
+            thread.join(timeout=5)
+            if thread.is_alive():
+                raise ContractValidationError("native shard cache worker did not stop")
+
+    @classmethod
+    def _cache_expired(cls, entry):
+        return (entry["uses"] >= cls._CACHE_REVERIFY_USES
+                or time.monotonic() - entry["verified_at"] >= cls._CACHE_REVERIFY_SECONDS)
+
+    @classmethod
+    def _cache_background(cls):
+        while not cls._cache_stop.is_set():
+            with cls._verified_shard_lock:
+                due = []
+                now = time.monotonic()
+                for key, context in cls._managed_shards.items():
+                    entry = cls._verified_shards.get(key)
+                    if context["failed"] or key in cls._cache_inflight:
+                        continue
+                    if context["urgent"] or (entry is not None and (entry["uses"] >= cls._CACHE_REFRESH_USES
+                            or now - entry["verified_at"] >= cls._CACHE_REFRESH_SECONDS)):
+                        due.append((not context["urgent"], entry["verified_at"] if entry else 0, key, context))
+                selected = min(due, key=lambda item: item[:3]) if due else None
+            if selected is None:
+                cls._cache_wake.wait(0.5)
+                cls._cache_wake.clear()
+                continue
+            _, _, key, context = selected
+            generation = context["generation"]
+            def check():
+                if cls._cache_stop.is_set():
+                    raise RuntimeError("native shard cache verification cancelled")
+            try:
+                context["lookup"]._verify_cache_shard(context["kind"], context["shard"],
+                    matching_keys=set(), check=check, origin="reverify", expected_context=context)
+            except Exception:
+                # Verification itself quarantines current-generation I/O/seal
+                # failures. Closing/cancelled old generations are never retried.
+                if cls._cache_stop.is_set():
+                    return
+                with cls._verified_shard_lock:
+                    if (cls._managed_shards.get(key) is context and context["generation"] is generation
+                            and not context["failed"] and key not in cls._cache_inflight):
+                        cls._drop_cache_entry(key)
+                        context["failed"] = True
+                        cls._cache_counters["error"] += 1
+
+    @staticmethod
+    def _build_prefix_index(index, check=None):
+        # The shard already selects the first hash byte. Partition on the next
+        # 12 bits, keeping original ordinals stable inside every bucket.
+        count = len(index) // 115
+        prefix = cursors = None
+        try:
+            if count >= 2**32:
+                raise ContractValidationError("native shard cache capacity exceeded")
+            prefix = bytearray(4097 * 4 + count * 4)
+            cursors = bytearray(4096 * 4)
+            for ordinal in range(count):
+                if check is not None and ordinal % 128 == 0:
+                    check()
+                bucket = int(index[ordinal * 115 + 9:ordinal * 115 + 12], 16)
+                position = bucket * 4
+                value = int.from_bytes(cursors[position:position + 4], "big") + 1
+                cursors[position:position + 4] = value.to_bytes(4, "big")
+            total = 0
+            for bucket in range(4096):
+                position = bucket * 4
+                size = int.from_bytes(cursors[position:position + 4], "big")
+                prefix[position:position + 4] = total.to_bytes(4, "big")
+                cursors[position:position + 4] = total.to_bytes(4, "big")
+                total += size
+            prefix[4096 * 4:4097 * 4] = total.to_bytes(4, "big")
+            for ordinal in range(count):
+                if check is not None and ordinal % 128 == 0:
+                    check()
+                bucket = int(index[ordinal * 115 + 9:ordinal * 115 + 12], 16)
+                position = bucket * 4
+                cursor = int.from_bytes(cursors[position:position + 4], "big")
+                target = 4097 * 4 + cursor * 4
+                prefix[target:target + 4] = ordinal.to_bytes(4, "big")
+                cursors[position:position + 4] = (cursor + 1).to_bytes(4, "big")
+            if check is not None:
+                check()
+            return prefix
+        except BaseException:
+            prefix = None
+            raise
+        finally:
+            # Tracebacks must not retain uncharged partial arrays on failure.
+            index = cursors = None
+
+    def _verify_cache_shard(self, kind, shard, *, matching_keys, check=None,
+                            maximum_matching_records=None, origin="query", expected_context=None):
+        cls = _IngestionExactCellLookup
+        path, key, seal = self._cache_binding(kind, shard)
+        token, entry, index, reserved, published = None, None, None, 0, False
+        prefix_index = None
+        context = generation = None
+        admission_conflict = False
+        try:
+            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+                info = os.fstat(stream.fileno())
+                identity = cls._shard_identity(info)
+                if not stat.S_ISREG(info.st_mode) or identity != cls._shard_identity(path.lstat()):
+                    raise ContractValidationError("ingestion exact cell lookup shard is unavailable")
+                with cls._cache_locked(check, poll=False):
+                    context = cls._managed_shards.get(key)
+                    if expected_context is not None and context is not expected_context:
+                        admission_conflict = True
+                        raise ContractValidationError("native shard cache verification superseded")
+                    if context is not None and context["failed"]:
+                        admission_conflict = True
+                        raise ContractValidationError("native shard cache shard is unavailable")
+                    if key in cls._cache_inflight:
+                        admission_conflict = True
+                        raise ContractValidationError("native shard cache verification is in progress")
+                    entry = cls._verified_shards.get(key)
+                    if entry is not None and (entry["identity"] != identity or entry["seal"] != seal):
+                        cls._drop_cache_entry(key)
+                        entry = None
+                    generation = context["generation"] if context is not None else None
+                    token = {"cancelled": False}
+                    cls._cache_inflight[key] = token
+                    # Charge both retained arrays plus the fixed counting
+                    # scratch before allocating; retain this peak reservation.
+                    needed = seal[4] * 119 + 4097 * 4 + 4096 * 4
+                    charge = needed + 256 + 2 * sys.getsizeof(key) + 4096
+                    if entry is not None:
+                        entry["readers"] += 1
+                        index = entry["index"]
+                        prefix_index = entry["prefix_index"]
+                    elif needed <= cls._CACHE_ENTRY_MAX_BYTES and charge <= cls._CACHE_MAX_BYTES:
+                        while cls._verified_shards and (cls._verified_shard_bytes + charge > cls._CACHE_MAX_BYTES
+                                or cls._cache_allocations >= cls._CACHE_MAX_ENTRIES):
+                            oldest = next(iter(cls._verified_shards))
+                            cls._drop_cache_entry(oldest, invalidated=False)
+                            cls._cache_counters["evict"] += 1
+                        if cls._verified_shard_bytes + charge <= cls._CACHE_MAX_BYTES and cls._cache_allocations < cls._CACHE_MAX_ENTRIES:
+                            cls._verified_shard_bytes += charge
+                            cls._cache_allocations += 1
+                            reserved = charge
+                            index = bytearray(seal[4] * 115)
+                    if index is None:
+                        cls._cache_counters["oversize"] += 1
+                        if context is not None:
+                            raise ContractValidationError("native shard cache capacity exceeded")
+                    cls._cache_counters["fullscan_attempt"] += 1
+                    cls._cache_counters[origin + "_attempt"] += 1
+                    if origin == "query":
+                        cls._cache_counters["query_fullscan_attempt"] += 1
+                result = self._scan_matching_shard_records(kind, shard, matching_keys=matching_keys,
+                    check=check, maximum_matching_records=maximum_matching_records,
+                    _index=index if entry is None else None, _stream=stream, _verify_only=True)
+                if index is not None and entry is None:
+                    prefix_index = self._build_prefix_index(index, check)
+                if (identity != cls._shard_identity(os.fstat(stream.fileno()))
+                        or identity != cls._shard_identity(path.lstat())
+                        or seal != self._cache_binding(kind, shard)[2]):
+                    raise ContractValidationError("ingestion exact cell lookup shard seal mismatch")
+                if check is not None:
+                    check()
+                with cls._cache_locked(check):
+                    if (token["cancelled"] or cls._cache_inflight.get(key) is not token
+                            or (context is not None and (cls._managed_shards.get(key) is not context
+                                or context["generation"] is not generation or context["failed"]))):
+                        raise ContractValidationError("native shard cache verification superseded")
+                    if index is not None:
+                        if entry is None:
+                            entry_new = {"identity": identity, "seal": seal, "index": index, "prefix_index": prefix_index, "charge": reserved,
+                                "readers": 0, "resident": True, "invalidated": False}
+                        else:
+                            entry_new = entry
+                            entry_new["resident"] = True
+                        entry_new.update(verified_at=time.monotonic(), uses=int(origin == "query"))
+                        cls._verified_shards[key] = entry_new
+                        cls._verified_shards.move_to_end(key)
+                        published = True
+                    if context is not None:
+                        context["urgent"] = False
+                    cls._cache_counters["fullscan_success"] += 1
+                    cls._cache_counters[origin + "_success"] += 1
+                return result
+        except (OSError, ContractValidationError) as exc:
+            with cls._verified_shard_lock:
+                current = cls._managed_shards.get(key)
+                if not admission_conflict and (token is None or (not token["cancelled"] and (context is None or
+                        current is context and context["generation"] is generation))):
+                    cls._drop_cache_entry(key)
+                    if current is not None:
+                        current["failed"] = True
+                    cls._cache_counters["error"] += 1
+            if isinstance(exc, OSError):
+                raise ContractValidationError("ingestion exact cell lookup shard is unavailable") from exc
+            raise
+        except Exception:
+            # A background unexpected failure is terminal for this generation;
+            # query deadline interruption and normal close are not corruption.
+            if origin == "reverify" and not cls._cache_stop.is_set():
+                with cls._verified_shard_lock:
+                    if (context is not None and cls._managed_shards.get(key) is context
+                            and context["generation"] is generation and not context["failed"]
+                            and token is not None and not token["cancelled"]):
+                        cls._drop_cache_entry(key)
+                        context["failed"] = True
+                        cls._cache_counters["error"] += 1
+            raise
+        finally:
+            with cls._verified_shard_lock:
+                index = prefix_index = None  # Release both buffers before uncharging.
+                if reserved and not published:
+                    cls._verified_shard_bytes -= reserved
+                    cls._cache_allocations -= 1
+                if entry is not None:
+                    cls._unpin_cache_entry(entry)
+                if token is not None and cls._cache_inflight.get(key) is token:
+                    del cls._cache_inflight[key]
+
+    def _read_matching_shard_records(self, kind, shard, *, matching_keys, check=None,
+                                     maximum_matching_records=None):
+        if not matching_keys or (kind, shard) not in self._shards:
+            return ()
+        cls = _IngestionExactCellLookup
+        path, key, seal = self._cache_binding(kind, shard)
+        entry = index = prefix_index = None
+        handled = False
+        try:
+            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+                info = os.fstat(stream.fileno())
+                identity = cls._shard_identity(info)
+                if not stat.S_ISREG(info.st_mode) or identity != cls._shard_identity(path.lstat()):
+                    raise ContractValidationError("ingestion exact cell lookup shard is unavailable")
+                with cls._cache_locked(check):
+                    context = cls._managed_shards.get(key)
+                    candidate = cls._verified_shards.get(key)
+                    if candidate is not None and (candidate["identity"] != identity or candidate["seal"] != seal):
+                        cls._drop_cache_entry(key)
+                        candidate = None
+                        if context is not None:
+                            handled = True
+                            raise ContractValidationError("native shard cache identity changed")
+                    if context is not None and context["failed"]:
+                        handled = True
+                        raise ContractValidationError("native shard cache shard is unavailable")
+                    expired = candidate is not None and cls._cache_expired(candidate)
+                    if context is not None and (candidate is None or expired):
+                        cls._cache_counters["miss"] += 1
+                        cls._cache_counters["expired_reject"] += int(expired)
+                        context["urgent"] = True
+                        cls._cache_wake.set()
+                        handled = True
+                        raise ContractValidationError("native shard cache shard is not fresh")
+                    if candidate is not None and not expired:
+                        entry = candidate
+                        entry["readers"] += 1
+                        entry["uses"] += 1
+                        index = entry["index"]
+                        prefix_index = entry["prefix_index"]
+                        cls._verified_shards.move_to_end(key)
+                        cls._cache_counters["hit_attempt"] += 1
+                        if context is not None and entry["uses"] >= cls._CACHE_REFRESH_USES:
+                            cls._cache_wake.set()
+                    else:
+                        cls._cache_counters["miss"] += 1
+                if entry is None:
+                    # Existing non-web callers retain bounded lazy synchronous
+                    # verification. Managed web queries never take this branch.
+                    handled = True
+                    return self._verify_cache_shard(kind, shard, matching_keys=matching_keys, check=check,
+                        maximum_matching_records=maximum_matching_records)
+                def positions(value):
+                    if check is not None:
+                        check()
+                    bucket = int(value[9:12], 16)
+                    begin = int.from_bytes(prefix_index[bucket * 4:bucket * 4 + 4], "big")
+                    end = int.from_bytes(prefix_index[bucket * 4 + 4:bucket * 4 + 8], "big")
+                    for cursor in range(begin, end):
+                        if check is not None:
+                            check()
+                        offset = 4097 * 4 + cursor * 4
+                        position = int.from_bytes(prefix_index[offset:offset + 4], "big") * 115
+                        if index[position:position + 71] == value:
+                            yield position
+                    if check is not None:
+                        check()
+                records, overflow = [], False
+                for position in heapq.merge(*(positions(value.encode("ascii")) for value in matching_keys)):
+                    if check is not None:
+                        check()
+                    if identity != cls._shard_identity(os.fstat(stream.fileno())):
+                        raise ContractValidationError("ingestion exact cell lookup shard seal mismatch")
+                    offset = int.from_bytes(index[position + 71:position + 79], "big")
+                    length = int.from_bytes(index[position + 79:position + 83], "big")
+                    stream.seek(offset)
+                    line = stream.read(length)
+                    if (len(line) != length or hashlib.sha256(line).digest() != index[position + 83:position + 115]
+                            or identity != cls._shard_identity(os.fstat(stream.fileno()))):
+                        raise ContractValidationError("ingestion exact cell lookup shard seal mismatch")
+                    record, record_key = self._decode_shard_record(kind, line)
+                    if record_key.encode("ascii") != index[position:position + 71]:
+                        raise ContractValidationError("ingestion exact cell lookup shard seal mismatch")
+                    if maximum_matching_records is not None and len(records) >= maximum_matching_records:
+                        overflow = True
+                    else:
+                        records.append(record)
+                if (identity != cls._shard_identity(os.fstat(stream.fileno()))
+                        or identity != cls._shard_identity(path.lstat()) or seal != self._cache_binding(kind, shard)[2]):
+                    raise ContractValidationError("ingestion exact cell lookup shard seal mismatch")
+                if check is not None:
+                    check()
+                with cls._cache_locked(check, poll=False):
+                    if entry["invalidated"]:
+                        raise ContractValidationError("native shard cache selected read invalidated")
+                    cls._cache_counters["hit_overflow" if overflow else "hit_success"] += 1
+                return None if overflow else tuple(records)
+        except OSError as exc:
+            with cls._verified_shard_lock:
+                cls._drop_cache_entry(key)
+                context = cls._managed_shards.get(key)
+                if context is not None:
+                    context["failed"] = True
+                cls._cache_counters["error"] += 1
+            raise ContractValidationError("ingestion exact cell lookup shard is unavailable") from exc
+        except ContractValidationError:
+            # Managed misses/expiry are availability states, not corrupt data.
+            # Actual selected-read failures invalidate and quarantine the shard.
+            if not handled:
+                with cls._verified_shard_lock:
+                    cls._drop_cache_entry(key)
+                    context = cls._managed_shards.get(key)
+                    if context is not None:
+                        context["failed"] = True
+                    cls._cache_counters["error"] += 1
+            raise
+        finally:
+            if entry is not None:
+                with cls._verified_shard_lock:
+                    index = prefix_index = None
+                    cls._unpin_cache_entry(entry)
+
+    @staticmethod
+    def _decode_shard_record(kind, line):
+        try:
+            record = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ContractValidationError(
+                "ingestion exact cell lookup shard is invalid"
+            ) from exc
+        if kind == "value":
+            if (
+                not isinstance(record, list)
+                or len(record) != 3
+                or not _is_sha256(record[0])
+                or not _is_sha256(record[1])
+                or not isinstance(record[2], bool)
+            ):
+                raise ContractValidationError(
+                    "ingestion exact cell lookup value record is invalid"
+                )
+            record_key = record[0]
+        else:
+            if (
+                not isinstance(record, list)
+                or len(record) not in {6, 7}
+                or record[0] not in {"row", "cell"}
+                or not _is_sha256(record[1])
+                or not isinstance(record[-1], bool)
+            ):
+                raise ContractValidationError(
+                    "ingestion exact cell lookup row record is invalid"
+                )
+            record_key = record[1]
+        return record, record_key
+
+    def _scan_matching_shard_records(
         self,
         kind: str,
         shard: str,
@@ -8155,6 +8909,9 @@ class _IngestionExactCellLookup:
         matching_keys: set[str],
         check: Callable[[], None] | None = None,
         maximum_matching_records: int | None = None,
+        _index: bytearray | None = None,
+        _stream=None,
+        _verify_only=False,
     ) -> tuple[Any, ...] | None:
         """Seal every byte, decoding only the bounded keyed shortlist.
 
@@ -8164,7 +8921,7 @@ class _IngestionExactCellLookup:
         complete byte/count seal passes. Noncanonical prefixes take the parser
         path rather than silently dropping a possible escaped JSON key.
         """
-        if not matching_keys:
+        if not matching_keys and not _verify_only:
             return ()
         binding = self._shards.get((kind, shard))
         if binding is None:
@@ -8183,12 +8940,12 @@ class _IngestionExactCellLookup:
         )
         overflow = False
         checked_size = 0
-        if check is not None:
+        if check is not None and _stream is None:
             check()
         try:
             if path.is_symlink():
                 raise ContractValidationError("ingestion exact cell lookup shard is unavailable")
-            with path.open("rb") as stream:
+            with (path.open("rb") if _stream is None else nullcontext(_stream)) as stream:
                 # Native index records hold IDs/hashes, not source content.
                 # Bound a corrupt unterminated line as well as retained records.
                 def sealed_lines():
@@ -8228,40 +8985,19 @@ class _IngestionExactCellLookup:
                     if record_count > binding["record_count"]:
                         raise ContractValidationError("ingestion exact cell lookup shard count mismatch")
                     candidate = prefix.match(line)
+                    if _index is not None and candidate is not None:
+                        offset = (record_count - 1) * 115
+                        _index[offset:offset + 115] = (candidate[1] + (size - len(line)).to_bytes(8, "big")
+                            + len(line).to_bytes(4, "big") + hashlib.sha256(line).digest())
                     if candidate is not None and candidate[1] not in matching_bytes:
                         continue
                     if check is not None:
                         check()
-                    try:
-                        record = json.loads(line)
-                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                        raise ContractValidationError(
-                            "ingestion exact cell lookup shard is invalid"
-                        ) from exc
-                    if kind == "value":
-                        if (
-                            not isinstance(record, list)
-                            or len(record) != 3
-                            or not _is_sha256(record[0])
-                            or not _is_sha256(record[1])
-                            or not isinstance(record[2], bool)
-                        ):
-                            raise ContractValidationError(
-                                "ingestion exact cell lookup value record is invalid"
-                            )
-                        record_key = record[0]
-                    else:
-                        if (
-                            not isinstance(record, list)
-                            or len(record) not in {6, 7}
-                            or record[0] not in {"row", "cell"}
-                            or not _is_sha256(record[1])
-                            or not isinstance(record[-1], bool)
-                        ):
-                            raise ContractValidationError(
-                                "ingestion exact cell lookup row record is invalid"
-                            )
-                        record_key = record[1]
+                    record, record_key = self._decode_shard_record(kind, line)
+                    if _index is not None and candidate is None:
+                        offset = (record_count - 1) * 115
+                        _index[offset:offset + 115] = (record_key.encode("ascii") + (size - len(line)).to_bytes(8, "big")
+                            + len(line).to_bytes(4, "big") + hashlib.sha256(line).digest())
                     if record_key in matching_keys:
                         if maximum_matching_records is not None and len(records) >= maximum_matching_records:
                             overflow = True
@@ -8332,6 +9068,13 @@ class _IngestionExactCellLookup:
             )
         cache[key] = records
         return records
+def start_issue56_native_shard_cache(revision):
+    """Startup-only all-shard verification; caller owns the returned close lease."""
+    if revision is None or not revision.exact_lookup_manifest:
+        return None
+    return _IngestionExactCellLookup(revision).start_cache()
+
+
 def _build_candidate_table_ledger(session: Any) -> dict[str, Any] | None:
     hashes = dict(session.authorized_observation_hashes)
     lineages = {

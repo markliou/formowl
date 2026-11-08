@@ -1091,6 +1091,40 @@ def _candidate_fact_identity_values(row, properties, deadline=None):
                 yield token
 
 
+def _add_candidate_fact_quote_mentions(rows, postings, deadline=None):
+    """Extend only existing identity keys with exact whitespace tokens from bound spans."""
+    from itertools import chain
+
+    if not postings:
+        return 0
+    added = 0
+    for index, row in enumerate(rows):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("candidate fact deadline")
+        own = set(_candidate_fact_identity_values(row, row["_identity_properties"], deadline))
+        facts = chain.from_iterable(row["fields"].values())
+        subject = row.get("subject_identity")
+        if subject is not None:
+            facts = chain(facts, subject["sources"])
+        mentions = set()
+        for fact in facts:
+            for span in fact.get("evidence_spans", ()):
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError("candidate fact deadline")
+                quote = span.get("quote")
+                if isinstance(quote, str):
+                    mentions.update(token for token in _candidate_fact_normalize(quote).split()
+                                    if token in postings and token not in own)
+        for key in mentions:
+            postings[key].append(index)
+        added += len(mentions)
+    if added:
+        # The intersection lookup uses bisect over ascending row indices.
+        for indexes in postings.values():
+            indexes.sort()
+    return added
+
+
 @dataclass(frozen=True)
 class _CandidateFactRows(Sequence[Mapping[str, Any]]):
     """Private lazy row references and startup postings; never cache row objects."""
@@ -1214,16 +1248,19 @@ def bind_issue56_candidate_fact_exports(
             raise ContractValidationError("candidate fact rows seal mismatch")
         if count != manifest.get("row_count") or offset != identity[2]:
             raise ContractValidationError("candidate fact row count mismatch")
-    rows = _CandidateFactRows(tuple(item[:3] for item in pending), tuple(references),
-                              {value: tuple(indexes) for value, indexes in postings.items()})
+    rows = _CandidateFactRows(tuple(item[:3] for item in pending), tuple(references), {})
+    # Reuse the sealed offset reader: the second pass verifies each row and
+    # never retains the corpus of quotes or adds free-text vocabulary.
+    mention_count = _add_candidate_fact_quote_mentions(rows, postings)
+    rows = replace(rows, postings={value: tuple(indexes) for value, indexes in postings.items()})
     # An approximate Python object footprint, not RSS; no identities or paths logged.
     estimated = sys.getsizeof(rows.references) + sum(sys.getsizeof(ref) + sum(sys.getsizeof(v) for v in ref)
                                                    for ref in rows.references)
     estimated += sys.getsizeof(rows.postings) + sum(sys.getsizeof(value) + sys.getsizeof(indexes)
         + sum(sys.getsizeof(index) for index in indexes) for value, indexes in rows.postings.items())
     logging.getLogger(__name__).warning("candidate_fact_index exports=%d rows=%d identities=%d postings=%d "
-        "rows_bytes=%d estimated_index_bytes=%d", len(rows.exports), len(rows), len(rows.postings),
-        sum(len(indexes) for indexes in rows.postings.values()), total_row_bytes, estimated)
+        "mention_postings=%d rows_bytes=%d estimated_index_bytes=%d", len(rows.exports), len(rows), len(rows.postings),
+        sum(len(indexes) for indexes in rows.postings.values()), mention_count, total_row_bytes, estimated)
     return replace(revision, candidate_fact_rows=rows,
         candidate_fact_pin=expected_sha256)
 
@@ -1240,13 +1277,14 @@ def lookup_issue56_candidate_fact_rows(revision: Issue56IngestionRevision, requi
             postings = rows.postings
         else:
             # Explicit in-memory fixture replacements use the same posting policy.
-            postings = {term: [] for term in terms}
+            postings = {}
             for index, row in enumerate(rows):
                 if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                     return ()
                 values = set(_candidate_fact_identity_values(row, row["_identity_properties"], deadline_monotonic))
                 for term in terms & values:
-                    postings[term].append(index)
+                    postings.setdefault(term, []).append(index)
+            _add_candidate_fact_quote_mentions(rows, postings, deadline_monotonic)
         # Descriptions with no exact key cannot veto a recognized identity.
         keys = sorted((term for term in terms if postings.get(term)), key=lambda term: (len(postings[term]), term))
         if not keys:
@@ -1276,6 +1314,7 @@ def lookup_issue56_candidate_fact_rows(revision: Issue56IngestionRevision, requi
                     reason_callback(None, selected_term_hash=sha256_json(chosen))
                 except Exception:
                     pass  # Observer failures cannot change the lookup result.
+            keys = [chosen]
             indexes = postings[chosen]
             if len(indexes) > 128:
                 return ()
@@ -1285,6 +1324,14 @@ def lookup_issue56_candidate_fact_rows(revision: Issue56IngestionRevision, requi
                 rows._unchanged(export_index)
         else:
             selected = [rows[index] for index in indexes]
+        matched_keys = set(keys)
+        selected = [{**row, "_quote_mention": not matched_keys.issubset(
+            _candidate_fact_identity_values(row, row["_identity_properties"], deadline_monotonic))}
+            for row in selected]
+        if isinstance(rows, _CandidateFactRows) and any(row["_quote_mention"] for row in selected):
+            # The known identity can originate in another export than its mention.
+            for export_index in range(len(rows.exports)):
+                rows._unchanged(export_index)
     except (OSError, ValueError, ContractValidationError):
         # A changed/unavailable disk row cannot lend candidate values to this lookup.
         return ()
