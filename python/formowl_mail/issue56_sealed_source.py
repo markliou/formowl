@@ -13,7 +13,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from builtins import BaseExceptionGroup
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -1132,6 +1132,9 @@ class _CandidateFactRows(Sequence[Mapping[str, Any]]):
     references: tuple
     postings: Mapping[str, tuple[int, ...]]
 
+    row_indexes: Mapping[str, int] = field(default_factory=dict, repr=False)
+    aliases: tuple[tuple[str, str], ...] = ()
+
     def __len__(self):
         return len(self.references)
 
@@ -1140,13 +1143,13 @@ class _CandidateFactRows(Sequence[Mapping[str, Any]]):
         if _candidate_fact_file_identity(path.lstat()) != identity:
             raise ContractValidationError("candidate fact rows changed after binding")
 
-    def _read(self, index, deadline=None):
+    def _read(self, index, deadline=None, *, source_file=None):
         export_index, offset, length, digest = self.references[index]
         path, identity, properties = self.exports[export_index]
         if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError("candidate fact deadline")
         self._unchanged(export_index)
-        with path.open("rb") as source:
+        with (path.open("rb") if source_file is None else nullcontext(source_file)) as source:
             if _candidate_fact_file_identity(os.fstat(source.fileno())) != identity:
                 raise ContractValidationError("candidate fact rows changed after binding")
             source.seek(offset)
@@ -1160,6 +1163,39 @@ class _CandidateFactRows(Sequence[Mapping[str, Any]]):
         if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError("candidate fact deadline")
         return {**row, "_identity_properties": properties}
+
+    def read_selected(self, row_ids, deadline):
+        """Read one already-scoped record page in physical order, retaining per-row seals."""
+        by_export = {}
+        for row_id in row_ids:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("candidate fact deadline")
+            index = self.row_indexes[row_id]
+            export, offset, length, _ = self.references[index]
+            by_export.setdefault(export, {})[index] = (offset, length, row_id)
+
+        result = {}
+        for export, refs in by_export.items():
+            path, identity, _ = self.exports[export]
+            ordered = sorted(refs.items(), key=lambda pair: pair[1][0])
+            self._unchanged(export)
+            with path.open("rb") as source:
+                fd = source.fileno()
+                if _candidate_fact_file_identity(os.fstat(fd)) != identity:
+                    raise ContractValidationError("candidate fact rows changed after binding")
+                if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_WILLNEED"):
+                    for _, (offset, length, _) in ordered:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("candidate fact deadline")
+                        try:
+                            os.posix_fadvise(fd, offset, length, os.POSIX_FADV_WILLNEED)
+                        except OSError:
+                            break  # Filesystems may decline the optional read-ahead hint.
+                for index, (_, _, row_id) in ordered:
+                    result[row_id] = self._read(index, deadline, source_file=source)
+        for export in by_export:
+            self._unchanged(export)
+        return result
 
     def __getitem__(self, index):
         if isinstance(index, slice):
@@ -1186,6 +1222,7 @@ def bind_issue56_candidate_fact_exports(
     if not isinstance(exports, list) or not 1 <= len(exports) <= 128:
         raise ContractValidationError("candidate fact exports are invalid")
     pending, total_row_bytes = [], 0
+    aliases = set()
     for entry in exports:
         path = Path(entry["manifest_path"])
         _, manifest = _read_sealed_json(path, expected_sha256=entry["manifest_sha256"],
@@ -1211,9 +1248,10 @@ def bind_issue56_candidate_fact_exports(
         if total_row_bytes > _MAX_CANDIDATE_FACT_ROW_BYTES:
             raise ContractValidationError("candidate fact export set exceeds the bounded intake")
         properties = tuple(sorted({prop for group in mapping.data.get("identity_groups", ()) for prop in group["properties"]}))
+        aliases.update((entry["label"], entry["property_id"]) for entry in mapping.data["aliases"])
         pending.append((rows_path, identity, properties, manifest))
     # Preflight the entire set before opening even the first potentially huge file.
-    references, postings, row_ids = [], {}, set()
+    references, postings, row_ids = [], {}, {}
     for export_index, (rows_path, identity, properties, manifest) in enumerate(pending):
         digest, offset, count = hashlib.sha256(), 0, 0
         with rows_path.open("rb") as source:
@@ -1238,7 +1276,7 @@ def bind_issue56_candidate_fact_exports(
                 for value in set(_candidate_fact_identity_values(row, properties)):
                     postings.setdefault(value, []).append(len(references))
                 references.append((export_index, offset, len(raw), _sha256_bytes(raw)))
-                row_ids.add(row["row_id"])
+                row_ids[row["row_id"]] = len(references) - 1
                 offset += len(raw)
                 count += 1
             if (_candidate_fact_file_identity(os.fstat(source.fileno())) != identity
@@ -1248,7 +1286,7 @@ def bind_issue56_candidate_fact_exports(
             raise ContractValidationError("candidate fact rows seal mismatch")
         if count != manifest.get("row_count") or offset != identity[2]:
             raise ContractValidationError("candidate fact row count mismatch")
-    rows = _CandidateFactRows(tuple(item[:3] for item in pending), tuple(references), {})
+    rows = _CandidateFactRows(tuple(item[:3] for item in pending), tuple(references), {}, row_ids, tuple(sorted(aliases)))
     # Reuse the sealed offset reader: the second pass verifies each row and
     # never retains the corpus of quotes or adds free-text vocabulary.
     mention_count = _add_candidate_fact_quote_mentions(rows, postings)

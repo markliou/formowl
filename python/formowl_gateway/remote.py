@@ -181,6 +181,8 @@ _STRUCTURED_TABLE_QUERY_INPUT_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "field": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "op": {"type": "string", "enum": ["eq", "gte", "lte", "contains"],
+                           "description": "Defaults to eq. Use contains for a substring; gte and lte are inclusive bounds on a date or quantity property. Use two filters on the same property for a range."},
                     "value": {"type": "string", "minLength": 1, "maxLength": 400},
                 },
                 "required": ["field", "value"],
@@ -1394,7 +1396,8 @@ def _validate_structured_table_query_argument(value: Any) -> None:
     for item in filters:
         if (
             not isinstance(item, Mapping)
-            or set(item) != {"field", "value"}
+            or set(item) not in ({"field", "value"}, {"field", "op", "value"})
+            or item.get("op", "eq") not in ("eq", "gte", "lte", "contains")
             or not isinstance(item["field"], str)
             or not item["field"].strip()
             or len(item["field"]) > 120

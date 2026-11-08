@@ -32,7 +32,7 @@ import uuid
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from formowl_contract import ContractValidationError, sha256_json
+from formowl_contract import ContractValidationError, redact_public_raw_references, sha256_json
 from formowl_contract.public_safety import (
     assert_no_public_raw_references,
     private_public_safety_rejection_summary,
@@ -2151,6 +2151,21 @@ class _TurnCitationPresentation:
             ):
                 raise RuntimeError("UAT citation presentation mapping conflict")
             display = self._project(canonical, mapping)
+            # Table snippets contain serialized JSON. Only translate the governed
+            # citation fields, never source quotes or user-provided cell values.
+            for key in ("evidence", "evidence_snippets"):
+                items = display.get(key)
+                if not isinstance(items, (tuple, list)):
+                    continue
+                for item in items:
+                    if not isinstance(item, Mapping) or item.get("source_type") != "candidate_fact_table":
+                        continue
+                    label, encoded = item["snippet"].split("\n", 1)
+                    table = json.loads(encoded)
+                    if "represented_records" in table:
+                        for entry in table["citations"]:
+                            entry["citation_hash"] = mapping[entry["citation_hash"]]
+                        item["snippet"] = label + "\n" + json.dumps(table, ensure_ascii=False, separators=(",", ":"))
             # Compaction already chose the evidence; smaller handles never admit more.
             # Full-read payloads retain their existing larger, sealed batch boundary.
             original_bytes = len(json.dumps(canonical, ensure_ascii=False, separators=(",", ":")).encode())
@@ -5393,6 +5408,9 @@ def _record_private_citation_stage(event: Mapping[str, Any]) -> None:
 
 # Exact static messages only: unknown errors never become diagnostic text.
 _PLANNER_REJECTION_CODES = {
+    "record range requires a date or quantity property": "range_property_type_invalid",
+    "invalid record range bound": "range_bound_invalid",
+    "native table supports only equality filters": "native_table_operator_unsupported",
     "Codex FormOwl tool arguments are invalid": "invalid_argument_keys",
     "UAT request contract is invalid": "invalid_contract",
     "semantic request contract shape is invalid": "contract_shape_invalid",
@@ -9730,7 +9748,8 @@ def _validate_table_query(table_query: Mapping[str, Any]) -> None:
     ):
         raise ContractValidationError("UAT table query is invalid")
     for item in filters:
-        if not isinstance(item, Mapping) or set(item) != {"field", "value"}:
+        if (not isinstance(item, Mapping) or set(item) not in ({"field", "value"}, {"field", "op", "value"})
+                or item.get("op", "eq") not in ("eq", "gte", "lte", "contains")):
             raise ContractValidationError("UAT table query is invalid")
         for key in ("field", "value"):
             value = item[key]
@@ -10041,13 +10060,13 @@ def _tool_request_fingerprint(
         "query_text": _normalized_plan_text(request.query_text),
     }
     if request.table_query is not None:
-        filters = sorted(
-            (
-                str(item["field"]),
-                str(item["value"]),
-            )
-            for item in request.table_query["filters"]
-        )
+        filters = []
+        for item in request.table_query["filters"]:
+            key = (str(item["field"]), str(item["value"]))
+            if item.get("op", "eq") != "eq":
+                key += (item["op"],)
+            filters.append(key)
+        filters.sort()
         projections = sorted(
             str(field_name)
             for field_name in request.table_query["projection_fields"]
@@ -11986,22 +12005,90 @@ def _candidate_fact_table_status(reason, **fields):
         return
 
 
+def _candidate_table_for_model(item):
+    """Project the checked table without its server proof or observation identity."""
+    context = item.get("source_context")
+    if not isinstance(context, Mapping):
+        return item
+    if "record_citation_proof" not in context:
+        # Older checked record tables kept the entire citation list in the snippet.
+        encoded = item.get("snippet", "")
+        if not isinstance(encoded, str) or '"represented_records"' not in encoded:
+            return item
+        try:
+            label, data = encoded.split("\n", 1)
+            table = json.loads(data)
+            if "represented_records" not in table:
+                return item
+            for i, entry in enumerate(table["citations"]):
+                sent = entry.get("mail_sent_at")
+                date_label = sent[:10] if isinstance(sent, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", sent[:10]) else None
+                table["citations"][i] = {"ref": entry["ref"], "citation_hash": entry["citation_hash"],
+                                         "source_label": date_label}
+            item = {**item, "snippet": label + "\n" + json.dumps(table, ensure_ascii=False, separators=(",", ":"))}
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return item  # The independent closure check rejects malformed tables.
+    return {**{key: value for key, value in item.items() if key != "source_observation_id"},
+            "source_context": {key: value for key, value in context.items()
+                               if key not in {"record_citation_proof", "record_proof_hash"}}}
+
+
 def _candidate_fact_table_refs(item, allowed):
     """Recognize only the bounded server table with a root-bound citation closure."""
     try:
         context = item["source_context"]
         label, raw = item["snippet"].split("\n", 1)
-        if (label != "候選事實（由標註取得，未經人工審核）" or len(raw.encode()) > _CANDIDATE_FACT_TABLE_MAX_BYTES
+        if (label not in {"候選事實（由標註取得，未經人工審核）", "來源記錄（含原生表格，語意對應待審）"} or len(raw.encode()) > _CANDIDATE_FACT_TABLE_MAX_BYTES
                 or any(context.get(key) is not False for key in (
                     "semantic_correctness_verified", "exact_field_proof", "deterministic_exact", "canonical"))
                 or any(not re.fullmatch(r"sha256:[0-9a-f]{64}", context.get(key, ""))
                        for key in ("candidate_fact_group", "candidate_fact_pin"))):
             return None
         table = json.loads(raw)
+        record_table = "represented_records" in table
+        names = table.get("names", {})
+        if record_table and (table.get("mapping_status") != "pending_review" or not isinstance(names, dict)
+                or "names" not in table or any(not re.fullmatch(r"n[1-9][0-9]*", key)
+                    or not isinstance(name, str) or not name.strip() or redact_public_raw_references(name)[1]
+                    for key, name in names.items()) or len(set(names.values())) != len(names)):
+            return None
+        used_names = set()
+
+        def raw_column_valid(value):
+            if not record_table:
+                return "n" not in value
+            if "n" not in value:
+                return False
+            ref = value["n"]
+            if ref is None:
+                return True
+            if not isinstance(ref, str) or ref not in names:
+                return False
+            used_names.add(ref)
+            return True
+
         columns, rows, citations = table["columns"], table["rows"], table["citations"]
+        result_set = table.get("result_set")
+        if "result_set" in table and (not record_table or not isinstance(result_set, dict)
+                or "record_citation_proof" not in context):
+            return None
+        export_basis = bool(record_table and result_set and re.fullmatch(r"sha256:[0-9a-f]{64}",
+            context.get("record_citation_proof", {}).get("export_revision", "")))
         if (not isinstance(columns, list) or not columns or any(not isinstance(key, str) for key in columns)
-                or len(set(columns)) != len(columns) or not isinstance(rows, list) or not 1 <= len(rows) <= 128
-                or not isinstance(citations, list) or not 1 <= len(citations) <= 128):
+                or len(set(columns)) != len(columns) or not isinstance(rows, list) or len(rows) > 128 or not rows and not result_set
+                or not isinstance(citations, list) or not (0 if export_basis and not rows else 1) <= len(citations) <= 128):
+            return None
+        if record_table and "record_citation_proof" in context:
+            proof = context["record_citation_proof"]
+            if (context["record_proof_hash"] != sha256_json(proof)
+                    or citations != [{key: entry[key] for key in ("ref", "citation_hash", "source_label")}
+                                     for entry in proof["citations"]]
+                    or any(entry["source_label"] is not None and not re.fullmatch(
+                        r"(?:[a-f0-9]{8}|[0-9]{4}-[0-9]{2}-[0-9]{2})", entry["source_label"])
+                           for entry in citations)):
+                return None
+            citations = proof["citations"]
+        elif "record_citation_proof" in context or "record_proof_hash" in context:
             return None
         refs, observations = {}, set()
         for citation in citations:
@@ -12021,7 +12108,8 @@ def _candidate_fact_table_refs(item, allowed):
             observations.add(observation)
         required = context["required_citation_hashes"]
         if (not isinstance(required, list) or len(required) != len(set(required))
-                or set(required) != set(refs.values()) or item.get("citation_hash") not in required):
+                or set(required) != set(refs.values()) or (item.get("citation_hash") not in required
+                        if required else not export_basis or "citation_hash" in item or "source_observation_id" in item)):
             return None
         used = set()
         citation_spans = {entry["ref"]: entry["spans"] for entry in citations}
@@ -12060,7 +12148,8 @@ def _candidate_fact_table_refs(item, allowed):
                 if not isinstance(cells, list):
                     return None
                 for cell in cells:
-                    if "value" not in cell or set(cell) - {"value", "unit", "times", "quotes"}:
+                    if ("value" not in cell or not raw_column_valid(cell)
+                            or set(cell) - {"value", "n", "unit", "times", "quotes"}):
                         return None
                     if "times" in cell and (not isinstance(cell["times"], list) or any(
                             set(entry) != {"normalized", "role"}
@@ -12068,12 +12157,85 @@ def _candidate_fact_table_refs(item, allowed):
                             for entry in cell["times"])):
                         return None
                     quotes(cell)
+            for key in ("parts", "linked_purchase_orders"):
+                if key not in row:
+                    continue
+                if not isinstance(row[key], list):
+                    return None
+                for link in row[key]:
+                    if (not isinstance(link, dict) or not raw_column_valid(link)
+                            or set(link) - {"value", "n", "via", "quotes"}
+                            or not isinstance(link["value"], str) or not link["value"]
+                            or link["via"] not in ("value", "quote_mention")):
+                        return None
+                    quotes(link)
             subject = row.get("subject")
             if subject is not None:
                 if (set(subject) != {"surfaces", "quotes"} or not isinstance(subject["surfaces"], list)
                         or not subject["surfaces"] or any(not isinstance(value, str) or not value for value in subject["surfaces"])):
                     return None
                 quotes(subject)
+        if result_set is not None:
+            if (proof.get("result_set_hash") != sha256_json([table["total"], columns, names, result_set])
+                    or set(result_set) - {"total_groups", "shown_groups", "memberships", "groups"}
+                    or type(table["total"]) is not int or table["shown"] != len(rows)):
+                return None
+            groups = result_set["groups"]
+            k, j = result_set["total_groups"], result_set["shown_groups"]
+            memberships = result_set.get("memberships", table["total"])
+            if (type(memberships) is not int or memberships < table["total"]
+                    or type(k) is not int or type(j) is not int or not isinstance(groups, list)
+                    or not 0 <= j <= k <= memberships or j != len(groups)
+                    or (table["total"] < len(rows) if export_basis else table["total"] <= len(rows)) or not (j or rows)):
+                return None
+            count = 0
+            combinations = set()
+            for index, group in enumerate(groups):
+                keys = {"values", "count", "ref"}
+                if export_basis and group.get("ref") is None:
+                    keys.add("basis")
+                    if group.get("basis") != "export_verified":
+                        return None
+                if (set(group) != keys or type(group["count"]) is not int
+                        or group["count"] < 1 or not isinstance(group["values"], list)
+                        or len(group["values"]) != len(columns)):
+                    return None
+                ref = group["ref"]
+                if ref is None:
+                    if not export_basis and index < 128:
+                        return None
+                elif ref not in refs:
+                    return None
+                else:
+                    used.add(ref)
+                count += group["count"]
+                signature = []
+                for col, cells in zip(columns, group["values"]):
+                    if not isinstance(cells, list):
+                        return None
+                    for cell in cells:
+                        if (not {"value", "n"} <= set(cell) or set(cell) - {"value", "n", "link", "status"}
+                                or cell["value"] is not None and not isinstance(cell["value"], str)
+                                or not raw_column_valid(cell)):
+                            return None
+                        if "link" in cell and (cell["link"] not in {"value", "quote_mention"} or not cell["value"]
+                                or col not in {"part_number", "manufacturer_part_number", "po_number"}):
+                            return None
+                        if "status" in cell and (cell["status"] != "未連到料件" or cell["value"] is not None
+                                or cell["n"] is not None or "link" in cell
+                                or col not in {"part_number", "manufacturer_part_number"}):
+                            return None
+                    signature.append(frozenset((cell["value"], cell.get("status")) for cell in cells))
+                key = tuple(signature)
+                if key in combinations:
+                    return None
+                combinations.add(key)
+            if count > memberships or j == k and count != memberships:
+                return None
+        elif record_table and "result_set_hash" in context.get("record_citation_proof", {}):
+            return None
+        if record_table and used_names != set(names):
+            return None
         return set(refs.values()) if used == set(refs) else None
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
@@ -12092,7 +12254,7 @@ def compact_evidence_for_model(
               and item.get("source_type") == "candidate_fact_table"] if isinstance(content, (list, tuple)) else []
     def reserved_envelope(value, reservation):
         table, citations = reservation
-        result = {**value, content_key: [table, *value.get(content_key, ())]}
+        result = {**value, content_key: [_candidate_table_for_model(table), *value.get(content_key, ())]}
         result["citations"] = list(value.get("citations", ()))
         result["citations"].extend(item for item in citations if item not in result["citations"])
         return result
@@ -12102,7 +12264,7 @@ def compact_evidence_for_model(
         table, citations = _candidate_reservation
         allowed = {item if isinstance(item, str) else item.get("citation_hash", item.get("citation_id"))
                    for item in citations if isinstance(item, (str, Mapping))}
-        if (len(json.dumps(table, ensure_ascii=False).encode()) > _CANDIDATE_FACT_TABLE_MAX_BYTES
+        if (len(json.dumps(_candidate_table_for_model(table), ensure_ascii=False).encode()) > _CANDIDATE_FACT_TABLE_MAX_BYTES
                 or _candidate_fact_table_refs(table, allowed) is None):
             raise ContractValidationError("candidate fact reservation is invalid")
         byte_limit = _CANDIDATE_FACT_ENVELOPE_MAX_BYTES
@@ -12119,7 +12281,7 @@ def compact_evidence_for_model(
         table = tables[0]
         required = _candidate_fact_table_refs(table, allowed) if len(tables) == 1 else None
         reason = None
-        if len(json.dumps(table, ensure_ascii=False).encode()) > _CANDIDATE_FACT_TABLE_MAX_BYTES:
+        if len(json.dumps(_candidate_table_for_model(table), ensure_ascii=False).encode()) > _CANDIDATE_FACT_TABLE_MAX_BYTES:
             reason = "table_over_reserved_budget"
         elif (required is None or result.get("deterministic_exact")
                 or result.get("exact_result") is not None or "exact_inventory" in result):

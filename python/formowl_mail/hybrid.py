@@ -13139,10 +13139,10 @@ def _partition_structured_source_occurrence_table_query(
     filter_value_hashes: set[str] = set()
     normalized_filter_bindings: set[tuple[str, str]] = set()
     for index, raw_filter in enumerate(raw_filters):
-        if not isinstance(raw_filter, Mapping) or set(raw_filter) != {
-            "field",
-            "value",
-        }:
+        if isinstance(raw_filter, Mapping) and raw_filter.get("op", "eq") != "eq":
+            raise ContractValidationError("native table supports only equality filters")
+        if not isinstance(raw_filter, Mapping) or set(raw_filter) not in (
+                {"field", "value"}, {"field", "op", "value"}):
             raise ContractValidationError(
                 "source occurrence structured table query filter is invalid"
             )
