@@ -54,3 +54,4 @@ deploy/connected/secrets/*
 !deploy/connected/secrets/README.md
 deploy/connected/Caddyfile
 deploy/connected/compose.env
+/python/formowl_records/data/mapped_normalized_aliases.json

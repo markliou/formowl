@@ -686,6 +686,57 @@ class Issue56UatWebE2ETests(unittest.TestCase):
         self.assertNotIn("private", completed.stdout.casefold())
         self.assertNotIn("secret", completed.stdout.casefold())
 
+    def test_chromium_progress_and_authenticated_same_origin_polling(self) -> None:
+        class SlowModel(_SessionConversationModel):
+            def respond(self, **kwargs):
+                # Allow two polls in real Chromium while the synthetic provider is busy.
+                threading.Event().wait(5.2)
+                if kwargs["user_text"] == "failure":
+                    raise RuntimeError("private-fixture-value")
+                return super().respond(**kwargs)
+
+        # This module otherwise pins older budget arithmetic to 120 seconds.
+        with patch.object(uat_runtime_module, "_MAX_UAT_TURN_SECONDS", 240.0), \
+                patch.object(uat_runtime_module, "build_issue56_production_semantic_handlers",
+                             return_value=(_with_authorized_source_families(lambda _: {}, "mail"), None)), \
+                create_issue56_temporary_lan_query_service(SlowModel()) as service:
+            server = create_mail_human_uat_http_server("127.0.0.1", 0, service)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            origin = f"http://127.0.0.1:{server.server_address[1]}"
+            def get(path, headers):
+                conn = http.client.HTTPConnection(*server.server_address, timeout=3)
+                try:
+                    conn.request("GET", path, headers=headers)
+                    resp = conn.getresponse()
+                    return resp.status, resp.getheader("Set-Cookie"), resp.read()
+                finally:
+                    conn.close()
+            try:
+                _, first, _ = get("/", {})
+                _, second, _ = get("/", {})
+                headers = {"X-FormOwl-Progress": "1", "Origin": origin, "Cookie": first.split(";")[0]}
+                for change, expected in [({"Cookie": ""}, 401), ({"Origin": "http://other.test"}, 403),
+                                         ({"Sec-Fetch-Site": "cross-site"}, 403), ({"X-FormOwl-Progress": ""}, 403)]:
+                    self.assertEqual(get("/api/progress", {**headers, **change})[0], expected)
+                completed = subprocess.run(
+                    [shutil.which("node"), str(_CHROMIUM_ACCEPTANCE_RUNNER), "--live", "--basic-only", "--synthetic-progress"],
+                    capture_output=True, text=True, timeout=65,
+                    env={"PATH": os.environ.get("PATH", os.defpath), "HOME": tempfile.gettempdir(),
+                         "TMPDIR": tempfile.gettempdir(), "FORMOWL_UAT_URL": origin + "/",
+                         "FORMOWL_UAT_TIMEOUT_MS": "14000"})
+                self.assertEqual(completed.returncode, 0, completed.stdout)
+                self.assertEqual(json.loads(completed.stdout)["status"], "synthetic_progress_passed")
+                for cookie in (first, second):
+                    status, _, body = get("/api/progress", {**headers, "Cookie": cookie.split(";")[0]})
+                    self.assertEqual(status, 200)
+                    self.assertEqual(json.loads(body), {"phase": "idle", "detail": "尚未送出問題",
+                                                        "elapsed_seconds": 0, "deadline_seconds": 240})
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(3)
+
     def test_repo_chromium_runner_local_basic_browser_lifecycle(self) -> None:
         """Rendered synthetic browser diagnostic; never contacts a provider."""
 

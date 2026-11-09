@@ -63,6 +63,7 @@ formowl-wiki-mcp-jsonline-compat = "formowl_wiki_mcp.server:main"
 where = ["python"]
 
 [tool.setuptools.package-data]
+"formowl_records" = ["data/ontology_aliases.json"]
 "formowl_core" = [
   "tokenizer_profiles/jieba_sentencepiece_frozen_profile_candidate_admission_v1/calibration_corpus.txt",
   "tokenizer_profiles/jieba_sentencepiece_frozen_profile_candidate_admission_v1/jieba_user_dictionary.txt",

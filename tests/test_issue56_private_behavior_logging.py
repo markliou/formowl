@@ -95,6 +95,51 @@ class PrivateBehaviorLoggingTests(unittest.TestCase):
             self.assertEqual([event["request_id"] for event in events], [record["request_id"]] * 2)
             self.assertEqual(record["request_count"], 0)
 
+    def test_stdio_rejection_arguments_follow_originating_private_turn(self):
+        def simulate_dispatch(_model, **_kwargs):
+            def reject(_name, arguments):
+                stage = orchestrator._private_planner_rejection(
+                    orchestrator.ContractValidationError("UAT table query is invalid"), arguments,
+                    validation_stage="typed_request", provider_attempt=1, tool_attempt=1,
+                )
+                orchestrator._record_private_citation_stage(stage, proposal_arguments=arguments)
+                return {"trust": "untrusted_tool_rejection"}
+
+            transport = object.__new__(orchestrator.CodexAppServerStdioTransport)
+            transport._state_lock = threading.RLock()
+            transport._timeout_seconds = 1
+            transport._send = MagicMock()
+            turn = orchestrator._ActiveTurn("thread-1", reject, turn_id="turn-1")
+            turn.turn_ready.set()
+            transport._active_turns = {"thread-1": turn}
+            for index, query in enumerate(("synthetic rejected query", "password=secret-example")):
+                message = {"id": index, "method": "item/tool/call", "params": {
+                    "threadId": "thread-1", "turnId": "turn-1", "callId": str(index),
+                    "tool": "query_effective_graph_view",
+                    "arguments": {"query_text": query, "table_query": {"filters": []}},
+                }}
+                worker = threading.Thread(target=transport._handle_server_request, args=(message,))
+                worker.start()
+                worker.join()
+            self.assertEqual(transport._send.call_count, 2)
+            self.assertNotIn("synthetic rejected query", str(transport._send.call_args_list))
+            outcome = orchestrator.UatConversationOutcome(
+                response_kind="clarification", answer_text="Clarify.", model_name="synthetic",
+                display_format="narrative",
+            )
+            return {"status": "clarification_required", "citations": []}, (), outcome
+
+        with tempfile.TemporaryDirectory() as directory, redirect_stderr(io.StringIO()) as stderr:
+            path = Path(directory) / "private.jsonl"
+            self.ask(self.service(path), run=simulate_dispatch)
+            saved = json.loads(path.read_text())
+        first, second = saved["citation_stages"]
+        self.assertEqual(first["arguments"]["query_text"], "synthetic rejected query")
+        self.assertEqual(first["rejection_code"], "table_query_invalid")
+        self.assertEqual(second["argument_status"], "redacted")
+        self.assertNotIn("secret-example", json.dumps(saved))
+        self.assertNotIn("synthetic rejected query", stderr.getvalue())
+
     def test_pool_membership_capture_is_private_and_final_answer_is_explicit(self):
         first, second = "sha256:" + "a" * 64, "sha256:" + "b" * 64
         raw = {"status": "partial", "citations": [first, second]}
@@ -140,6 +185,8 @@ class PrivateBehaviorLoggingTests(unittest.TestCase):
         request = orchestrator.UatEvidenceToolRequest(
             query_text="SYNTHETIC-ID dispatch window", required_terms=("SYNTHETIC-ID",),
             request_contract=contract,
+            table_query={"filters": [{"field": "part_number", "value": "SYNTHETIC-ID"}],
+                         "projection_fields": ["delivery_date"]},
         )
         coverage = {
             "requested_fields": ["dispatch_window"], "supported_fields": ["dispatch_window"],
@@ -167,6 +214,9 @@ class PrivateBehaviorLoggingTests(unittest.TestCase):
         self.assertEqual(actual, data)
         private = traces[0]["private_diagnostic"]
         self.assertEqual(private["request_contract"], contract)
+        self.assertEqual(private["table_query"], request.table_query)
+        self.assertNotIn("part_number", json.dumps(runtime._safe_mcp_call_diagnostic(traces)))
+        self.assertNotIn("part_number", stderr.getvalue())
         self.assertEqual(private["raw_governed"]["citation_ids"], [citation])
         self.assertEqual(private["source_recovery"]["scan_stop_reason"], "deadline")
         self.assertEqual(private["field_support"]["verified_supported_field_hashes"],

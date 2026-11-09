@@ -736,17 +736,20 @@ authorization. Issue #21 is a downstream governed mail-evidence consumer of
 that generic Asset boundary and does not define another identity or connected
 transport path.
 
-Run tests inside the dev container:
+Run the full regression suite from the checkout. The runner starts a disposable
+pgvector container, sets `FORMOWL_RECORDS_TEST_DSN` in the development container,
+and prints the number of record-store tests that passed. The run fails if any
+record-store test is skipped. Both containers are removed on exit.
 
 ```sh
-docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python -m unittest discover -s tests"
+scripts/run_regression.sh
 ```
 
-Run tests with coverage inside the dev container:
-
-```sh
-docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "coverage run -m unittest discover -s tests && coverage report"
-```
+Use `--records-only` for the record-store module or `--coverage` for the full
+coverage run. Set `FORMOWL_DEV_IMAGE` to select an existing development image
+(default `formowl-dev:local`). The pre-commit and dev-container setup checks can skip
+record-store tests when a test DSN is absent. Use the runner above for full
+regression reports.
 
 The coverage report enforces the minimum threshold configured in
 `pyproject.toml`.

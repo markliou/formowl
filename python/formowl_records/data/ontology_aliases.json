@@ -1,0 +1,51 @@
+{
+  "ontology_aliases": {
+    "part_number": [
+      "Part Number",
+      "Item Number",
+      "Part No."
+    ],
+    "manufacturer_part_number": [
+      "Manufacturer Part Number",
+      "MPN",
+      "Manufacturer Part No."
+    ],
+    "po_number": [
+      "PO Number",
+      "PO No.",
+      "Purchase Order Number"
+    ],
+    "po_date": [
+      "PO Date",
+      "Order Date",
+      "Purchase Order Date"
+    ],
+    "delivery_date": [
+      "Delivery Date",
+      "Date of Delivery",
+      "Delivery Due Date"
+    ],
+    "quantity": [
+      "Quantity",
+      "Qty",
+      "Order Qty",
+      "PO Qty"
+    ],
+    "origin_country": [
+      "Country of Origin",
+      "Origin",
+      "COO",
+      "製造產地"
+    ],
+    "manufacturer": [
+      "Manufacturer",
+      "Maker",
+      "Mfr"
+    ],
+    "supplier": [
+      "Supplier",
+      "Vendor",
+      "Supplier Name"
+    ]
+  }
+}

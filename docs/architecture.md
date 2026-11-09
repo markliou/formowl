@@ -560,6 +560,5 @@ or a question-specific shortcut.
 Canonical repository verification is:
 
 ```sh
-docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \
-  python -m unittest discover -s tests
+scripts/run_regression.sh
 ```

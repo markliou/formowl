@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 from pathlib import Path
 import shutil
 import tempfile
@@ -447,6 +448,34 @@ class SourceStartExactTests(unittest.TestCase):
         self.assertEqual(blank["value"], "")
         source_cell = next(item for item in fixture.observations if sha256_json(item.to_dict()) == blank["citation_hash"])
         self.assertTrue(source_cell.payload["native"]["explicit_blank"])
+
+    def test_value_list_tool_result_offers_only_data_free_schema_guidance(self):
+        from formowl_gateway import issue56_record_table as bridge
+        from formowl_mail.human_uat_orchestrator import compact_evidence_for_model
+        # One source-specific alias is recognized in a longer description.
+        # The model receives only generic ontology labels and placeholders.
+        catalog = {"properties": {"quantity": ["計量"], "supplier": []},
+                   "raw_columns": ["synthetic private heading"]}
+        with patch.object(bridge, "catalog", return_value=catalog):
+            _, _, handler, args = self.prepare()
+        with patch.object(bridge, "_private_aliases", return_value={"quantity": ["計量"]}):
+            explicit = handler(args)
+            self.assertNotIn("structured_query_hint", explicit.get("coverage", {}))
+            del args["table_query"]
+            args["request_contract"]["requested_fields"] = ["交付計量欄位"]
+            data = handler(args)
+            hint = compact_evidence_for_model(data)["coverage"]["structured_query_hint"]
+            self.assertEqual(set(hint["properties"]), {"quantity", "supplier"})
+            self.assertEqual(hint["table_query"]["filters"][0]["value"], "<value>")
+            display = json.dumps(hint, ensure_ascii=False)
+            for private in ("計量", "ITEM-Q73", "synthetic private heading"):
+                self.assertNotIn(private, display)
+            self.assertNotIn("structured_query_hint", handler({**args, "requester_user_id": "other"}).get("coverage", {}))
+            args["request_contract"]["requested_fields"] = ["unrelated field"]
+            self.assertNotIn("structured_query_hint", handler(args).get("coverage", {}))
+            args["request_contract"].update(query_class="exact_set_or_inventory", maximum_claim_strength=
+                loader.SEMANTIC_CLAIM_STRENGTH_BY_CLASS["exact_set_or_inventory"])
+            self.assertIn("structured_query_hint", handler(args)["coverage"])
 
     def test_missing_literal_and_expired_budget_cannot_become_absence(self):
         _, revision, handler, arguments = self.prepare()

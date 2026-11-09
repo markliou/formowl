@@ -423,8 +423,7 @@ comparison artifacts.
 python3 scripts/methodology_authority_check.py --check
 python3 scripts/methodology_authority_check.py --require-ready
 
-docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \
-  python -m unittest discover -s tests
+scripts/run_regression.sh
 ```
 
 `--check` must remain valid. Until all gates pass, `--require-ready` is expected

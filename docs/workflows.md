@@ -593,8 +593,7 @@ internals, credentials, and hidden oracle values.
 Canonical verification runs in the dev container:
 
 ```sh
-docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \
-  python -m unittest discover -s tests
+scripts/run_regression.sh
 ```
 
 Methodology authority is checked separately:

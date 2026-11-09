@@ -14,3 +14,4 @@ build/
 **/__pycache__/
 **/*.pyc
 **/*.pyo
+python/formowl_records/data/mapped_normalized_aliases.json

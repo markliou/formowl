@@ -372,6 +372,8 @@ Python tests before reporting completion. This is not an implicit full-suite
 grant for a bounded assignment:
 
 ```sh
-docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \
-  python -m unittest discover -s tests
+scripts/run_regression.sh
 ```
+
+The full regression runner creates a disposable pgvector container and sets
+`FORMOWL_RECORDS_TEST_DSN`. Include its record-store pass count in the report.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 from copy import deepcopy
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -36,6 +36,7 @@ from formowl_mail.human_uat_orchestrator import (
     _MAX_RESPONSE_CITATIONS,
     _UatTurnRequestContractBinder,
     _MAX_UAT_TURN_SECONDS,
+    _BROWSER_TURN_DEADLINE,
     _PRIVATE_UAT_CITATION_TRACE,
     _private_citation_ids_snapshot,
     _validated_field_support,
@@ -317,6 +318,93 @@ class _UatMcpTimeout(RuntimeError):
     """Bounded MCP call exceeded the current browser turn budget."""
 
 
+_PROGRESS_DETAILS = {
+    "idle": "尚未送出問題", "received": "已收到問題", "querying": "正在查詢資料",
+    "records": "資料庫已回傳結果", "model": "模型處理中", "validating": "驗證答案中",
+    "complete": "完成", "failed": "本回合未完成",
+}
+
+
+@dataclass
+class _TurnProgress:
+    lock: Any = field(default_factory=Lock)
+    phase: str = "idle"
+    started_at: float | None = None
+    finished_at: float | None = None
+    query_count: int = 0
+    record_count: int | None = None
+    group_count: int | None = None
+
+
+def _start_turn_progress(state):
+    state.progress = _TurnProgress(phase="received", started_at=time.monotonic())
+    return state.progress
+
+
+def _update_turn_progress(progress, phase, *, query_count=None, counts=None):
+    if phase not in _PROGRESS_DETAILS:
+        return
+    with progress.lock:
+        if progress.finished_at is not None:
+            return
+        progress.phase = phase
+        if type(query_count) is int and 0 < query_count <= _MAX_MCP_CALLS_PER_TURN:
+            progress.query_count = query_count
+        if counts is not None:
+            progress.record_count, progress.group_count = counts
+        if phase in {"complete", "failed"}:
+            progress.finished_at = time.monotonic()
+
+
+def _progress_projection(state):
+    progress = state.progress
+    with progress.lock:
+        detail = _PROGRESS_DETAILS[progress.phase]
+        if progress.phase == "model" and progress.query_count:
+            detail = "模型整理答案中"
+        if progress.phase == "querying":
+            detail += f"（第 {progress.query_count} 次查詢）"
+        if progress.record_count is not None:
+            detail += f"；資料庫回傳 {progress.record_count} 筆"
+            if progress.group_count is not None:
+                detail += f"／{progress.group_count} 組"
+        elapsed = (max(0, int((progress.finished_at or time.monotonic()) - progress.started_at))
+                   if progress.started_at is not None else 0)
+        return {"phase": progress.phase, "detail": detail, "elapsed_seconds": elapsed,
+                "deadline_seconds": int(_MAX_UAT_TURN_SECONDS)}
+
+
+def _progress_record_counts(data):
+    def count(value):
+        return type(value) is int and 0 <= value <= 2**53 - 1
+    if not isinstance(data, Mapping) or data.get("status") in {"error", "failed", "permission_denied", "mcp_failed"}:
+        return None
+    for key in ("evidence", "evidence_snippets"):
+        for item in data.get(key) or ():
+            if not isinstance(item, Mapping) or item.get("source_type") != "candidate_fact_table":
+                continue
+            snippet = item.get("snippet")
+            try:
+                table = json.loads(snippet.split("\n", 1)[1]) if isinstance(snippet, str) else None
+            except (ValueError, IndexError):
+                continue
+            if not isinstance(table, Mapping):
+                continue
+            total = table.get("total")
+            groups = table.get("result_set")
+            groups = groups.get("total_groups") if isinstance(groups, Mapping) else None
+            if count(total) and count(groups):
+                return total, groups
+    coverage = data.get("coverage")
+    if isinstance(coverage, Mapping):
+        if coverage.get("record_identifier_lookup") == "no_matches":
+            return 0, 0
+        total, groups = coverage.get("record_store_total"), coverage.get("record_result_set_groups")
+        if count(total):
+            return total, groups if count(groups) else None
+    return None
+
+
 @dataclass
 class _ConversationState:
     expires_at: float
@@ -325,6 +413,7 @@ class _ConversationState:
     turns: tuple[Mapping[str, Any], ...] = ()
     reference_binding: Mapping[str, Any] | None = None
     provider_tools_configured: bool = False
+    progress: _TurnProgress = field(default_factory=_TurnProgress)
 
 
 def _prior_visible_answer_capabilities(state, capabilities, prompt):
@@ -371,6 +460,7 @@ class Issue56UatQueryService:
         ) = _query_agent_runtime_context(runtime.application)
         self._provider_tool_catalog = _query_agent_tool_catalog(runtime.application)
         self._lock = RLock()
+        self._query_lock = Lock()
         self._pending: dict[str, tuple[str, str, float]] = {}
         self._sessions: dict[str, tuple[str, _ConversationState, float]] = {}
         self.request_count = 0
@@ -504,6 +594,14 @@ class Issue56UatQueryService:
                 raise PermissionError("auth_required")
             return _conversation_projection(self._sessions[session_id][1])
 
+    def read_browser_progress(self, session_id: str | None) -> Mapping[str, Any]:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None or session[-1] <= time.monotonic():
+                raise PermissionError("auth_required")
+            state = session[1]
+        return _progress_projection(state)
+
     def reset_browser_conversation(self, session_id: str | None) -> tuple[str, int]:
         with self._lock:
             bearer = self._browser_bearer(session_id)
@@ -530,23 +628,29 @@ class Issue56UatQueryService:
     def ask(self, prompt: str, *, session_id: str | None) -> Mapping[str, Any]:
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt is required")
-        with self._lock:
-            bearer = self._browser_bearer(session_id)
-            if bearer is None:
-                raise PermissionError("auth_required")
-            assert session_id is not None
-            state = self._sessions[session_id][1]
-            _configure_provider_conversation(
-                self._conversation_model, state, session_id, self._provider_tool_catalog,
-            )
-            previous_history = state.history
-            previous_evidence = state.latest_evidence
-            previous_turns = state.turns
-            self.request_count = 0
-            self.last_failure_class = None
-            self.last_failure_phase = "provider_model"
-            turn_deadline = time.monotonic() + _MAX_UAT_TURN_SECONDS
-            conversation_identifier = _conversation_identifier(session_id)
+        with self._query_lock:
+            with self._lock:
+                bearer = self._browser_bearer(session_id)
+                if bearer is None:
+                    raise PermissionError("auth_required")
+                assert session_id is not None
+                state = self._sessions[session_id][1]
+                progress = _start_turn_progress(state)
+                try:
+                    _configure_provider_conversation(
+                        self._conversation_model, state, session_id, self._provider_tool_catalog,
+                    )
+                except Exception:
+                    _update_turn_progress(progress, "failed")
+                    raise
+                previous_history = state.history
+                previous_evidence = state.latest_evidence
+                previous_turns = state.turns
+                self.request_count = 0
+                self.last_failure_class = None
+                self.last_failure_phase = "provider_model"
+                turn_deadline = progress.started_at + _MAX_UAT_TURN_SECONDS
+                conversation_identifier = _conversation_identifier(session_id)
             try:
                 (
                     turn_tool_descriptor,
@@ -572,6 +676,8 @@ class Issue56UatQueryService:
                     authorized_capability_summary=_prior_visible_answer_capabilities(
                         state, turn_capability_summary, prompt,
                     ),
+                    progress=lambda phase, **counts: _update_turn_progress(progress, phase, **counts),
+                    deadline_monotonic=turn_deadline,
                     mcp_call=lambda request: self._call(
                         request,
                         bearer=bearer,
@@ -583,6 +689,7 @@ class Issue56UatQueryService:
                 self.last_mcp_statuses = tuple(
                     str(response.get("status", "unknown")) for response in responses
                 )
+                _update_turn_progress(progress, "validating")
                 try:
                     validate_public_gateway_payload(result)
                     assert_no_public_raw_references(result, "issue56_uat_browser_result")
@@ -594,34 +701,34 @@ class Issue56UatQueryService:
                         original_error=exc,
                         boundary="issue56_uat_browser_result",
                     )
-                _advance_conversation_state(
-                    state,
-                    prompt=prompt,
-                    result=result,
-                    outcome=outcome,
-                    responses=responses,
-                )
+                with self._lock:
+                    if self._sessions.get(session_id, (None, None))[1] is state:
+                        _advance_conversation_state(
+                            state, prompt=prompt, result=result, outcome=outcome, responses=responses,
+                        )
+                _update_turn_progress(progress, "failed" if result.get("status") in {
+                    "error", "failed", "permission_denied"} else "complete")
                 return result
             except _UatMcpTimeout:
+                _update_turn_progress(progress, "failed")
                 self.last_failure_class = "mcp_timeout"
                 self.last_failure_phase = "mcp_timeout"
-                _record_failed_conversation_turn(
-                    state,
-                    prompt=prompt,
-                    previous_history=previous_history,
-                    previous_evidence=previous_evidence,
-                    previous_turns=previous_turns,
-                )
+                with self._lock:
+                    if self._sessions.get(session_id, (None, None))[1] is state:
+                        _record_failed_conversation_turn(
+                            state, prompt=prompt, previous_history=previous_history,
+                            previous_evidence=previous_evidence, previous_turns=previous_turns,
+                        )
                 _discard_failed_provider_conversation(self._conversation_model, conversation_identifier)
                 raise
             except Exception:
-                _record_failed_conversation_turn(
-                    state,
-                    prompt=prompt,
-                    previous_history=previous_history,
-                    previous_evidence=previous_evidence,
-                    previous_turns=previous_turns,
-                )
+                _update_turn_progress(progress, "failed")
+                with self._lock:
+                    if self._sessions.get(session_id, (None, None))[1] is state:
+                        _record_failed_conversation_turn(
+                            state, prompt=prompt, previous_history=previous_history,
+                            previous_evidence=previous_evidence, previous_turns=previous_turns,
+                        )
                 _discard_failed_provider_conversation(self._conversation_model, conversation_identifier)
                 raise
 
@@ -829,6 +936,13 @@ class Issue56TemporaryLanQueryService:
                 raise PermissionError("browser_session_required")
             return _conversation_projection(state)
 
+    def read_browser_progress(self, session_id: str | None) -> Mapping[str, Any]:
+        with self._lock:
+            state = self._sessions.get(session_id)
+            if state is None or state.expires_at <= time.monotonic():
+                raise PermissionError("browser_session_required")
+        return _progress_projection(state)
+
     def reset_browser_conversation(self, session_id: str | None) -> tuple[str, int]:
         with self._lock:
             self._prune_browser_sessions()
@@ -862,9 +976,16 @@ class Issue56TemporaryLanQueryService:
                 state = self._sessions.get(session_id)
                 if state is None or session_id is None:
                     raise PermissionError("browser_session_required")
-                _configure_provider_conversation(
-                    self._conversation_model, state, session_id, self._provider_tool_catalog,
-                )
+                progress = _start_turn_progress(state)
+                self._active_turn_deadline = progress.started_at + _MAX_UAT_TURN_SECONDS
+                try:
+                    _configure_provider_conversation(
+                        self._conversation_model, state, session_id, self._provider_tool_catalog,
+                    )
+                except Exception:
+                    _update_turn_progress(progress, "failed")
+                    self._active_turn_deadline = None
+                    raise
                 previous_history = state.history
                 previous_evidence = state.latest_evidence
                 started_at = time.perf_counter()
@@ -873,7 +994,6 @@ class Issue56TemporaryLanQueryService:
                 self.last_failure_phase = "provider_model"
                 self.last_failure_class = None
                 self._last_private_mcp_owner_trace = None
-                self._active_turn_deadline = time.monotonic() + _MAX_UAT_TURN_SECONDS
             call_traces: list[dict[str, Any]] = []
             result: Mapping[str, Any] | None = None
             failure_sha256: str | None = None
@@ -911,6 +1031,8 @@ class Issue56TemporaryLanQueryService:
                         state, turn_capability_summary, prompt,
                     ),
                     request_id=browser_request_sha256,
+                    progress=lambda phase, **counts: _update_turn_progress(progress, phase, **counts),
+                    deadline_monotonic=self._active_turn_deadline,
                     mcp_call=lambda request: self._call(
                         request,
                         trace_sink=call_traces,
@@ -927,6 +1049,7 @@ class Issue56TemporaryLanQueryService:
                     str(response.get("status", "unknown")) for response in responses
                 )
                 self.last_failure_phase = "projection"
+                _update_turn_progress(progress, "validating")
                 try:
                     validate_public_gateway_payload(result)
                     assert_no_public_raw_references(
@@ -952,8 +1075,11 @@ class Issue56TemporaryLanQueryService:
                             responses=responses,
                         )
                 self.last_failure_phase = "unknown"
+                _update_turn_progress(progress, "failed" if result.get("status") in {
+                    "error", "failed", "permission_denied"} else "complete")
                 return result
             except Exception as exc:
+                _update_turn_progress(progress, "failed")
                 failure_sha256 = _failure_sha256(exc)
                 _emit_private_uat_failure_trace(exc, self.last_failure_phase, result)
                 if isinstance(exc, _UatMcpTimeout):
@@ -1043,6 +1169,8 @@ class Issue56TemporaryLanQueryService:
                 raise PermissionError("browser_session_required")
             # Admission failures are display-only; they cannot replace model
             # history, evidence, references, or the active turn's diagnostics.
+            if state.progress.phase == "idle" or state.progress.finished_at is not None:
+                _update_turn_progress(_start_turn_progress(state), "failed")
             state.turns = (
                 *state.turns,
                 {"prompt": prompt, "response": _stored_browser_response(result)},
@@ -1258,6 +1386,8 @@ class Issue56TemporaryLanQueryService:
                         phase = ({"status": "incomplete_timeout"} if mcp_timeout else
                                  json.loads(phase_snapshot) if phase_snapshot is not None else
                                  {"status": "diagnostic_failed"})
+                        trace["private_diagnostic"]["table_query"] = (
+                            dict(request.table_query) if request.table_query is not None else None)
                         phase["query_hash"] = trace.get("query_hash")
                         trace["private_diagnostic"]["source_phase_trace"] = phase
                 except Exception as exc:
@@ -1755,6 +1885,8 @@ def _run_gpt_query_agent(
     mcp_call: Callable[[UatEvidenceToolRequest], Mapping[str, Any]],
     request_id: str | None = None,
     reference_binding: Mapping[str, Any] | None = None,
+    progress: Callable[..., None] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> tuple[
     dict[str, Any],
     tuple[Mapping[str, Any], ...],
@@ -1905,7 +2037,14 @@ def _run_gpt_query_agent(
         with (reviewed_annotation_query_scope(annotation_binding),
               _source_document_full_read_scope(document_read_binding),
               mail_date_priority_scope(date_priority_binding)):
+            if progress is not None:
+                progress("querying", query_count=len(responses) + 1)
             data = mcp_call(request)
+        if progress is not None:
+            counts = _progress_record_counts(data)
+            if counts is not None:
+                progress("records", counts=counts)
+            progress("model")
         responses.append(data)
         if len(responses) == 1 and not evidence_citation_ids(data):
             # Mirror the conversation binder's one-shot split-only grant so the
@@ -1928,15 +2067,23 @@ def _run_gpt_query_agent(
         return data
 
     provider_started_at = time.perf_counter()
-    outcome = conversation_model.respond(
-        history=history,
-        user_text=prompt,
-        latest_evidence=latest_evidence,
-        safety_identifier=safety_identifier,
-        evidence_tool=evidence_tool,
-        formowl_tool_descriptor=formowl_tool_descriptor,
-        authorized_capability_summary=authorized_capability_summary,
-    )
+    if progress is not None:
+        progress("model")
+    deadline_token = _BROWSER_TURN_DEADLINE.set(deadline_monotonic)
+    try:
+        outcome = conversation_model.respond(
+            history=history,
+            user_text=prompt,
+            latest_evidence=latest_evidence,
+            safety_identifier=safety_identifier,
+            evidence_tool=evidence_tool,
+            formowl_tool_descriptor=formowl_tool_descriptor,
+            authorized_capability_summary=authorized_capability_summary,
+        )
+    finally:
+        _BROWSER_TURN_DEADLINE.reset(deadline_token)
+    if progress is not None:
+        progress("validating")
     outcome = replace(outcome, validated_reference_binding=validated_reference)
     _emit_private_uat_terminal_trace(
         "provider", started_at=provider_started_at, outcome=outcome,

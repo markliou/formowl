@@ -8,6 +8,7 @@ its input snapshot atomically; queries see the old or the new snapshot.
 from __future__ import annotations
 
 from collections import defaultdict
+import calendar
 from contextlib import contextmanager
 from decimal import Decimal
 import hashlib
@@ -16,6 +17,7 @@ import json
 from pathlib import Path
 import re
 import time
+import unicodedata
 
 import psycopg
 from psycopg import sql
@@ -32,6 +34,34 @@ PROPERTY_TYPES = {
     "supplier": "text", "manufacturer": "text",
 }
 ENTITY_TYPES = {"part_number": "part", "manufacturer_part_number": "part", "po_number": "purchase_order"}
+
+# R1 exporter project_group validates native parent/row/cell hashes, lineage,
+# permissions and inline-family before sealing each row into the imported shard.
+# Unknown exporter versions deliberately retain runtime per-record admission.
+_NATIVE_FAMILY_EXPORTER = "sha256:ea0e949aa285623805c9f6920e9bd7dff15a9e73285d85a6bdff0d4c79e0801e"
+
+
+def _native_family_receipt(alias=""):
+    prefix = alias + "." if alias else ""
+    return sql.SQL("""({p}kind='table_row' AND {p}verified_at_export
+        AND {p}export_binding->>'exporter_sha256'={exporter}
+        AND {p}export_binding->>'shard' ~ '^[0-9a-f]{{2}}$'
+        AND {p}export_binding->>'shard_sha256' ~ '^sha256:[0-9a-f]{{64}}$'
+        AND {p}native_locator->>'source_family' IN ('mail_inline_table','attachment_table'))""").format(
+            p=sql.SQL(prefix), exporter=sql.Literal(_NATIVE_FAMILY_EXPORTER))
+
+
+
+def _native_family_scope(families, alias=""):
+    if not isinstance(families, (list, tuple)) or any(
+            family not in {"mail", "attachment_table", "document_text"} for family in families):
+        raise ValueError("invalid native record source families")
+    native = ["mail_inline_table" if family == "mail" else family for family in families if family != "document_text"]
+    if set(native) == {"mail_inline_table", "attachment_table"}:
+        return sql.SQL(""), False
+    field = sql.SQL((alias + "." if alias else "") + "native_locator")
+    return sql.SQL(" AND NOT (coalesce({},false) AND NOT ({}->>'source_family'=ANY({}::text[])))").format(
+        _native_family_receipt(alias), field, sql.Literal(native)), True
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS header_signature (
@@ -98,6 +128,19 @@ ALTER TABLE record_value ADD COLUMN IF NOT EXISTS context_spans jsonb NOT NULL D
 ALTER TABLE record_entity ADD COLUMN IF NOT EXISTS raw_key text;
 ALTER TABLE record_entity ADD COLUMN IF NOT EXISTS citation_hash text;
 CREATE INDEX IF NOT EXISTS record_entity_entity_idx ON record_entity(entity_id);
+CREATE TABLE IF NOT EXISTS record_unresolved_value_summary (
+    permission_scope text NOT NULL, serving_revision text NOT NULL, property_id text NOT NULL,
+    source_families text[] NOT NULL, source_proven boolean NOT NULL,
+    mail_selector text NOT NULL, selector_proven boolean NOT NULL,
+    value_count bigint NOT NULL CHECK(value_count > 0),
+    PRIMARY KEY(permission_scope,serving_revision,property_id,source_families,source_proven,mail_selector,selector_proven)
+);
+CREATE TABLE IF NOT EXISTS record_unresolved_value_summary_coverage (
+    permission_scope text NOT NULL, serving_revision text NOT NULL, property_id text NOT NULL,
+    summary_version integer NOT NULL, complete boolean NOT NULL,
+    total_unresolved bigint NOT NULL CHECK(total_unresolved >= 0),
+    PRIMARY KEY(permission_scope,serving_revision,property_id)
+);
 """
 
 
@@ -200,6 +243,7 @@ def _candidate(row, manifest, import_key):
     if sent_at:
         values[0]["context_spans"].extend(outer.get("evidence") or [])
     record = dict(record_id=_text(row["row_id"]), import_key=import_key, kind=kind,
+                  _item_or_row=normalize("text", row.get("item_or_row"))["norm"],
                   source_revision_sha256=_hash(manifest["source_revision"]), verified_at_export=True,
                   export_binding={"rows_sha256": _hash(manifest["rows_sha256"])},
                   permission_scope_fingerprint=row["permission_scope_fingerprint"],
@@ -256,6 +300,7 @@ def _group_fragments(rows):
     fragments = {}
     parent = {}
     intervals = defaultdict(list)
+    pdf_owners = defaultdict(set)
 
     def root(key):
         while parent[key] != key:
@@ -270,7 +315,8 @@ def _group_fragments(rows):
         fragments[row_id] = record, values
         parent[row_id] = row_id
         for value in values:
-            for span in chain(value["evidence_spans"], value["context_spans"]):
+            for span, context in chain(((span, False) for span in value["evidence_spans"]),
+                                       ((span, True) for span in value["context_spans"])):
                 a, b = span.get("start"), span.get("end")
                 if a is None and b is None:
                     continue
@@ -280,7 +326,40 @@ def _group_fragments(rows):
                     space = (record.get("source_revision_sha256"), record["permission_scope"], record.get("permission_scope_fingerprint"),
                              span["observation_id"], span["observation_hash"],
                              tuple(span.get("field_path", ())))
+                    if record["kind"] == "pdf_line":
+                        if context or "page" not in span["native_locator"]:
+                            continue
+                        pdf_owners[space, a, b].add(row_id)
                     intervals[space].append((a, b, row_id))
+
+    # A repeated PDF quote is inherited only when distinct named item rows
+    # also have disjoint, narrower-owner evidence away from that quote. Exact
+    # same-line duplicates remain anchors even if extractors label them differently.
+    owner_intervals = defaultdict(set)
+    for key, owners in pdf_owners.items():
+        for rid in owners:
+            owner_intervals[rid].add(key)
+    inherited = {}
+    for (space, a, b), owners in pdf_owners.items():
+        labels = {fragments[rid][0].get("_item_or_row") for rid in owners}
+        if len(labels - {None}) < 2:
+            continue
+        anchors, anchored = [], set()
+        for other_space, start, end in set().union(*(owner_intervals[rid] for rid in owners)):
+            local_owners = pdf_owners[other_space, start, end]
+            if not local_owners < owners or (other_space == space and start < b and a < end):
+                continue
+            anchored.update(local_owners)
+            anchors.extend((other_space, start, end, label) for rid in local_owners
+                           if (label := fragments[rid][0].get("_item_or_row")))
+        if any(label != other_label and (local_space != other_space or end <= start2 or end2 <= start)
+               for i, (local_space, start, end, label) in enumerate(anchors)
+               for other_space, start2, end2, other_label in anchors[i + 1:]):
+            inherited[space, a, b] = anchored
+    for space, spans in intervals.items():
+        intervals[space] = [(a, b, rid) for a, b, rid in spans
+            if (space, a, b) not in inherited or fragments[rid][0]["kind"] != "pdf_line" or not (
+                fragments[rid][0].get("_item_or_row") or rid in inherited[space, a, b])]
 
     # Export offsets are Python slice endpoints. Sweep the active union of
     # intervals, joining only spans sharing at least one character.
@@ -363,6 +442,19 @@ def _identity_keys(raw):
 
 
 _MAX_ENTITY_KEY = 64
+# PostgreSQL character classes vary by locale; use Python's existing seed rule.
+_ENTITY_DIGIT_PATTERN = "[" + "".join(chr(c) for c in range(0x110000) if chr(c).isdigit()) + "]"
+_ENTITY_WHITESPACE_PATTERN = "[" + "".join(chr(c) for c in range(0x110000) if chr(c).isspace()) + "]+"
+
+
+def eligible_entity_projection_key(entity_type, normalized_key):
+    """Check an already NFKC/casefold-normalized entity key for display as a code."""
+    if (entity_type not in {"part", "purchase_order"} or not isinstance(normalized_key, str)
+            or not 4 <= len(normalized_key) <= _MAX_ENTITY_KEY
+            or any(c.isspace() for c in normalized_key)):
+        return False
+    return (bool(re.search("[a-zA-Z]", normalized_key)) and any(c.isdigit() for c in normalized_key)
+            or entity_type == "purchase_order" and normalized_key.isascii() and normalized_key.isdecimal())
 
 
 def _seed_keys(raw):
@@ -440,12 +532,14 @@ def load_candidate_fact_exports(path, *, connection=None):
     import_keys = ["export:" + p.parent.name for p in files]
     with _transaction(connection) as db:
         db.execute("SELECT pg_advisory_xact_lock(198281031, 2)")
+        _invalidate_unresolved_summaries(db)
         retained = _retained_fragments(db, import_keys[0]) if single else ()
         incoming = chain.from_iterable(_export_rows(file, key) for file, key in zip(files, import_keys, strict=True))
         groups = _group_fragments(chain(retained, incoming))
         db.execute("DELETE FROM record WHERE kind IN ('pdf_line','passage')")
         counts = _write_rows(db, iter(groups))
         _link_entities(db)
+        rebuild_unresolved_value_summaries(connection=db)
     return counts
 
 
@@ -507,10 +601,19 @@ def verify_fact_serving_spans(revision, *, connection, audit=None):
                 with db.cursor() as temp, temp.copy("COPY fact_serving_receipts FROM STDIN") as pending:
                     for receipt in receipts:
                         pending.write_row(receipt)
+        # Rebinding can also clear receipts outside this revision's scopes.
+        # Their previous counters must cease being current before the receipts
+        # change; only the newly bound revision is rebuilt below.
+        db.execute("""UPDATE record_unresolved_value_summary_coverage c SET complete=false
+                      WHERE EXISTS (SELECT 1 FROM record r JOIN fact_serving_receipts f USING(record_id)
+                          WHERE r.permission_scope=c.permission_scope
+                          AND r.fact_serving_revision_sha256=c.serving_revision
+                          AND r.fact_serving_revision_sha256 IS DISTINCT FROM f.serving_pin)""")
         db.execute("""UPDATE record r SET fact_serving_revision_sha256=f.serving_pin
                       FROM fact_serving_receipts f WHERE r.record_id=f.record_id
                       AND r.fact_serving_revision_sha256 IS DISTINCT FROM f.serving_pin""")
         db.execute("DROP TABLE fact_serving_receipts")
+        rebuild_unresolved_value_summaries(revision, connection=db)
     return dict(counts)
 
 
@@ -652,19 +755,179 @@ def _native_records(db, path, mapping):
         yield record, values
 
 
-def load_native_rows(path, mapping=None, *, connection=None):
+def load_native_rows(path, mapping=None, *, connection=None, revision=None):
     """Replace the native snapshot. Mapping is keyed by signature, then by column position.
 
     The entries in each ordered mapping are null or {property_id, date_role}.
     Cells without a mapping keep their raw labels and null ontology properties.
+    Pass the bound serving revision to preserve fact family proof on replacement.
+    Without it, retained facts have explicit unknown family proof until backfill.
     """
     with _transaction(connection) as db:
         db.execute("SELECT pg_advisory_xact_lock(198281031, 2)")
+        _invalidate_unresolved_summaries(db)
         db.execute("DELETE FROM record WHERE import_key='native'")
         db.execute("DELETE FROM header_signature")
         counts = _write_rows(db, _native_records(db, Path(path), mapping or {}))
         _link_entities(db)
+        rebuild_unresolved_value_summaries(revision, connection=db)
     return counts
+
+
+def _invalidate_unresolved_summaries(db):
+    # Imports replace counts and their coverage in the same writer transaction.
+    db.execute("UPDATE record_unresolved_value_summary_coverage SET complete=false")
+
+
+def _unresolved_source_proof(revision, scope, spans, observed):
+    from formowl_contract import ContractValidationError
+    from formowl_mail.hybrid import _semantic_observation_retrieval_source_family
+    from formowl_mail.issue56_sealed_source import _authorized_mail_selector_for_asset
+    families, selectors = set(), set()
+    if revision is None or not spans:
+        return (), False, "", False
+    reader = revision.source_records
+    for oid, digest in spans:
+        key = oid, digest, scope
+        if key not in observed:
+            try:
+                helper, authority = reader._helper(oid)
+                if helper["observation_hash"] != digest or helper["source_scope_id"] != scope:
+                    raise ContractValidationError("summary source binding changed")
+                family = helper.get("retrieval_source_family")
+                if family is None:
+                    family = _semantic_observation_retrieval_source_family(reader.get_observation(oid))
+                if not isinstance(family, str) or not family:
+                    raise ContractValidationError("summary source family unavailable")
+                observed[key] = family, _authorized_mail_selector_for_asset(authority.asset)
+            except (ContractValidationError, KeyError, AttributeError):
+                observed[key] = None
+        if observed[key] is None:
+            return (), False, "", False
+        family, selector = observed[key]
+        families.add(family)
+        selectors.add(selector)
+    common_selector = next(iter(selectors)) if len(selectors) == 1 else None
+    return tuple(sorted(families)), True, common_selector or "", True
+
+
+def rebuild_unresolved_value_summaries(revision=None, *, connection):
+    """Atomically replace scoped counters; a supplied sealed revision proves fact families.
+
+    The caller owns the writer connection. No source, annotation or entity is
+    modified. Native selector proof is deliberately unavailable. Imports without
+    a bound reader publish structural counts with explicit unknown fact families.
+    """
+    from collections import Counter
+    pin = _hash(revision.safe_binding["source_revision_sha256"]) if revision is not None else None
+    scopes = list(revision.authorized_source.source_scope_ids) if revision is not None else None
+    with _transaction(connection) as db:
+        db.execute("SELECT pg_advisory_xact_lock(198281031, 2)")
+        condition = sql.SQL("r.verified_at_export AND r.export_binding IS NOT NULL AND ")
+        effective_pin = sql.SQL("(CASE WHEN r.kind='table_row' THEN r.source_revision_sha256 ELSE r.fact_serving_revision_sha256 END)")
+        condition += effective_pin + sql.SQL(" IS NOT NULL AND coalesce(r.row_role,'') NOT IN ('header','header_candidate')")
+        params = [list(PROPERTY_TYPES)]
+        if revision is not None:
+            condition += sql.SQL(" AND r.permission_scope=ANY(%s) AND {}=%s").format(effective_pin)
+            params.extend([scopes, pin])
+            pairs = {(scope, pin) for scope in scopes}
+        else:
+            pairs = set(db.execute(sql.SQL("SELECT DISTINCT r.permission_scope,{} FROM record r WHERE ").format(effective_pin)+condition).fetchall())
+            pairs.update(db.execute("SELECT DISTINCT permission_scope,serving_revision FROM record_unresolved_value_summary_coverage").fetchall())
+        buckets, totals, observed, proofs = Counter(), Counter(), {}, {}
+        query = sql.SQL("""WITH unresolved AS MATERIALIZED (
+            SELECT record_id,property_id,count(*) AS n FROM record_value
+            WHERE property_id=ANY(%s) AND norm_status<>'ok' GROUP BY record_id,property_id)
+            SELECT r.record_id,r.kind,r.permission_scope,{pin},n.proven,r.native_locator->>'source_family',u.property_id,u.n,
+                CASE WHEN n.proven THEN NULL ELSE (SELECT jsonb_agg(DISTINCT jsonb_build_array(
+                    s->>'observation_id',s->>'observation_hash')) FROM record_value v
+                    CROSS JOIN LATERAL jsonb_array_elements(v.evidence_spans || v.context_spans) s
+                    WHERE v.record_id=r.record_id) END
+            FROM unresolved u JOIN record r USING(record_id)
+            CROSS JOIN LATERAL(SELECT coalesce({receipt},false) AS proven) n WHERE {condition}
+            ORDER BY r.record_id,u.property_id""").format(pin=effective_pin,receipt=_native_family_receipt("r"),condition=condition)
+        with db.cursor(name="unresolved_summary_source_proofs") as cursor:
+            cursor.execute(query, params)
+            while rows := cursor.fetchmany(512):
+                for rid, kind, scope, serving_pin, native, family, prop, count, spans in rows:
+                    if native:
+                        proof = (("mail" if family == "mail_inline_table" else family,), True, "", False)
+                    elif kind == "table_row":
+                        # Cell helper presence alone does not prove native row,
+                        # parent, same-row cells or selector admission.
+                        proof = ((), False, "", False)
+                    else:
+                        if rid not in proofs:
+                            proofs[rid] = _unresolved_source_proof(revision, scope, spans, observed)
+                        proof = proofs[rid]
+                    families, proven, selector, selector_proven = proof
+                    buckets[scope,serving_pin,prop,families,proven,selector,selector_proven] += count
+                    totals[scope,serving_pin,prop] += count
+        if revision is None:
+            db.execute("DELETE FROM record_unresolved_value_summary")
+            db.execute("DELETE FROM record_unresolved_value_summary_coverage")
+        else:
+            for table in ("record_unresolved_value_summary", "record_unresolved_value_summary_coverage"):
+                db.execute(sql.SQL("DELETE FROM {} WHERE permission_scope=ANY(%s) AND serving_revision=%s").format(sql.Identifier(table)), (scopes,pin))
+        with db.cursor() as cursor:
+            cursor.executemany("INSERT INTO record_unresolved_value_summary VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                [(*key[:3],list(key[3]),*key[4:],count) for key,count in sorted(buckets.items())])
+            cursor.executemany("INSERT INTO record_unresolved_value_summary_coverage VALUES (%s,%s,%s,1,true,%s)",
+                [(scope,serving_pin,prop,totals[scope,serving_pin,prop])
+                 for scope,serving_pin in sorted(pairs) for prop in PROPERTY_TYPES])
+    return {"status":"complete", "bucket_count":len(buckets), "coverage_count":len(pairs)*len(PROPERTY_TYPES),
+            "unresolved_value_count":sum(buckets.values()),
+            "unproven_source_value_count":sum(count for key,count in buckets.items() if not key[4]),
+            "unproven_selector_value_count":sum(count for key,count in buckets.items() if not key[6])}
+
+
+def _unresolved_summary_count(db, scopes, pin, properties, *, families, selector, restricted, unsupported, required):
+    def unavailable(reason):
+        return {"unresolved_value_count_status":"unavailable", "unresolved_value_count_reason":reason}
+    if pin is None:
+        return unavailable("serving_revision_required") if required else None
+    try:
+        with db.transaction():
+            coverage = db.execute("""SELECT permission_scope,property_id,total_unresolved,complete,summary_version
+                FROM record_unresolved_value_summary_coverage WHERE permission_scope=ANY(%s)
+                AND serving_revision=%s AND property_id=ANY(%s)""", (scopes,pin,properties)).fetchall()
+            if not coverage and not required:
+                return None  # Legacy diagnostic callers; product always requires the summary.
+            expected = {(scope,prop) for scope in scopes for prop in properties}
+            if {(scope,prop) for scope,prop,_,_,_ in coverage} != expected:
+                return unavailable("scope_not_covered")
+            if any(not complete or version != 1 for _,_,_,complete,version in coverage):
+                return unavailable("summary_not_current")
+            if unsupported:
+                return unavailable("unsupported_filters")
+            if restricted and families is None:
+                return unavailable("source_scope_unproven")
+            rows = db.execute("""SELECT permission_scope,property_id,source_families,source_proven,
+                mail_selector,selector_proven,value_count FROM record_unresolved_value_summary
+                WHERE permission_scope=ANY(%s) AND serving_revision=%s AND property_id=ANY(%s)""",
+                (scopes,pin,properties)).fetchall()
+    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
+        return unavailable("summary_unavailable") if required else None
+    from collections import Counter
+    actual = Counter()
+    for scope,prop,_,_,_,_,count in rows:
+        actual[scope,prop] += count
+    if any(actual[scope,prop] != total for scope,prop,total,_,_ in coverage):
+        return unavailable("summary_integrity_failure")
+    total = 0
+    for _,_,record_families,proven,owner,selector_proven,count in rows:
+        if families is not None:
+            if not proven:
+                return unavailable("source_scope_unproven")
+            if not set(record_families).issubset(families):
+                continue
+        if selector is not None:
+            if not selector_proven:
+                return unavailable("selector_unproven")
+            if owner != selector:
+                continue
+        total += count
+    return {"unresolved_value_count_status":"available", "unresolved_value_count":total}
 
 
 def _column(prop):
@@ -675,6 +938,147 @@ def _column(prop):
     if prop not in PROPERTY_TYPES:
         raise ValueError("unknown ontology property")
     return None
+
+
+def field_name_key(label):
+    """One comparison key for ontology labels and literal source columns."""
+    return "".join(unicodedata.normalize("NFKC", label).casefold().split())
+
+
+def resolve_raw_columns(labels, permission_scopes, *, source_revision_sha256, connection,
+                        _admit=None, _native_source_families=None, _deadline=None, _fact_columns=None,
+                        _query_filters=()):
+    """Resolve against all pinned authorized names, preserving exact source spelling.
+
+    The bounded model catalog is never the authority for literal columns.
+    Equivalent spellings remain a set; no source spelling is chosen or dropped.
+    Bound exports may supply their complete private raw-name vocabulary.
+    """
+    labels = list(dict.fromkeys(_text(label) for label in labels))
+    if not labels:
+        return {}
+    scopes = [_text(scope) for scope in permission_scopes]
+    pin = _hash(source_revision_sha256)
+    def remaining():
+        if _deadline is not None:
+            ms = int(1000 * (_deadline - time.monotonic()))
+            if ms <= 0:
+                raise TimeoutError("record column resolution deadline")
+            connection.execute("SELECT set_config('statement_timeout',%s,true)", (str(ms),))
+    qualified_native = _native_source_families is not None
+    native_scope = _native_family_scope(_native_source_families, "r")[0] if qualified_native else sql.SQL("")
+    visible = sql.SQL("""WITH visible AS NOT MATERIALIZED (
+        SELECT r.* FROM record r WHERE r.permission_scope=ANY(%s)
+        AND coalesce(r.row_role,'') NOT IN ('header','header_candidate')
+        AND r.verified_at_export AND r.export_binding IS NOT NULL
+        AND (CASE WHEN r.kind='table_row' THEN r.source_revision_sha256 ELSE r.fact_serving_revision_sha256 END)=%s
+        """) + native_scope + sql.SQL(") ")
+    remaining()
+    # Native import validates column_names against every cell, so the existing
+    # signature table is the complete native name dictionary. Facts and legacy
+    # rows without a signature retain per-record indexed value lookup. OFFSET
+    # prevents flattening that small exception path into a full value scan.
+    # No dictionary name is accepted or exposed before scoped admission below.
+    full_legacy_checked = True
+    if _fact_columns is None:
+        names = connection.execute(visible + sql.SQL("""SELECT DISTINCT name FROM (
+            SELECT unnest(column_names) AS name FROM header_signature
+            UNION ALL
+            SELECT cols.column_name_raw FROM visible r CROSS JOIN LATERAL (
+                SELECT v.column_name_raw FROM record_value v WHERE v.record_id=r.record_id
+                AND v.column_name_raw IS NOT NULL OFFSET 0) cols
+            WHERE r.header_signature_id IS NULL) dictionary WHERE name IS NOT NULL"""), (scopes,pin)).fetchall()
+    else:
+        names = connection.execute("SELECT DISTINCT unnest(column_names) FROM header_signature").fetchall()
+        names.extend((name,) for name in _fact_columns)
+        # A name missing from the native dictionary may belong to an older
+        # eligible named row imported without its header signature. An indexed
+        # equality predicate provides a superset of every possible final match;
+        # no name outside it can add a matching row or projected value.
+        seed = None
+        for item in sorted(_query_filters, key=lambda item: _column(item["property"]) is not None):
+            if item.get("op") not in ("eq", "in"):
+                continue
+            if _column(item["property"]) is None:
+                seed = _filter_ids(item)
+            else:
+                values = [normalize("text", str(value))["norm"] for value in item["values"]]
+                seed = sql.SQL("SELECT record_id FROM record_value WHERE column_text_norm=ANY(%s)"), [values]
+            break
+
+        def legacy_names(seed):
+            remaining()
+            legacy = sql.SQL("""r.kind='table_row' AND r.source_revision_sha256=%s
+                AND r.verified_at_export AND r.export_binding IS NOT NULL
+                AND r.permission_scope=ANY(%s) AND coalesce(r.row_role,'') NOT IN ('header','header_candidate')
+                AND r.header_signature_id IS NULL AND NOT coalesce({},false)""").format(_native_family_receipt("r"))
+            args = [pin,scopes]
+            if seed is None:
+                selected = sql.SQL("SELECT r.record_id FROM record r WHERE ")+legacy
+                prefix = sql.SQL("WITH legacy AS MATERIALIZED (")+selected+sql.SQL(") ")
+            else:
+                seed_query, seed_args = seed
+                prefix = visible + sql.SQL(", seed AS MATERIALIZED (SELECT DISTINCT record_id FROM (")
+                prefix += seed_query + sql.SQL(") candidates), legacy AS MATERIALIZED (SELECT r.record_id FROM seed s CROSS JOIN LATERAL (")
+                prefix += sql.SQL("SELECT r.record_id FROM record r WHERE r.record_id=s.record_id AND ")+legacy
+                prefix += sql.SQL(" OFFSET 0) r) ")
+                args = [scopes,pin,*seed_args,*args]
+            return connection.execute(prefix + sql.SQL("""SELECT DISTINCT v.column_name_raw FROM legacy
+                CROSS JOIN LATERAL (SELECT column_name_raw FROM record_value v WHERE v.record_id=legacy.record_id
+                    AND v.column_name_raw IS NOT NULL OFFSET 0) v"""), args).fetchall()
+
+        names.extend(legacy_names(seed))
+        full_legacy_checked = seed is None
+        # A selective empty match is not proof that an explicit field is unknown.
+        # Only this uncommon validation case needs the complete older-row path.
+        known = {field_name_key(name) for name, in names if isinstance(name,str)}
+        if seed is not None and any(field_name_key(label) not in known for label in labels):
+            names.extend(legacy_names(None))
+            full_legacy_checked = True
+    keys = {field_name_key(label) for label in labels}
+    candidates = {name for name, in names if isinstance(name, str) and field_name_key(name) in keys}
+    admitted = set()
+    for name in sorted(candidates):
+        remaining()
+        native_guard = (sql.SQL(" AND ")+_native_family_receipt("r")
+                        if qualified_native and _admit is not None else sql.SQL(""))
+        exists = connection.execute(visible + sql.SQL("""SELECT EXISTS(SELECT FROM record_value v
+            JOIN visible r USING(record_id) WHERE v.column_name_raw=%s""") + native_guard + sql.SQL(" LIMIT 1)"),
+            (scopes,pin,name)).fetchone()[0]
+        if exists and (_admit is None or qualified_native):
+            admitted.add(name)
+            continue
+        if _admit is not None:
+            remaining()
+            prefix = visible + sql.SQL(""", matched AS MATERIALIZED (
+                SELECT DISTINCT v.record_id FROM record_value v JOIN visible USING(record_id)
+                WHERE v.column_name_raw=%s)""")
+            args = [scopes,pin,name]
+            rejected = _scope_exclusions(connection, prefix, args, _admit, qualified_native=qualified_native)
+            remaining()
+            if connection.execute(prefix + sql.SQL("SELECT EXISTS(SELECT FROM matched WHERE record_id<>ALL(%s) LIMIT 1)"),
+                                  [*args,rejected]).fetchone()[0]:
+                admitted.add(name)
+    candidates = admitted
+    by_key = defaultdict(set)
+    for name in candidates:
+        by_key[field_name_key(name)].add(name)
+    resolved = {}
+    for label in labels:
+        matches = by_key[field_name_key(label)]
+        if not matches:
+            if not full_legacy_checked:
+                return resolve_raw_columns(labels, scopes, source_revision_sha256=pin, connection=connection,
+                    _admit=_admit, _native_source_families=_native_source_families, _deadline=_deadline,
+                    _fact_columns=_fact_columns)
+            raise ValueError("unavailable raw column")
+        resolved[label] = sorted(matches)
+    return resolved
+
+
+def _column_names(prop, variants):
+    column = _column(prop)
+    return variants.get(prop, [column]) if column is not None else []
 
 
 def range_bounds(filters):
@@ -723,7 +1127,16 @@ def _range_ids(prop, bounds):
     return (sql.SQL("SELECT v.record_id FROM record_value v WHERE v.property_id=%s AND v.norm_status='ok' AND ") + sql.SQL(" AND ").join(checks), params)
 
 
-def _filter_ids(item):
+def _iso_month_bounds(fragment):
+    match = re.fullmatch(r"([0-9]{4})-(0[1-9]|1[0-2])", fragment)
+    if match is None or int(match[1]) < 1:
+        return None
+    year, month = int(match[1]), int(match[2])
+    return [("gte", f"{year:04d}-{month:02d}-01"),
+            ("lte", f"{year:04d}-{month:02d}-{calendar.monthrange(year, month)[1]:02d}")]
+
+
+def _filter_ids(item, column_variants=None):
     """Select direct matches and scoped seeds for the same typed entity."""
     if set(item) != {"property", "op", "values"}:
         raise ValueError("invalid filter")
@@ -733,7 +1146,7 @@ def _filter_ids(item):
         raise ValueError("invalid filter operator or values")
     if op != "in" and len(values) != 1:
         raise ValueError("eq and contains require one value")
-    kind = "text" if column is not None else PROPERTY_TYPES[prop]
+    kind = "text" if column is not None or (op == "contains" and PROPERTY_TYPES.get(prop) == "date") else PROPERTY_TYPES[prop]
     norms = []
     for raw in values:
         if type(raw) not in (int, float, str):
@@ -742,11 +1155,18 @@ def _filter_ids(item):
         if norm is None:
             raise ValueError("unresolved filter value")
         norms.append(norm)
+    if op == "contains" and column is None and PROPERTY_TYPES[prop] == "date":
+        month_bounds = _iso_month_bounds(norms[0])
+        if month_bounds is not None:
+            # A valid YYYY-MM can occur only as the prefix of normalized ISO
+            # dates, so closed calendar bounds are exactly equivalent.
+            return _range_ids(prop, month_bounds)
     label, field = ("column_name_raw", "column_text_norm") if column is not None else ("property_id", "norm_value")
     condition = sql.SQL("strpos(v.{}, %s) > 0" if op == "contains" else "v.{} = ANY(%s)").format(sql.Identifier(field))
-    direct = sql.SQL("""SELECT v.record_id FROM record_value v
-                         WHERE v.{} = %s AND """).format(sql.Identifier(label)) + condition
-    params = [column if column is not None else prop, norms[0] if op == "contains" else norms]
+    comparison = sql.SQL(" = ANY(%s)" if column is not None else " = %s")
+    direct = sql.SQL("SELECT v.record_id FROM record_value v WHERE v.{}").format(sql.Identifier(label)) + comparison + sql.SQL(" AND ") + condition
+    params = [_column_names(prop, column_variants or {}) if column is not None else prop,
+              norms[0] if op == "contains" else norms]
     if prop not in ENTITY_TYPES:
         return direct, params
     key_test = sql.SQL("strpos(e.norm_key, %s)>0" if op == "contains" else "e.norm_key=ANY(%s)")
@@ -761,7 +1181,85 @@ def _filter_ids(item):
 
 
 
-def _scope_exclusions(db, prefix, args, admit):
+def known_entity_filters(required_terms, permission_scopes, *, source_revision_sha256, connection,
+                         _admit=None, _native_source_families=None, _term_identity_hints=None):
+    """Resolve exact typed keys from scoped, pinned direct seeds, without inference.
+
+    Whole terms and their eligible whitespace tokens are exact candidates only.
+    Same-kind keys on different terms remain independent AND predicates. A key
+    that is both a part and a purchase order is deliberately not auto planned.
+    The final execute call still applies source-family/selector admission.
+    """
+    scopes = [_text(scope) for scope in permission_scopes]
+    pin = _hash(source_revision_sha256)
+    whole_terms = [norm for term in required_terms if (norm := normalize("identifier", term)["norm"]) is not None]
+    tokens_by_term = {term: [token for token in term.split()
+        if len(token) >= 4 and any(char.isdigit() for char in token)] for term in whole_terms}
+    terms = list(dict.fromkeys(chain(whole_terms, chain.from_iterable(tokens_by_term.values()))))
+    if not terms or not scopes:
+        return [], False
+    qualified_native = _native_source_families is not None
+    native_scope = _native_family_scope(_native_source_families, "r")[0] if qualified_native else sql.SQL("")
+    matches = connection.execute(sql.SQL("""SELECT DISTINCT seeds.norm_key, seeds.entity_type, seeds.via_property, r.record_id
+        FROM (
+            SELECT e.norm_key,e.entity_type,re.via_property,re.record_id
+            FROM entity e JOIN record_entity re USING(entity_id) WHERE e.norm_key=ANY(%s)
+              AND ((e.entity_type='part' AND re.via_property IN ('part_number','manufacturer_part_number'))
+                   OR (e.entity_type='purchase_order' AND re.via_property='po_number'))
+            UNION
+            SELECT v.norm_value, CASE WHEN v.property_id='po_number' THEN 'purchase_order' ELSE 'part' END,
+                   v.property_id,v.record_id
+            FROM record_value v WHERE v.norm_value=ANY(%s) AND v.norm_status='ok'
+              AND v.property_id IN ('part_number','manufacturer_part_number','po_number')
+        ) seeds JOIN record r USING(record_id)
+        WHERE r.permission_scope=ANY(%s)
+          AND coalesce(r.row_role,'') NOT IN ('header','header_candidate')
+          AND r.verified_at_export AND r.export_binding IS NOT NULL
+          AND (CASE WHEN r.kind='table_row' THEN r.source_revision_sha256 ELSE r.fact_serving_revision_sha256 END)=%s
+        """) + native_scope + sql.SQL(" ORDER BY seeds.norm_key,seeds.entity_type,seeds.via_property,r.record_id"),
+        (terms, terms, scopes, pin)).fetchall()
+    if _admit is not None and matches:
+        ids = list({row[3] for row in matches})
+        prefix = sql.SQL("WITH matched AS MATERIALIZED (SELECT record_id FROM record WHERE record_id=ANY(%s))")
+        rejected = set(_scope_exclusions(connection, prefix, [ids], _admit, qualified_native=qualified_native))
+        matches = [row for row in matches if row[3] not in rejected]
+    by_key = defaultdict(lambda: defaultdict(set))
+    for key, kind, prop, _ in matches:
+        by_key[key][kind].add(prop)
+    if any(len(by_key[key]) > 1 for key in whole_terms):
+        return [], True
+    # An admitted whole-term match keeps the original exact-match behavior.
+    # Its component tokens neither add filters nor contribute label hints.
+    unmatched = [term for term in whole_terms if not by_key.get(term)]
+    hints_by_key = defaultdict(set)
+    for term in unmatched:
+        if (prop := (_term_identity_hints or {}).get(term)) is not None:
+            token = term.rsplit(None, 1)[-1]
+            if token in tokens_by_term[term]:
+                hints_by_key[token].add(prop)
+    active = dict.fromkeys(chain(whole_terms, chain.from_iterable(tokens_by_term[term] for term in unmatched)))
+    filters = []
+    for key in active:
+        kinds = by_key[key]
+        # Only expanded token candidates can be narrowed by a resolved label.
+        # Whole-term ambiguity remains authoritative, even when also hinted.
+        hints = hints_by_key[key] if key not in whole_terms else ()
+        if hints and kinds:
+            if len(hints) != 1:
+                return [], True
+            prop = next(iter(hints))
+            kind = ENTITY_TYPES[prop]
+            kinds = {kind: {prop}} if prop in kinds.get(kind, ()) else {}
+        if len(kinds) > 1:
+            return [], True
+        if kinds:
+            props = next(iter(kinds.values()))
+            prop = "part_number" if "part_number" in props else sorted(props)[0]
+            filters.append({"property": prop, "op": "eq", "values": [key]})
+    return filters, False
+
+
+def _scope_exclusions(db, prefix, args, admit, *, qualified_native=False):
     """Stream only identity/hash membership proofs. Full values stay on the server."""
     query = prefix + sql.SQL("""
         SELECT r.record_id,r.kind,r.permission_scope,r.source_observation_id,r.source_hash,spans.refs
@@ -770,6 +1268,10 @@ def _scope_exclusions(db, prefix, args, admit):
             s->>'observation_id',s->>'observation_hash')),'[]'::jsonb) AS refs
             FROM record_value v CROSS JOIN LATERAL jsonb_array_elements(v.evidence_spans || v.context_spans) s
             WHERE v.record_id=r.record_id) spans""")
+    if qualified_native:
+        # visible already rejects qualified families outside the request. Skip
+        # hydration only for each individually pinned, sealed admitted row.
+        query += sql.SQL(" WHERE NOT coalesce({},false)").format(_native_family_receipt("r"))
     rejected = []
     with db.cursor(name="record_table_scope_proofs") as cur:
         cur.execute(query,args)
@@ -784,7 +1286,7 @@ def _scope_exclusions(db, prefix, args, admit):
     return rejected
 
 
-def _record_result_groups(columns, filters, bounds):
+def _record_result_groups(columns, filters, bounds, column_variants=None):
     """Compute distinct material memberships, original surfaces and counts in PostgreSQL."""
     requested = [
         (i, prop, _column(prop), ENTITY_TYPES.get(prop), bool(
@@ -794,6 +1296,7 @@ def _record_result_groups(columns, filters, bounds):
     ]
     checks = []
     args = [list(values) for values in zip(*requested)]
+    args.append(Jsonb({prop: _column_names(prop, column_variants or {}) for prop in columns if _column(prop) is not None}))
     for prop, limits in bounds.items():
         if prop not in columns:
             continue
@@ -805,43 +1308,57 @@ def _record_result_groups(columns, filters, bounds):
             tests.append(expr + sql.SQL(" >= %s" if op == "gte" else " <= %s"))
             args.append(Decimal(bound) if PROPERTY_TYPES[prop] == "quantity" else bound)
         checks.append(sql.SQL(" AND (q.label<>%s OR (") + sql.SQL(" AND ").join(tests) + sql.SQL("))"))
+    args.extend([_ENTITY_DIGIT_PATTERN, _ENTITY_WHITESPACE_PATTERN, _ENTITY_WHITESPACE_PATTERN])
     group_query = sql.SQL("""
         , requested(i,label,col,kind,constant_filter) AS (
             SELECT * FROM unnest(%s::int[],%s::text[],%s::text[],%s::text[],%s::bool[])),
         ordered AS MATERIALIZED (SELECT record_id,
             row_number() OVER (ORDER BY hits DESC,newest DESC NULLS LAST,record_id) AS position FROM ranked),
         cells AS MATERIALIZED (
-            SELECT o.record_id, q.i, q.kind, v.raw_value AS raw, v.column_name_raw AS name, v.norm_value AS norm
+            SELECT o.record_id, q.i, q.kind, v.raw_value AS raw, v.column_name_raw AS name,
+                CASE WHEN v.norm_status='ok' THEN v.norm_value END AS norm
             FROM ordered o JOIN record_value v USING(record_id) JOIN requested q ON
-              ((q.col IS NULL AND v.property_id=q.label) OR v.column_name_raw=q.col) WHERE true
+              ((q.col IS NULL AND v.property_id=q.label) OR v.column_name_raw=ANY(
+                  ARRAY(SELECT jsonb_array_elements_text(%s::jsonb -> q.label)))) WHERE true
         """) + sql.SQL("").join(checks) + sql.SQL("""
         ), needs_link AS MATERIALIZED (
-            SELECT o.record_id,q.i,q.kind FROM ordered o CROSS JOIN requested q
-            WHERE q.kind IS NOT NULL AND NOT EXISTS (
-                SELECT FROM cells c WHERE c.record_id=o.record_id AND c.i=q.i AND c.norm IS NOT NULL)),
-        edges AS MATERIALIZED (
-            SELECT DISTINCT ON (n.record_id,n.i,e.norm_key) n.*, re.raw_key AS raw,e.norm_key AS norm,
-                re.via_property,re.citation_hash
+            SELECT o.record_id,q.i,q.kind,q.label FROM ordered o CROSS JOIN requested q WHERE q.kind IS NOT NULL),
+        edge_candidates AS MATERIALIZED (
+            SELECT n.*, re.raw_key AS raw,e.norm_key AS norm,re.via_property,re.citation_hash,
+                bool_or(re.via_property=n.label) OVER (PARTITION BY n.record_id,n.i) AS has_own
             FROM needs_link n JOIN record_entity re USING(record_id)
             JOIN entity e ON e.entity_id=re.entity_id AND e.entity_type=n.kind
-            ORDER BY n.record_id,n.i,e.norm_key,(re.via_property='quote_mention'),re.via_property),
+            WHERE char_length(e.norm_key) BETWEEN 4 AND 64
+              AND strpos(e.norm_key,' ')=0
+              AND ((e.norm_key ~ '[a-zA-Z]' AND e.norm_key ~ %s)
+                   OR (n.kind='purchase_order' AND e.norm_key ~ '^[0-9]+$'))
+              AND (re.via_property='quote_mention'
+                   OR (n.kind='part' AND re.via_property IN ('part_number','manufacturer_part_number'))
+                   OR (n.kind='purchase_order' AND re.via_property='po_number'))),
+        edges AS MATERIALIZED (
+            SELECT DISTINCT ON (record_id,i,norm) * FROM edge_candidates
+            WHERE NOT has_own OR via_property=label
+            ORDER BY record_id,i,norm,(via_property='quote_mention'),via_property),
         edge_cells AS MATERIALIZED (
             SELECT e.record_id,e.i,e.kind,e.raw,p.name,e.norm,
                 CASE WHEN e.via_property='quote_mention' THEN 'quote_mention' ELSE 'value' END AS link,
                 p.present IS TRUE AS proved
             FROM edges e LEFT JOIN LATERAL (
+                SELECT v.column_name_raw AS name,true AS present FROM record_value v
+                WHERE v.record_id=e.record_id AND e.via_property=v.property_id
+                    AND v.citation_hash=e.citation_hash
+                    AND (e.raw=v.raw_value OR e.raw=ANY(regexp_split_to_array(v.raw_value,%s)))
+                UNION ALL
                 SELECT CASE WHEN ref.context THEN NULL ELSE v.column_name_raw END AS name,true AS present
                 FROM record_value v CROSS JOIN LATERAL (
                     SELECT s.span,false AS context FROM jsonb_array_elements(v.evidence_spans) s(span)
                     UNION ALL SELECT s.span,true FROM jsonb_array_elements(v.context_spans) s(span)
-                ) ref WHERE v.record_id=e.record_id AND ref.span->>'observation_hash'=e.citation_hash AND
-                   ((e.via_property='quote_mention' AND e.raw=ANY(regexp_split_to_array(ref.span->>'quote','[[:space:]]+')))
-                    OR (NOT ref.context AND e.via_property=v.property_id))
-                ORDER BY v.ordinal,ref.context LIMIT 1) p ON true),
+                ) ref WHERE v.record_id=e.record_id AND e.via_property='quote_mention'
+                    AND ref.span->>'observation_hash'=e.citation_hash
+                    AND e.raw=ANY(regexp_split_to_array(ref.span->>'quote',%s))
+                LIMIT 1) p ON true),
         projected AS MATERIALIZED (
-            SELECT c.*,NULL::text AS link,true AS proved FROM cells c WHERE c.kind IS NULL OR c.norm IS NOT NULL
-                OR (c.kind='purchase_order' AND EXISTS (SELECT FROM needs_link n WHERE (n.record_id,n.i)=(c.record_id,c.i))
-                    AND NOT EXISTS (SELECT FROM edges e WHERE (e.record_id,e.i)=(c.record_id,c.i)))
+            SELECT c.*,NULL::text AS link,true AS proved FROM cells c WHERE c.kind IS NULL
             UNION ALL SELECT * FROM edge_cells
             UNION ALL SELECT n.record_id,n.i,n.kind,NULL,NULL,NULL,'unlinked_part',true FROM needs_link n
                 WHERE n.kind='part' AND NOT EXISTS (SELECT FROM edges e WHERE (e.record_id,e.i)=(n.record_id,n.i))),
@@ -858,7 +1375,7 @@ def _record_result_groups(columns, filters, bounds):
               CASE WHEN q.constant_filter THEN '[]'::jsonb ELSE coalesce(to_jsonb(array_agg(
                 DISTINCT p.raw COLLATE "C" ORDER BY p.raw COLLATE "C" NULLS FIRST)
                 FILTER (WHERE p.i IS NOT NULL)),'[]'::jsonb) END AS raw_key,
-              coalesce(jsonb_agg(DISTINCT jsonb_build_array(p.raw,p.name,p.link))
+              coalesce(jsonb_agg(DISTINCT jsonb_build_array(p.raw,p.name,p.link,p.norm))
                 FILTER (WHERE p.i IS NOT NULL),'[]'::jsonb) AS labels, bool_and(p.proved) AS proved
             FROM axes a CROSS JOIN requested q
             LEFT JOIN projected p ON p.record_id=a.record_id AND p.i=q.i
@@ -878,7 +1395,9 @@ def _record_result_groups(columns, filters, bounds):
 
 
 def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
-            _result_groups=False, _record_ids=None, _admit=None, _restricted=False, source_revision_sha256=None, _deadline=None):
+            _result_groups=False, _record_ids=None, _admit=None, _restricted=False, source_revision_sha256=None,
+            _deadline=None, _native_source_families=None, _summary_source_families=None,
+            _summary_selector=None, _require_unresolved_summary=False):
     """Count authorized matching data records and page them in deterministic order.
 
     Each row contains every value. 'returned' selects requested values by name;
@@ -887,7 +1406,7 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
     memberships and returns their count separately in grouped_total.
     """
     if not isinstance(plan, dict) or set(plan) - {"filters", "return", "group_by", "limit", "offset",
-                                                 "order_by", "include_unmapped_text"}:
+                                                 "order_by", "include_unmapped_text", "column_variants"}:
         raise ValueError("invalid record query plan")
     rank_projection = plan.get("order_by") == "projection_coverage"
     if plan.get("order_by") not in (None, "projection_coverage") or plan.get("include_unmapped_text", True) is not True:
@@ -901,14 +1420,26 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
     if not isinstance(permission_scopes, (list, tuple, set, frozenset)):
         raise ValueError("expected authorized scope ids")
     scopes = [_text(scope) for scope in permission_scopes]
+    column_variants = plan.get("column_variants", {})
+    if (not isinstance(column_variants, dict) or any(_column(prop) is None or not isinstance(names, list)
+            or not names or any(not isinstance(name, str) or not name.strip()
+                or field_name_key(name) != field_name_key(_column(prop)) for name in names)
+            for prop,names in column_variants.items())):
+        raise ValueError("invalid raw column variants")
     bounds = range_bounds(filters)
-    non_range_terms = [_filter_ids(f) for f in filters if f.get("op") not in ("gte", "lte")]
-    # Count each unresolved value once after non-range filters. The restricted
+    non_range_filters = [f for f in filters if f.get("op") not in ("gte", "lte")]
+    non_range_terms = [_filter_ids(f, column_variants) for f in non_range_filters]
+    partial_dates = {f["property"] for f in non_range_filters
+                     if f.get("op") == "contains" and PROPERTY_TYPES.get(f.get("property")) == "date"}
+    comparison_properties = list(dict.fromkeys([*bounds, *sorted(partial_dates)]))
+    non_comparison_terms = [term for f, term in zip(non_range_filters, non_range_terms, strict=True)
+                           if not (f.get("op") == "contains" and f.get("property") in partial_dates)]
+    # Count each unresolved value once after non-comparison filters. The restricted
     # source reader can request the same candidates and apply its family/selector.
     unresolved_sql = sql.SQL("SELECT v.record_id FROM record_value v JOIN visible USING(record_id) "
                              "WHERE v.property_id=ANY(%s) AND v.norm_status <> 'ok'")
-    unresolved_args = [list(bounds)]
-    for subquery, args in non_range_terms:
+    unresolved_args = [comparison_properties]
+    for subquery, args in non_comparison_terms:
         unresolved_sql += sql.SQL(" AND v.record_id IN ({})").format(subquery)
         unresolved_args.extend(args)
     if _unresolved_only:
@@ -918,14 +1449,14 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
     material_groups = group == "料件"
     group_type = "part" if material_groups else ENTITY_TYPES.get(group)
     props = [f["property"] for f in filters] + returns + ([group] if group is not None and not material_groups else [])
-    raw_columns = {col for prop in props if (col := _column(prop)) is not None}
+    raw_columns = {name for prop in props for name in _column_names(prop, column_variants)}
     if not scopes:
         empty = {"total": 0, "rows": [], "truncated": False, "grouped_total": 0, "unlinked_count": 0}
         if _result_groups:
             empty["result_groups"] = []
         if rank_projection:
             empty.update(without_projection=0, quantity_only=0)
-        if bounds:
+        if comparison_properties:
             empty["unresolved_value_count"] = 0
         return empty
 
@@ -933,6 +1464,11 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
     if source_revision_sha256 is not None:
         pin = sql.Literal(_hash(source_revision_sha256))
         eligibility = sql.SQL(" AND verified_at_export AND export_binding IS NOT NULL AND (CASE WHEN kind='table_row' THEN source_revision_sha256 ELSE fact_serving_revision_sha256 END)={}").format(pin)
+    qualified_native = source_revision_sha256 is not None and _native_source_families is not None
+    native_family_narrowed = False
+    if qualified_native:
+        native_scope, native_family_narrowed = _native_family_scope(_native_source_families)
+        eligibility += native_scope
     visible = sql.SQL("""WITH visible AS NOT MATERIALIZED (
         SELECT * FROM record WHERE permission_scope=ANY(%s)
         AND coalesce(row_role,'') NOT IN ('header', 'header_candidate'){}) """).format(eligibility)
@@ -954,9 +1490,10 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
         col = _column(group)
         label, value = ("column_name_raw", "column_text_norm") if col is not None else ("property_id", "norm_value")
         groups = sql.SQL("""ARRAY(SELECT DISTINCT v.{value} FROM record_value v WHERE v.record_id=m.record_id
-            AND v.{label}=%s AND v.{value} IS NOT NULL ORDER BY v.{value})""").format(
+            AND v.{label}{comparison} AND v.{value} IS NOT NULL ORDER BY v.{value})""").format(
+                comparison=sql.SQL("=ANY(%s)" if col is not None else "=%s"),
                 label=sql.Identifier(label), value=sql.Identifier(value))
-        params.append(col if col is not None else group)
+        params.append(_column_names(group, column_variants) if col is not None else group)
     memberships = (sql.SQL("""SELECT record_id, ARRAY(SELECT key WHERE key IS NOT NULL) AS group_keys
                       FROM grouped LEFT JOIN LATERAL unnest(group_keys) AS k(key) ON true""")
                    if material_groups else sql.SQL("SELECT * FROM grouped"))
@@ -967,16 +1504,17 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
             raise ValueError("projection ranking requires ungrouped return fields")
         # Count both ontology and literal-column projections if the same cell
         # supplies both. An entity edge fills a missing part projection once.
-        projected_cols = [label[7:] for label in returns if label.startswith("column:")]
+        projected_slots = [_column_names(label, column_variants) for label in returns if label.startswith("column:")]
+        projected_cols = list({name for names in projected_slots for name in names})
         columns = sql.SQL("0")
         column_date = sql.SQL("false")
         if projected_cols:
-            columns = sql.SQL("count(DISTINCT v.column_name_raw) FILTER (WHERE v.column_name_raw=ANY(%s))")
+            columns = sql.SQL(" + ").join(sql.SQL("coalesce(bool_or(v.column_name_raw=ANY(%s)),false)::int") for _ in projected_slots)
             column_date = sql.SQL("v.column_name_raw=ANY(%s)")
         hits = sql.SQL("count(DISTINCT v.property_id) FILTER (WHERE v.property_id=ANY(%s)) + ") + columns
         params.append(returns)
         if projected_cols:
-            params.append(projected_cols)
+            params.extend(projected_slots)
         params.append(returns)
         if projected_cols:
             params.append(projected_cols)
@@ -1006,7 +1544,7 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
     if _result_groups:
         if not rank_projection:
             raise ValueError("table result groups require projection ranking")
-        group_query, group_args = _record_result_groups(returns, filters, bounds)
+        group_query, group_args = _record_result_groups(returns, filters, bounds, column_variants)
         rank_prefix += group_query
         params.extend(group_args)
         group_field = sql.SQL(""", (SELECT coalesce(jsonb_agg(jsonb_build_array(signature,count,representative,labels,proved)
@@ -1035,31 +1573,71 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
                 if ms <= 0:
                     raise TimeoutError("record query deadline")
                 db.execute("SELECT set_config('statement_timeout',%s,true)", (str(ms),))
-        if raw_columns:
+        entity_filters = [item for item in filters if item.get("property") in ENTITY_TYPES
+                          and item.get("op") in ("eq", "in", "contains")]
+        if _admit is not None and entity_filters:
+            seed_tests, seed_args = [], []
+            for item in entity_filters:
+                prop, op = item["property"], item["op"]
+                keys = [normalize("identifier", str(value))["norm"] for value in item["values"]]
+                test = sql.SQL("strpos(e.norm_key,%s)>0" if op == "contains" else "e.norm_key=ANY(%s)")
+                seed_tests.append(sql.SQL("(seed.via_property=%s AND e.entity_type=%s AND {})").format(test))
+                seed_args.extend([prop, ENTITY_TYPES[prop], keys[0] if op == "contains" else keys])
+            seed_prefix = visible + sql.SQL(""", matched AS MATERIALIZED (
+                SELECT DISTINCT seed.record_id FROM record_entity seed JOIN entity e USING(entity_id)
+                JOIN visible USING(record_id) WHERE {})""").format(sql.SQL(" OR ").join(seed_tests))
             remaining_budget()
-            actual = db.execute(visible + sql.SQL("""SELECT DISTINCT column_name_raw FROM record_value
-                                JOIN visible USING(record_id) WHERE column_name_raw=ANY(%s)"""),
-                                (scopes, list(raw_columns))).fetchall()
-            if {r[0] for r in actual} != raw_columns:
-                raise ValueError("unavailable raw column")
+            rejected_seeds = _scope_exclusions(db, seed_prefix, [scopes, *seed_args], _admit,
+                                               qualified_native=qualified_native)
+            if rejected_seeds:
+                scoped_eligibility = eligibility + sql.SQL(" AND record_id <> ALL({}::text[])").format(sql.Literal(rejected_seeds))
+                visible = sql.SQL("""WITH visible AS NOT MATERIALIZED (
+                    SELECT * FROM record WHERE permission_scope=ANY(%s)
+                    AND coalesce(row_role,'') NOT IN ('header','header_candidate'){}) """).format(scoped_eligibility)
+                match_prefix = visible + sql.SQL(", matched AS MATERIALIZED (SELECT record_id FROM visible {})").format(where)
+        if raw_columns:
+            for name in raw_columns:
+                remaining_budget()
+                if not db.execute(visible + sql.SQL("""SELECT EXISTS(SELECT FROM record_value
+                    JOIN visible USING(record_id) WHERE column_name_raw=%s LIMIT 1)"""), (scopes,name)).fetchone()[0]:
+                    raise ValueError("unavailable raw column")
         if _admit is not None:
             remaining_budget()
-            excluded = _scope_exclusions(db, match_prefix, match_params, _admit)
+            excluded = _scope_exclusions(db, match_prefix, match_params, _admit, qualified_native=qualified_native)
             if excluded:
                 where += sql.SQL(" AND " if terms or _record_ids is not None else " WHERE ")
                 where += sql.SQL("record_id <> ALL(%s)")
                 params.insert(len(match_params), excluded)
                 match_prefix = visible + sql.SQL(", matched AS MATERIALIZED (SELECT record_id FROM visible {})").format(where)
+        for prop,names in column_variants.items():
+            if len(names) < 2:
+                continue
+            remaining_budget()
+            conflict = db.execute(match_prefix + sql.SQL("""SELECT FROM record_value v JOIN matched USING(record_id)
+                WHERE v.column_name_raw=ANY(%s) GROUP BY v.record_id
+                HAVING count(DISTINCT v.column_name_raw)>1 AND count(DISTINCT v.raw_value)>1 LIMIT 1"""),
+                [*params[:len(match_params)+(1 if _admit is not None and excluded else 0)],names]).fetchone()
+            if conflict is not None:
+                raise ValueError("unavailable raw column")
         prefix = match_prefix + rank_prefix
         query = prefix + page_sql
         remaining_budget()
         total, grouped_total, unlinked, missing, quantity_only, rows, *group_result = db.execute(
             query, [*params, limit, offset]).fetchone()
         comparison = {"result_groups":[tuple(g) for g in group_result[0]]} if group_result else {}
-        if bounds and not _unresolved_only and _record_ids is None:
+        summary = None
+        if comparison_properties and not _unresolved_only:
+            remaining_budget()
+            summary = _unresolved_summary_count(db, scopes, source_revision_sha256, comparison_properties,
+                families=_summary_source_families, selector=_summary_selector, restricted=_restricted,
+                unsupported=bool(non_comparison_terms) or _record_ids is not None, required=_require_unresolved_summary)
+            if summary is not None:
+                comparison.update(summary)
+        if comparison_properties and not _unresolved_only and _record_ids is None and summary is None:
             count_query = visible + sql.SQL("SELECT count(*) FROM ({}) skipped").format(unresolved_sql)
             count_params = [scopes, *unresolved_args]
-            if len(scopes) <= 16 and not non_range_terms:
+            fast_unresolved_count = len(scopes) <= 16 and not non_comparison_terms and not native_family_narrowed
+            if fast_unresolved_count:
                 # Exclude the indexed gaps between grants and the headers inside them.
                 # Use the database collation for text boundaries. Larger grant lists
                 # retain the positive visible join above without growing a UNION.
@@ -1089,13 +1667,20 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
                 count_query = f"""WITH omitted AS MATERIALIZED ({excluded_sql}) SELECT count(*) FROM record_value v
                     WHERE v.property_id=ANY(%s) AND v.norm_status<>'ok'
                     AND NOT EXISTS (SELECT FROM omitted WHERE omitted.record_id=v.record_id)"""
-                count_params.append(list(bounds))
+                count_params.append(comparison_properties)
             if _restricted and _admit is not None:
                 skipped = visible + sql.SQL(", matched AS MATERIALIZED (SELECT DISTINCT record_id FROM ({}) u)").format(unresolved_sql)
                 remaining_budget()
-                excluded = _scope_exclusions(db, skipped, [scopes, *unresolved_args], _admit)
-                count_query = visible + sql.SQL("SELECT count(*) FROM ({}) u WHERE record_id <> ALL(%s)").format(unresolved_sql)
-                count_params = [scopes, *unresolved_args, excluded]
+                excluded = _scope_exclusions(db, skipped, [scopes, *unresolved_args], _admit, qualified_native=qualified_native)
+                if fast_unresolved_count and qualified_native:
+                    # Both native families share the sealed admission. Keep the
+                    # existing indexed scope/revision omission count, subtracting
+                    # only callback-rejected fact/legacy records.
+                    count_query += " AND v.record_id <> ALL(%s)"
+                    count_params.append(excluded)
+                else:
+                    count_query = visible + sql.SQL("SELECT count(*) FROM ({}) u WHERE record_id <> ALL(%s)").format(unresolved_sql)
+                    count_params = [scopes, *unresolved_args, excluded]
             remaining_budget()
             comparison["unresolved_value_count"] = db.execute(count_query, count_params).fetchone()[0]
     for row in rows:
@@ -1114,7 +1699,8 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
             for prop in returns:
                 column = _column(prop)
                 key, match = ("column_name_raw", column) if column is not None else ("property_id", prop)
-                row["returned"][prop] = [value for value in row["values"] if value[key] == match]
+                row["returned"][prop] = [value for value in row["values"] if
+                    (value[key] in _column_names(prop, column_variants) if column is not None else value[key] == match)]
     return {**comparison, **({"without_projection": missing, "quantity_only": quantity_only} if rank_projection else {}),
             "total": total, "rows": rows, "truncated": offset + len(rows) < grouped_total,
             "grouped_total": grouped_total, "unlinked_count": unlinked if group_type else 0}

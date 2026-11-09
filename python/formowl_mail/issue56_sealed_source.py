@@ -1134,6 +1134,7 @@ class _CandidateFactRows(Sequence[Mapping[str, Any]]):
 
     row_indexes: Mapping[str, int] = field(default_factory=dict, repr=False)
     aliases: tuple[tuple[str, str], ...] = ()
+    raw_columns: tuple[str, ...] | None = None
 
     def __len__(self):
         return len(self.references)
@@ -1142,6 +1143,11 @@ class _CandidateFactRows(Sequence[Mapping[str, Any]]):
         path, identity, _ = self.exports[export_index]
         if _candidate_fact_file_identity(path.lstat()) != identity:
             raise ContractValidationError("candidate fact rows changed after binding")
+
+    def raw_column_names(self):
+        for export_index in range(len(self.exports)):
+            self._unchanged(export_index)
+        return self.raw_columns
 
     def _read(self, index, deadline=None, *, source_file=None):
         export_index, offset, length, digest = self.references[index]
@@ -1222,7 +1228,7 @@ def bind_issue56_candidate_fact_exports(
     if not isinstance(exports, list) or not 1 <= len(exports) <= 128:
         raise ContractValidationError("candidate fact exports are invalid")
     pending, total_row_bytes = [], 0
-    aliases = set()
+    aliases, raw_columns = set(), set()
     for entry in exports:
         path = Path(entry["manifest_path"])
         _, manifest = _read_sealed_json(path, expected_sha256=entry["manifest_sha256"],
@@ -1273,6 +1279,10 @@ def bind_issue56_candidate_fact_exports(
                     or row.get("row_id") in row_ids or not isinstance(row.get("fields"), dict)):
                     raise ContractValidationError("candidate fact row binding is invalid")
                 _validate_candidate_fact_subject(row)
+                for facts in row["fields"].values():
+                    if isinstance(facts, list):
+                        raw_columns.update(fact["raw_property"] for fact in facts if isinstance(fact, dict)
+                            and isinstance(fact.get("raw_property"), str) and fact["raw_property"].strip())
                 for value in set(_candidate_fact_identity_values(row, properties)):
                     postings.setdefault(value, []).append(len(references))
                 references.append((export_index, offset, len(raw), _sha256_bytes(raw)))
@@ -1286,7 +1296,8 @@ def bind_issue56_candidate_fact_exports(
             raise ContractValidationError("candidate fact rows seal mismatch")
         if count != manifest.get("row_count") or offset != identity[2]:
             raise ContractValidationError("candidate fact row count mismatch")
-    rows = _CandidateFactRows(tuple(item[:3] for item in pending), tuple(references), {}, row_ids, tuple(sorted(aliases)))
+    rows = _CandidateFactRows(tuple(item[:3] for item in pending), tuple(references), {}, row_ids,
+                              tuple(sorted(aliases)), tuple(sorted(raw_columns)))
     # Reuse the sealed offset reader: the second pass verifies each row and
     # never retains the corpus of quotes or adds free-text vocabulary.
     mention_count = _add_candidate_fact_quote_mentions(rows, postings)

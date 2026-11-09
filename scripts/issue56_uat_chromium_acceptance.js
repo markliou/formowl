@@ -8,13 +8,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// Match the 2026-10-26 180-second browser acceptance wait policy.
-const CDP_COMMAND_TIMEOUT_MS = 180000;
+// Allow the 240-second turn plus time for HTTP delivery and page rendering.
+const CDP_COMMAND_TIMEOUT_MS = 250000;
 const MAX_PROVIDER_ATTEMPT_DIAGNOSTICS = 3;
 // Three MCP calls + one terminology call, followed by the final answer and
 // its single bounded repair.
 const MAX_PROVIDER_REQUESTS_PER_TURN = 3 + 1 + 2;
-const MAX_UAT_TURN_MS = 180000;
+const MAX_UAT_TURN_MS = 240000;
 const safeRunnerPhases = new Set([
   'startup', 'browser_launch', 'cdp_connect', 'target_create',
   'page_navigation', 'auth_gate', 'ready_check', 'ordinary_submit',
@@ -987,7 +987,7 @@ function classify(
   // Keep all page-side validation local; it must not capture Node helpers.
   const MAX_PROVIDER_ATTEMPT_DIAGNOSTICS = 3;
   const MAX_PROVIDER_REQUESTS_PER_TURN = 3 + 1 + 2;
-  const MAX_UAT_TURN_MS = 180000;
+  const MAX_UAT_TURN_MS = 240000;
   const payload = record.payload || {};
   const body = payload.response || payload;
   const diagnostic = payload.diagnostic || body.diagnostic || {};
@@ -1638,7 +1638,7 @@ function safeOutput(result, {final = false} = {}) {
     'source_neutral_cited_result', 'source_neutral_passed',
     'page_not_ready', 'auth_required', 'session_not_fresh',
     'acceptance_followups_failed', 'acceptance_followups_passed',
-    'basic_only_failed', 'basic_only_timeout', 'basic_only_passed',
+    'basic_only_failed', 'basic_only_timeout', 'basic_only_passed', 'synthetic_progress_passed',
     'awaiting_master_go', 'tooling_self_check_passed',
   ]);
   const output = {status: allowed.has(result.status) ? result.status : 'runner_error'};
@@ -1662,7 +1662,7 @@ function safeOutput(result, {final = false} = {}) {
     'document_tool_count', 'document_citation_count',
   ]) {
     if (Object.hasOwn(result, key)) {
-      const upperBound = key === 'http_status' ? 599 : 180000;
+      const upperBound = key === 'http_status' ? 599 : MAX_UAT_TURN_MS;
       const lowerBound = key === 'http_status' ? 100 : 0;
       output[key] = Number.isFinite(result[key]) &&
         result[key] >= lowerBound && result[key] <= upperBound ?
@@ -1687,7 +1687,7 @@ function safeOutput(result, {final = false} = {}) {
   ]) {
     if (Object.hasOwn(result, key)) {
       output[key] = Number.isFinite(result[key]) && result[key] >= 0 &&
-        result[key] <= 180000 ? Math.round(result[key] * 1000) / 1000 : null;
+        result[key] <= MAX_UAT_TURN_MS ? Math.round(result[key] * 1000) / 1000 : null;
     }
   }
   for (const key of [
@@ -1884,14 +1884,18 @@ async function main() {
       safeOutput({status: 'runner_error', runner_diagnostic: state}, {final: true});
       return 1;
     }
-    if (sourceNeutralSynthetic && (!live || !process.env.FORMOWL_UAT_URL ||
+    const testProgress = process.argv.includes('--synthetic-progress');
+    if (testProgress && (!basicOnly || !target.port || target.port === '8088')) {
+      throw new Error('target_invalid');
+    }
+    if ((sourceNeutralSynthetic || testProgress) && (!live || !process.env.FORMOWL_UAT_URL ||
         !new Set(['127.0.0.1', 'localhost', '::1']).has(target.hostname))) {
       recordRunnerFailure(state, 'target_invalid');
       safeOutput({status: 'runner_error', runner_diagnostic: state}, {final: true});
       return 1;
     }
-    const turnMs = Number(process.env.FORMOWL_UAT_TIMEOUT_MS || 180000);
-    if (!Number.isInteger(turnMs) || turnMs < 1000 || turnMs > 180000) {
+    const turnMs = Number(process.env.FORMOWL_UAT_TIMEOUT_MS || CDP_COMMAND_TIMEOUT_MS);
+    if (!Number.isInteger(turnMs) || turnMs < 1000 || turnMs > CDP_COMMAND_TIMEOUT_MS) {
       recordRunnerFailure(state, 'timeout_invalid');
       safeOutput({status: 'runner_error', runner_diagnostic: state}, {final: true});
       return 1;
@@ -2077,6 +2081,34 @@ async function main() {
       recordRunnerFailure(state, 'session_not_fresh');
       safeOutput({status: 'session_not_fresh', runner_diagnostic: state}, {final: true});
       return 1;
+    }
+    if (testProgress) {
+      // Exercise the normal page against the local test fixture, including a failed turn.
+      const polls = "performance.getEntriesByName(location.origin + '/api/progress').length";
+      for (const outcome of ['success', 'failure']) {
+        const before = await evaluate(polls);
+        await evaluate(`(() => {
+          document.querySelector('#prompt-input').value = ${JSON.stringify(outcome)};
+          document.querySelector('#chat-form').requestSubmit();
+        })()`);
+        const loading = "document.querySelector('#loading-state')";
+        if (!await waitFor(`${polls} > ${before} && !${loading}.hidden &&
+            ${loading}.textContent.includes('模型') &&
+            ${loading}.textContent.includes('秒／上限 240 秒')`, turnMs)) throw new Error('turn_timeout');
+        const first = await evaluate(`${loading}.textContent`);
+        if (!await waitFor(`!${loading}.hidden && ${loading}.textContent.includes('模型') &&
+            ${loading}.textContent !== ${JSON.stringify(first)}`, turnMs)) throw new Error('turn_timeout');
+        if (!await waitFor(`${loading}.hidden && !document.querySelector('#send-button').disabled`, turnMs)) {
+          throw new Error('turn_timeout');
+        }
+        const failed = await evaluate("!document.querySelector('#error-text').hidden");
+        const stopped = await evaluate(polls);
+        if (failed !== (outcome === 'failure') || stopped - before < 2) throw new Error('page_not_ready');
+        await sleep(2250);
+        if (await evaluate(polls) !== stopped) throw new Error('page_not_ready');
+      }
+      safeOutput({status: 'synthetic_progress_passed'}, {final: true});
+      return 0;
     }
     if (basicOnly) {
       const basicOutput = (status, result = {}) => {
@@ -2879,7 +2911,7 @@ async function selfCheck() {
   closedCdp.close();
   child.stdio[4].emit('error', {code: 'ECONNRESET'});
   assert.equal(closedFailure, false);
-  assert.equal(CDP_COMMAND_TIMEOUT_MS, 180000);
+  assert.equal(CDP_COMMAND_TIMEOUT_MS, 250000);
   const slowChild = new EventEmitter();
   slowChild.stdio = [
     null, null, null, new PassThrough(), new PassThrough(),
@@ -3210,7 +3242,7 @@ async function selfCheck() {
     classify('mail', completedProviderRecord, turn).status,
     'mail_cited_result',
   );
-  for (const [elapsedMs, valid] of [[150000, true], [180001, false]]) {
+  for (const [elapsedMs, valid] of [[239000, true], [240001, false]]) {
     const slowRecord = JSON.parse(JSON.stringify(completedProviderRecord));
     const diagnostic = slowRecord.payload.diagnostic;
     diagnostic.provider_attempts[0].elapsed_ms = elapsedMs;

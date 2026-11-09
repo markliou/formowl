@@ -1182,20 +1182,24 @@ def _execute_source_start_table(
     def collect(group: tuple[Observation, ...]) -> None:
         native.update((item.observation_id, item) for item in group)
 
-    scan = lookup.scan_source_rows(
-        # The identifier selects the exact predicate, not permission to drop
-        # other validated content constraints from the same native row.
-        required_terms=(
-            tuple(dict.fromkeys((*identifier_terms, *required_terms)))
-            if table_query is None
-            else effective_required_terms
-        ),
-        query_text=arguments["query_text"], source_families=families,
-        mail_import_session_id=selector, max_observations=SOURCE_EVIDENCE_OBSERVATION_LIMIT,
-        deadline_monotonic=deadline, evidence_by_id=evidence_by_id,
-        observation_callback=lambda item, scope: len(evidence_by_id) < min(limit, 100),
-        table_query=table_query, native_group_callback=collect,
-    )
+    remaining_reads = SOURCE_EVIDENCE_OBSERVATION_LIMIT - (source_budget["reads"] if source_budget else 0)
+    if remaining_reads <= 0:
+        scan = RevisionOwnedMailSourceScan((), 0, False, "observation_limit")
+    else:
+        scan = lookup.scan_source_rows(
+            # The identifier selects the exact predicate, not permission to drop
+            # other validated content constraints from the same native row.
+            required_terms=(
+                tuple(dict.fromkeys((*identifier_terms, *required_terms)))
+                if table_query is None
+                else effective_required_terms
+            ),
+            query_text=arguments["query_text"], source_families=families,
+            mail_import_session_id=selector, max_observations=remaining_reads,
+            deadline_monotonic=deadline, evidence_by_id=evidence_by_id,
+            observation_callback=lambda item, scope: len(evidence_by_id) < min(limit, 100),
+            table_query=table_query, native_group_callback=collect,
+        )
     evidence = list(evidence_by_id.values())
     if source_budget is not None:
         source_budget["reads"] += scan.scanned_observation_count
@@ -1337,6 +1341,20 @@ def _execute_source_start_table(
                              "answer_hash": sha256_json(payload), "citation_count": len(evidence)}
     validate_public_gateway_payload(payload)
     return payload
+
+
+def _document_full_read_requested(request_contract, arguments, *, mail_tool=False):
+    """Check bound document-read intent before either record lookup or full read."""
+    provenance = _SOURCE_DOCUMENT_FULL_READ_REQUEST.get()
+    public_arguments = {key: value for key, value in arguments.items()
+                        if key not in {"requester_user_id", "workspace_id", "session_id"}}
+    return (not mail_tool and request_contract.get("query_class") == "evidence_lookup"
+            and isinstance(provenance, tuple) and len(provenance) == 4 and provenance[3] is True
+            and provenance[0] == request_contract["original_query_hash"]
+            and provenance[1] == ("document_text",)
+            and request_contract.get("source_family_scope") == ["document_text"]
+            and provenance[2] == sha256_json({"name": "query_effective_graph_view",
+                                             "arguments": public_arguments}))
 
 
 def _request_term_placement(arguments, *, mail_tool=False):
@@ -1840,6 +1858,8 @@ def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None, _verif
                 cell = {"value": fact["value"], "quotes": []}
                 if record_total is not None:
                     cell["n"] = name_ref(fact.get("raw_property"))
+                    if "_record_normalized" in fact:
+                        cell["normalized"] = fact["_record_normalized"]
                 if fact.get("unit") not in (None, ""):
                     cell["unit"] = fact["unit"]
                 if fact.get("times"):
@@ -1887,8 +1907,11 @@ def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None, _verif
         for column in group["cells"]:
             cells = []
             for raw in sorted(column, key=lambda v: (v is not None, v or "")):
-                for name, link in sorted(column[raw], key=lambda pair: (pair[0] or "", pair[1] or "")):
+                for label in sorted(column[raw], key=lambda item: tuple(v or "" for v in item)):
+                    name, link = label[:2]
                     cell = {"value": raw, "n": name_ref(name)}
+                    if len(label) == 3 and label[2] is not None:
+                        cell["normalized"] = label[2]
                     if link == "unlinked_part":
                         cell["status"] = "未連到料件"
                     elif link:
@@ -1959,11 +1982,14 @@ def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None, _verif
             memberships = sum(group["count"] for group in record_total["groups"])
             preamble["result_set"] = {"total_groups": k, "shown_groups": j, "memberships": memberships,
                                       "groups": result_lines}
-            preamble["disclosure"] = (f"記錄庫共 {total} 筆。result_set 依投影欄原值決定性去重，"
-                f"為 pending_review 候選，未經人工審核。結果集共 {k} 組，顯示 {j} 組。"
+            preamble["disclosure"] = (f"result_set 是本次授權範圍內記錄庫依投影欄原值決定性去重的結果（pending_review 候選）。"
+                f"結果集共 {k} 組，顯示 {j} 組。"
                 f"唯一記錄 {total} 筆，共 {memberships} 次歸組，每組內同一筆只計一次。"
                 f"詳細列 {len(display)} 列，代表 {represented} 筆，附已補驗的原文證據。")
-            if j < k:
+            if j == k:
+                preamble["disclosure"] += "本表已列出完整結果集。回答清單題時請列出全部組，組數多時可摘要全部組，並引用本表。"
+            else:
+                preamble["disclosure"] += "回答清單題時請用本表總組數與已顯示組作摘要，引用本表並註明未列出的組數。"
                 preamble["disclosure"] += "其餘組因表格預算未列出。" if record_total.get("export_revision") else "其餘組因呈現預算或來源補驗未列出。"
             without_ref = sum(line["ref"] is None for line in result_lines)
             if without_ref and not record_total.get("export_revision"):
@@ -1976,6 +2002,9 @@ def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None, _verif
             n = record_total["unresolved_value_count"]
             preamble["unresolved_value_count"] = n
             preamble["disclosure"] += f"{n} 筆值無法解析未納入比較。"
+        elif record_total.get("unresolved_value_count_status") == "unavailable":
+            preamble["unresolved_value_count_status"] = "unavailable"
+            preamble["disclosure"] += "無法解析的值已排除，本次授權條件沒有可用的封存摘要，筆數未知。"
     if header_refs and record_total is None:
         preamble["headers"] = {ref: names for names, ref in header_refs.items()}
     if not citations and not (record_total and record_total.get("export_revision") and result_lines):
@@ -3074,7 +3103,7 @@ def _build_source_start_semantic_handler(
         and not revision.safe_binding.get("bounded_canary_candidate_count")
     )
 
-    def handler(arguments: dict[str, Any]) -> dict[str, Any]:
+    def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         trace = _SOURCE_PHASE_TRACE.get()
         if not isinstance(arguments, Mapping):
             raise ContractValidationError("source-start arguments are invalid")
@@ -3242,24 +3271,13 @@ def _build_source_start_semantic_handler(
                 "disclosure": _BOUNDED_EXACT_DOWNGRADE_DISCLOSURE,
             }
             query_class = executed_contract["query_class"]
-        if query_class == "exact_set_or_inventory" and table_query is None and (
+        unbound_exact = query_class == "exact_set_or_inventory" and table_query is None and (
             request_contract["source_family_scope"] != ["mail"]
             or len(set(identifier_terms)) != 1
             or not tokenizer.analyze(identifier_terms[0]).protected_identifiers
             or arguments.get("cursor") is not None
             or arguments.get("exact_inventory_kind") is not None
-        ):
-            payload = {
-                "status": "pending_review",
-                "query_hash": sha256_json(query_text),
-                "citations": [],
-                "evidence": [],
-                "warnings": ["retrieval_projection_unavailable", "skipped_exact"],
-            }
-            if mail_tool:
-                payload["mail_import_session_id"] = selector
-                payload["evidence_snippets"] = []
-            return payload
+        )
         source_budget = {
             "deadline": time.monotonic() + SOURCE_START_EVIDENCE_TIME_BUDGET_MS / 1000,
             "reads": 0, "evidence": 0, "context_bytes": 0,
@@ -3317,6 +3335,21 @@ def _build_source_start_semantic_handler(
                       explicit_exact=table_query is not None, requested_fields=len(requested_fields),
                       hints=len(field_query_hints), query_class=query_class)
         _trace(cell, "finish")
+        def record_identifier_result(payload):
+            if (source_budget.get("record_identifier_lookup") != "no_matches"
+                    or payload.get("status") in {"permission_denied", "error", "failed"}
+                    or any(payload.get(key) for key in ("citations", "evidence", "evidence_snippets",
+                                                       "exact_result", "deterministic_exact"))):
+                return payload
+            coverage = payload.get("coverage", {})
+            if coverage.get("record_store_total", 0):
+                return payload
+            disclosure = "在授權的記錄庫中查無此識別碼的記錄；這不代表它一定不存在。"
+            return {**payload, "coverage": {"status": "incomplete", **coverage,
+                "record_identifier_lookup": "no_matches",
+                "absence_claim": False,
+                "disclosure": (coverage.get("disclosure", "") + " " + disclosure).strip()}}
+
         def native_table():
             if (source_budget.get("record_lookup_unavailable") and record_total is None and table_query
                     and any(item.get("op","eq") != "eq" for item in table_query["filters"])):
@@ -3333,6 +3366,9 @@ def _build_source_start_semantic_handler(
                 if "unresolved_value_count" in record_total:
                     n = record_total["unresolved_value_count"]
                     coverage.update(unresolved_value_count=n, disclosure=f"{n} 筆值無法解析未納入比較。")
+                elif record_total.get("unresolved_value_count_status") == "unavailable":
+                    coverage.update(unresolved_value_count_status="unavailable",
+                                    disclosure="無法解析的值已排除，本次授權條件沒有可用的封存摘要，筆數未知。")
                 result = {"status": "partial", "coverage": coverage, "citations": [], "evidence": [],
                           "exact_result": None, "deterministic_exact": False}
                 if mail_tool:
@@ -3343,17 +3379,62 @@ def _build_source_start_semantic_handler(
                     revision, lookup=exact_lookup, arguments=arguments,
                     request_contract=request_contract, mail_tool=mail_tool,
                     selector=selector, identifier_terms=identifier_terms,
-                    required_terms=required_terms, source_budget=source_budget if record_total is not None else None,
+                    required_terms=required_terms, source_budget=source_budget,
                 )
         record_rows, record_total, group_anchors = (), None, []
-        if table_query is not None:
-            if (capabilities.get("record_table_fields") and not any(arguments.get(k) is not None
-                    for k in ("cursor", "exact_inventory_kind", "exact_field", "reviewed_annotation_pin"))
-                    and not arguments.get("reviewed_annotation_ids")):
-                from .issue56_record_table import query_records
-                record_rows, record_total = query_records(revision, table_query, request_contract,
-                    capabilities, selector, source_budget, SOURCE_EVIDENCE_OBSERVATION_LIMIT,
-                    exact_lookup=exact_lookup)
+        explicit = table_query is not None
+        # Conditions that select an occurrence or a particular reviewed assertion
+        # cannot be represented by ordinary record filters.
+        constrained = (native_locator is not None or placement is not None or date_priority
+                       or _document_full_read_requested(request_contract, arguments, mail_tool=mail_tool)
+                       or any(arguments.get(key) is not None for key in
+                              ("cursor", "exact_inventory_kind", "exact_field", "reviewed_annotation_pin"))
+                       or bool(arguments.get("reviewed_annotation_ids")))
+        reason = None
+        if not explicit and not required_terms:
+            reason = "not_requested"
+        elif constrained:
+            reason = "request_constraints"
+        elif not capabilities.get("record_table_fields"):
+            reason = "unavailable_catalog"
+        record_cell = _trace(trace, "phase", "record_store", explicit=explicit, attempted=reason is None, queried=False,
+                             total=None, K=None, J=0, M=0, lookup_ms=0)
+        if reason is None:
+            from .issue56_record_table import RecordFieldValidationError, query_records
+
+            started = time.monotonic()
+            # Both implicit lookup and explicit equality queries have a source fallback.
+            # A range query has no equivalent native range executor.
+            source_end = source_budget["deadline"]
+            if explicit:
+                from formowl_mail.human_uat_orchestrator import _validate_table_query
+                _validate_table_query(table_query)
+            if not explicit or all(item.get("op", "eq") == "eq" for item in table_query["filters"]):
+                source_budget["deadline"] = started + .75 * max(0, source_end - started)
+            try:
+                record_rows, record_total = query_records(
+                    revision, table_query, request_contract, capabilities, selector, source_budget,
+                    SOURCE_EVIDENCE_OBSERVATION_LIMIT, exact_lookup=exact_lookup,
+                    required_terms=required_terms or None)
+            except RecordFieldValidationError as exc:
+                reason = "validation_error"
+                result = {"status": "clarification_required", "query_hash": sha256_json(query_text),
+                          "citations": [], "evidence": [], "warnings": [],
+                          "coverage": {"status": "incomplete", "absence_claim": False,
+                                       "reason": "invalid_record_field", "disclosure": exc.guidance}}
+                if mail_tool:
+                    result.update(evidence_snippets=[], mail_import_session_id=selector)
+                return result
+            finally:
+                source_budget["deadline"] = source_end
+                _trace(record_cell, "finish", reason=reason or source_budget.get("record_lookup_reason", "unknown"),
+                       queried=source_budget.get("record_lookup_queried", False),
+                       total=(record_total or {}).get("total"),
+                       K=len(record_total.get("groups", ())) if record_total is not None else None,
+                       lookup_ms=round((time.monotonic()-started)*1000, 3))
+        else:
+            _trace(record_cell, "finish", state="declined", reason=reason)
+        if record_total is not None:
             group_anchors = [group["anchor"] for group in (record_total or {}).get("groups", ())
                              if group.get("anchor")]
             if group_anchors or (record_total or {}).get("export_revision"):
@@ -3363,14 +3444,37 @@ def _build_source_start_semantic_handler(
                     "coverage": {"status": "incomplete", "absence_claim": False},
                     **({"mail_import_session_id": selector} if mail_tool else {}),
                 }
-            if not record_rows and not group_anchors and not ((record_total or {}).get("export_revision") and record_total["groups"]):
+        has_records = bool(record_rows or group_anchors or (record_total or {}).get("groups"))
+        timeout_text_fallback = False
+        if explicit and not has_records:
+            # Text evidence can retain a single equality anchor already required
+            # by the request. Other typed filters require the native binder.
+            text_eligible = (source_budget.get("record_timeout_text_anchor")
+                             and query_class == "evidence_lookup" and requested_fields and not constrained)
+            native_end = source_budget["deadline"]
+            if text_eligible:
+                now = time.monotonic()
+                source_budget["deadline"] = min(native_end, now + .5 * max(0, native_end - now))
+            try:
                 fallback = native_table()
-                if record_total and record_total["total"]:
-                    fallback["coverage"] = {**fallback.get("coverage", {}), "absence_claim": False,
-                        "record_store_total": record_total["total"], "record_store_shown": 0,
-                        "records_without_requested_values": record_total["without_projection"]}
-                return fallback
-        if auto_exact and not (record_rows or group_anchors or (record_total or {}).get("groups")):
+            finally:
+                source_budget["deadline"] = native_end
+            if record_total and record_total["total"]:
+                fallback["coverage"] = {**fallback.get("coverage", {}), "absence_claim": False,
+                    "record_store_total": record_total["total"], "record_store_shown": 0,
+                    "records_without_requested_values": record_total["without_projection"]}
+            if (not text_eligible or fallback.get("status") not in {"partial", "pending_review", "clarification_required"}
+                    or any(fallback.get(key) for key in ("citations", "evidence", "evidence_snippets", "exact_result"))
+                    or time.monotonic() >= native_end or source_budget["reads"] >= SOURCE_EVIDENCE_OBSERVATION_LIMIT):
+                return record_identifier_result(fallback)
+            # Continue on the existing authorized evidence path with the same
+            # required terms, source scopes, counters and original deadline.
+            timeout_text_fallback = True
+            auto_exact = False
+        if not has_records:
+            # A zero-count supplemental lookup must not change legacy candidate formatting.
+            record_total = None
+        if auto_exact and not has_records:
             with _source_trace_phase(trace, "exact_engine"):
                 exact_payload = _execute_source_start_table(
                     revision, lookup=exact_lookup, arguments=arguments, request_contract=request_contract,
@@ -3382,7 +3486,7 @@ def _build_source_start_semantic_handler(
             # through the existing same-scope reader and its remaining caps.
             if (exact_payload["status"] in {"clarification_required", "permission_denied", "error", "failed"}
                     or exact_payload.get("requested_field_coverage", {}).get("supported_fields")):
-                return exact_payload
+                return record_identifier_result(exact_payload)
         query_terms: set[str] = set()
         protected_terms: set[str] = set()
         attachment_protected_terms: set[str] = set()
@@ -4695,12 +4799,21 @@ def _build_source_start_semantic_handler(
             fact_terminal_reason = reason
             _candidate_fact_table_status(reason, **fields)
 
+        record_only = None
+
         def include_fact_table(payload):
-            if fact_table is None:
+            if payload.get("status") == "permission_denied" or payload.get("deterministic_exact"):
                 return payload
+            if timeout_text_fallback and payload.get("status") not in {"error", "failed"}:
+                coverage = dict(payload.get("coverage", {}))
+                note = "記錄查詢逾時。來源摘錄僅提供候選證據，未核實原表格條件與欄位。"
+                payload = {**payload, "coverage": {**coverage, "status": "incomplete", "absence_claim": False,
+                    "disclosure": (coverage.get("disclosure", "") + " " + note).strip()}}
+            if fact_table is None:
+                return record_identifier_result(payload)
             if time.monotonic() >= presentation_deadline:
                 fact_status("deadline")
-                return payload
+                return record_only or payload
             from formowl_mail.human_uat_orchestrator import compact_evidence_for_model, evidence_citation_ids
             content_key = "evidence_snippets" if mail_tool else "evidence"
             citations = list(payload.get("citations", ()))
@@ -4716,17 +4829,21 @@ def _build_source_start_semantic_handler(
                             evidence_citation_ids(compact))):
                     if time.monotonic() >= presentation_deadline:
                         fact_status("deadline")
-                        return payload
+                        return record_only or payload
                     # The server retains the proof. The model path validates and projects it again.
                     candidate.update({content_key: [fact_table, *compact[content_key][1:]], "citations": compact["citations"]})
                     if isinstance(candidate.get("answer"), dict):
                         candidate["answer"] = {**candidate["answer"], "status": "partial",
                                                "citation_count": len(compact["citations"])}
+                    if record_cell is not None and has_records:
+                        table = json.loads(fact_table["snippet"].split("\n", 1)[1])
+                        _trace(record_cell, "finish", reason="presented",
+                               J=table.get("result_set", {}).get("shown_groups", 0), M=table["shown"])
                     fact_status(None, shown_row_count=fact_fitted_count)
                     return candidate
             except ContractValidationError:
                 fact_status("citation_validation_failed")
-            return payload
+            return record_only or payload
         if record_rows or group_anchors or (getattr(revision, "candidate_fact_pin", None) and required_terms
                 and query_class == "evidence_lookup"
                 and not auto_exact and table_query is None and native_locator is None
@@ -4962,29 +5079,49 @@ def _build_source_start_semantic_handler(
                     table_evidence.clear()
                     table_evidence.update(fact_table_preimage)
         export_groups = (record_total or {}).get("export_revision") and record_total.get("groups")
-        if export_groups and fact_table is None and time.monotonic() < presentation_deadline:
-            fact_table = _candidate_fact_table([], {}, revision.candidate_fact_pin, deadline=presentation_deadline,
-                                              record_total=record_total)
-            fact_citations = []
-            if fact_table is not None:
-                fact_fitted_count = 0
         if record_rows or group_anchors or export_groups:
             empty = {"status": "partial", "citations": [], "evidence": [], "deterministic_exact": False,
                      "warnings": [], "query_hash": sha256_json(query_text)}
             if mail_tool:
                 empty.update(evidence_snippets=[], mail_import_session_id=selector)
             result = include_fact_table(empty)
+            if (export_groups and not result.get(record_total["content_key"])
+                    and time.monotonic() < presentation_deadline):
+                # A rejected detail row cannot invalidate the independently sealed
+                # group counts. Render those groups with no detail references.
+                fact_table = _candidate_fact_table([], {}, revision.candidate_fact_pin,
+                    deadline=presentation_deadline, record_total=record_total)
+                fact_citations = []
+                fact_fitted_count = 0
+                result = include_fact_table(empty)
             if result.get("citations") or (export_groups and result.get(record_total["content_key"])):
-                return result
-            fallback = native_table()
-            if group_anchors:
-                k = len(record_total["groups"])
-                fallback_coverage = fallback.get("coverage", {})
-                fallback["coverage"] = {**fallback_coverage, "record_result_set_groups": k,
-                    "record_result_set_shown": 0, "absence_claim": False,
-                    "disclosure": (fallback_coverage.get("disclosure", "") + f" 結果集共 {k} 組，顯示 0 組。"
-                                   "來源補驗或表格預算不足。").strip()}
-            return fallback
+                if explicit or unbound_exact:
+                    return result
+                record_only = result
+            else:
+                _trace(record_cell, "finish", reason="presentation_unavailable")
+            if explicit:
+                fallback = native_table()
+                if group_anchors:
+                    k = len(record_total["groups"])
+                    fallback_coverage = fallback.get("coverage", {})
+                    fallback["coverage"] = {**fallback_coverage, "record_result_set_groups": k,
+                        "record_result_set_shown": 0, "absence_claim": False,
+                        "disclosure": (fallback_coverage.get("disclosure", "") + f" 結果集共 {k} 組，顯示 0 組。"
+                                       "來源補驗或表格預算不足。").strip()}
+                return fallback
+        if unbound_exact:
+            payload = {
+                "status": "pending_review",
+                "query_hash": sha256_json(query_text),
+                "citations": [],
+                "evidence": [],
+                "warnings": ["retrieval_projection_unavailable", "skipped_exact"],
+            }
+            if mail_tool:
+                payload["mail_import_session_id"] = selector
+                payload["evidence_snippets"] = []
+            return record_identifier_result(payload)
         if query_class == "exact_set_or_inventory":
             # Primary native execution, not the evidence-lookup automatic
             # recheck. Keep the original exact request and all its constraints.
@@ -5121,7 +5258,7 @@ def _build_source_start_semantic_handler(
                 payload["answer"] = {"status": status, "text": "Source-backed occurrences are available; coverage is incomplete." if evidence else "",
                                      "answer_hash": sha256_json(payload), "citation_count": len(evidence)}
             validate_public_gateway_payload(payload)
-            return payload
+            return include_fact_table(payload)
 
         double_check = source_evidence_double_check(
             initial_status="pending_review",
@@ -5154,19 +5291,11 @@ def _build_source_start_semantic_handler(
             )
         full_read_metadata = None
         full_read_skip = None
-        provenance = _SOURCE_DOCUMENT_FULL_READ_REQUEST.get()
-        public_arguments = {key: value for key, value in arguments.items()
-                            if key not in {"requester_user_id", "workspace_id", "session_id"}}
         eligible_full_read = (
             not mail_tool and not auto_exact and native_locator is None
             and not context_limit_reached
             and query_class == "evidence_lookup" and not double_check.evidence
-            and request_contract["source_family_scope"] == ["document_text"]
-            and isinstance(provenance, tuple) and len(provenance) == 4
-            and provenance[0] == request_contract["original_query_hash"]
-            and provenance[1] == ("document_text",) and provenance[3] is True
-            and provenance[2] == sha256_json({"name": "query_effective_graph_view",
-                                             "arguments": public_arguments})
+            and _document_full_read_requested(request_contract, arguments, mail_tool=mail_tool)
             and time.monotonic() < source_budget["deadline"]
             and source_budget["reads"] < SOURCE_EVIDENCE_OBSERVATION_LIMIT
             and source_budget["evidence"] < limit
@@ -5501,6 +5630,26 @@ def _build_source_start_semantic_handler(
         )
         payload = _finalize_mail_date_presentation(payload, date_metadata) if date_priority else payload
         return include_fact_table(payload)
+
+    def handler(arguments: dict[str, Any]) -> dict[str, Any]:
+        result = execute(arguments)
+        record_fields = capabilities.get("record_table_fields")
+        # The graph tool accepts table_query. A mail selector or native page
+        # locator cannot be carried into that call without changing the scope.
+        if (not record_fields or mail_tool or arguments.get("table_query") is not None
+                or result.get("status") not in {"ok", "partial", "pending_review", "clarification_required", "replan_required"}):
+            return result
+        contract = arguments.get("request_contract") or {
+            "query_class": deterministic_query_class(arguments["query_text"]),
+            "source_family_scope": available_families,
+        }
+        if contract.get("native_locator") is not None:
+            return result
+        from .issue56_record_table import structured_query_guidance
+        hint = structured_query_guidance(record_fields, contract)
+        if hint:
+            result = {**result, "coverage": {**result.get("coverage", {}), "structured_query_hint": hint}}
+        return result
 
     handler.authorized_capability_summary = capabilities
     handler.reviewed_annotation_catalog = annotation_catalog

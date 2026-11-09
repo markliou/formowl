@@ -159,6 +159,28 @@ def _exhausted_graph_recovery(request, *, family="mail", complete=False):
     }
 
 
+class RecordListDeveloperPolicyTests(unittest.TestCase):
+    def test_thread_start_carries_candidate_list_policy_in_developer_instructions(self):
+        transport = object.__new__(CodexAppServerStdioTransport)
+        transport._request = mock.Mock(return_value={"thread": {"id": "thread-1"}, "model": "test-model"})
+        model = CodexAppServerConversationModel(transport, model="test-model", workspace_dir="/tmp")
+        binder = _UatTurnRequestContractBinder(
+            user_text="List delivery dates for the named item.",
+            authorized_capability_summary={"source_families": ["attachment_table"]},
+        )
+        model._get_or_create_thread(
+            "test-session", formowl_tool=_actual_query_tool_descriptor(), request_contract_binder=binder,
+        )
+        method, params = transport._request.call_args.args
+        self.assertEqual(method, "thread/start")
+        policy = params["developerInstructions"]
+        for required in ("List all returned groups", "候選（未經人工審核）", "export_verified groups with ref=null",
+                         "total_groups", "request the remainder", "Cite the table", "pending_review",
+                         "no_matches", "在授權的記錄庫中查無此識別碼的記錄", "without asking a question"):
+            self.assertIn(required, policy)
+        self.assertNotIn("List all returned groups", params["baseInstructions"])
+
+
 class MailToolDescriptionContractTests(unittest.TestCase):
     def test_semantic_output_needs_are_not_limited_to_exact_source_fields(self) -> None:
         binder = _UatTurnRequestContractBinder(
@@ -557,7 +579,8 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         wire._closed = False
         requests = []
 
-        def request(method, params):
+        def request(method, params, *, timeout_seconds):
+            self.assertGreater(timeout_seconds, 0)
             self.assertEqual(method, "turn/start")
             requests.append(params)
             wire._deliver_turn_completion({
@@ -7513,7 +7536,8 @@ class AppServerOverloadFinalizationTests(unittest.TestCase):
         self.assertEqual(wire._send.call_count, 1)
         for key in ("threadId", "effort", "outputSchema", "personality", "approvalPolicy", "sandboxPolicy"):
             self.assertEqual(starts[0][0][key], starts[1][0][key])
-        self.assertNotIn("timeout_seconds", starts[0][1])
+        self.assertGreater(starts[0][1]["timeout_seconds"], 0)
+        self.assertLessEqual(starts[0][1]["timeout_seconds"], 10.0)
         self.assertLessEqual(starts[1][1]["timeout_seconds"], 10.0)
         retry = outcome.provider_diagnostic["finalization_retry"]
         self.assertEqual(retry["status"], "completed")

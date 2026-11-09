@@ -16,6 +16,7 @@ from formowl_contract import assert_no_public_raw_references
 from formowl_mail.human_uat_orchestrator import (
     _MAX_PROVIDER_ATTEMPT_DIAGNOSTICS,
     _MAX_PROVIDER_REQUESTS_PER_TURN,
+    _MAX_UAT_TURN_SECONDS,
     diagnostic_comparability,
     safe_diagnostic_comparability,
     safe_provider_loop_diagnostics,
@@ -243,6 +244,8 @@ class MailHumanUatQueryService(Protocol):
         session_id: str | None,
     ) -> Mapping[str, Any]: ...
 
+    def read_browser_progress(self, session_id: str | None) -> Mapping[str, Any]: ...
+
     def reset_browser_conversation(
         self,
         session_id: str | None,
@@ -390,6 +393,21 @@ def _build_mail_human_uat_http_handler(
                         "query_service_connected": True,
                     },
                 )
+                return
+            if route == "/api/progress":
+                # Same-origin GETs commonly omit Origin. The custom request header
+                # requires a cross-origin script to preflight; this server grants no CORS.
+                if (self.headers.get_all("X-FormOwl-Progress") != ["1"]
+                        or self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin"
+                        or (self.headers.get_all("Origin") and not self._same_origin_allowed())):
+                    self._send_error(HTTPStatus.FORBIDDEN, "same_origin_required")
+                    return
+                try:
+                    progress = query_service.read_browser_progress(self._session_id())
+                except PermissionError:
+                    self._send_error(HTTPStatus.UNAUTHORIZED, "auth_required")
+                    return
+                self._send_json(HTTPStatus.OK, progress)
                 return
             if route == "/api/transcript":
                 session_id = self._session_id()
@@ -947,7 +965,7 @@ def _safe_provider_diagnostic(value: Any) -> dict[str, Any] | None:
                 or isinstance(elapsed_ms, bool)
                 or not isinstance(elapsed_ms, (int, float))
                 or not math.isfinite(float(elapsed_ms))
-                or not 0 <= float(elapsed_ms) <= 120_000
+                or not 0 <= float(elapsed_ms) <= _MAX_UAT_TURN_SECONDS * 1000
             ):
                 continue
             timings.append(
@@ -1014,7 +1032,7 @@ def _safe_mcp_diagnostic(value: Any) -> dict[str, Any] | None:
         or isinstance(elapsed_ms, bool)
         or not isinstance(elapsed_ms, (int, float))
         or not math.isfinite(float(elapsed_ms))
-        or not 0 <= float(elapsed_ms) <= 120_000
+        or not 0 <= float(elapsed_ms) <= _MAX_UAT_TURN_SECONDS * 1000
         or not isinstance(statuses, Sequence)
         or isinstance(statuses, (str, bytes))
         or len(statuses) > 3
@@ -1436,6 +1454,50 @@ _PAGE = """<!doctype html>
       loading.hidden = !busy;
     }
 
+    function startProgress() {
+      const controller = new AbortController();
+      const started = performance.now();
+      let detail = "正在送出問題";
+      let elapsed = 0;
+      let deadline = __TURN_SECONDS__;
+      let pending = false;
+      function render() {
+        const seconds = Math.max(elapsed, Math.floor((performance.now() - started) / 1000));
+        loading.textContent = detail + "，已等待 " + seconds + " 秒／上限 " + deadline + " 秒";
+      }
+      async function poll() {
+        if (pending) return;
+        pending = true;
+        try {
+          const response = await fetch("/api/progress", {
+            cache: "no-store", mode: "same-origin", signal: controller.signal,
+            headers: { "X-FormOwl-Progress": "1" }
+          });
+          if (!response.ok) return;
+          const progress = await response.json();
+          if (!controller.signal.aborted && progress.phase !== "idle") {
+            detail = progress.detail;
+            elapsed = progress.elapsed_seconds;
+            deadline = progress.deadline_seconds;
+            render();
+          }
+        } catch (_) {
+          // A missed progress update leaves the elapsed clock and chat request running.
+        } finally {
+          pending = false;
+        }
+      }
+      render();
+      const clock = setInterval(render, 1000);
+      const polling = setInterval(poll, 2000);
+      return () => {
+        clearInterval(clock);
+        clearInterval(polling);
+        controller.abort();
+        loading.textContent = "FormOwl 查詢中…";
+      };
+    }
+
     function statusLabel(status) {
       const labels = {
         pending: "查詢中…",
@@ -1547,7 +1609,7 @@ _PAGE = """<!doctype html>
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const prompt = input.value.trim();
-      if (!prompt.trim()) return;
+      if (!prompt || send.disabled) return;
       errorText.hidden = true;
       input.value = "";
       appendTurn({
@@ -1563,6 +1625,7 @@ _PAGE = """<!doctype html>
         citations: []
       });
       setBusy(true);
+      const stopProgress = startProgress();
       try {
         let response;
         try {
@@ -1579,6 +1642,7 @@ _PAGE = """<!doctype html>
           response,
           PUBLIC_ERROR_MESSAGES.query_failed
         );
+        stopProgress();
         populateTurn(pendingTurn, {
           role: "assistant",
           ...responseForDisplay(payload)
@@ -1589,6 +1653,7 @@ _PAGE = """<!doctype html>
           pendingTurn.scrollIntoView({ block: "nearest" });
         }
       } catch (error) {
+        stopProgress();
         const message =
           error && typeof error.publicMessage === "string"
             ? error.publicMessage
@@ -1682,7 +1747,8 @@ _PAGE = """<!doctype html>
 
 def _render_page(authenticated: bool) -> str:
     return (
-        _PAGE.replace("__AUTHENTICATED__", "true" if authenticated else "false")
+        _PAGE.replace("__TURN_SECONDS__", str(int(_MAX_UAT_TURN_SECONDS)))
+        .replace("__AUTHENTICATED__", "true" if authenticated else "false")
         .replace("__LOGIN_HIDDEN__", "hidden" if authenticated else "")
         .replace("__LOGOUT_HIDDEN__", "" if authenticated else "hidden")
         .replace(

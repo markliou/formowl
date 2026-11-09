@@ -2065,6 +2065,44 @@ if __name__ == "__main__":
 
 
 class TurnCitationPresentationTests(unittest.TestCase):
+    def test_table_handles_are_complete_tokens_and_suffixes_fail_strict_binding(self):
+        ids = ["sha256:" + format(i, "064x") for i in range(27)]
+        table = {"represented_records": 27, "citations": [
+            {"ref": f"c{i+1}", "citation_hash": digest} for i, digest in enumerate(ids)],
+            "result_set": {"groups": [{"ref": None, "basis": "export_verified"}]}}
+        canonical = {"citations": ids, "evidence": [{
+            "source_type": "candidate_fact_table", "citation_hash": ids[0],
+            "snippet": "Synthetic candidate table\n" + json.dumps(table)}]}
+        before = copy.deepcopy(canonical)
+        registry = orchestrator._TurnCitationPresentation(set())
+        display = registry.present(canonical)
+        shown = json.loads(display["evidence"][0]["snippet"].split("\n", 1)[1])
+        handle = display["citations"][17]
+        self.assertEqual(shown["citations"][17], {"ref": "c18", "citation_hash": handle})
+        self.assertIsNone(shown["result_set"]["groups"][0]["ref"])
+        self.assertEqual(canonical, before)
+        self.assertIn("handle ends after the decimal ordinal", registry.context())
+        decision = json.loads(_decision(citation=handle))
+        parsed = orchestrator._parse_decision(json.dumps(decision), citation_presentation=registry)
+        orchestrator._validate_evidence_bound_decision(parsed, evidence_results=(canonical,))
+        self.assertEqual(parsed["citation_ids"], (ids[17],))
+        for suffix in ("x", "a1b2c3d4e5f6g7h8i9j0"):
+            with self.subTest(suffix=suffix):
+                decision["citation_ids"] = [handle + suffix]
+                with self.assertRaises(orchestrator._FinalizationValidationError) as rejected:
+                    orchestrator._parse_decision(json.dumps(decision), citation_presentation=registry)
+                self.assertEqual(registry.diagnostic()["final_classifications"], ["raw_id_forbidden"])
+                repair = orchestrator._final_repair_context(error=rejected.exception,
+                    evidence_results=(canonical,), prior_evidence=None, citation_presentation=registry)
+                self.assertIn(handle, repair)
+                self.assertIn(orchestrator._CITATION_COPY_GUIDANCE, repair)
+                self.assertNotIn(handle + suffix, repair)
+        # A syntactically valid handle still needs the original governed evidence.
+        decision["citation_ids"] = [handle]
+        parsed = orchestrator._parse_decision(json.dumps(decision), citation_presentation=registry)
+        with self.assertRaisesRegex(RuntimeError, "cited unavailable evidence"):
+            orchestrator._validate_evidence_bound_decision(parsed, evidence_results=())
+
     def test_one_to_one_reuse_and_canonical_snapshot(self):
         registry = orchestrator._TurnCitationPresentation(set())
         original = {"citations": ["clienta-header", "clienta-body"], "evidence": [

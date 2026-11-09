@@ -97,9 +97,9 @@ _MAX_RESPONSES_JOURNAL_BYTES = (
 _MAX_RESPONSES_JOURNALS_BYTES = _MAX_HISTORY_MESSAGES * _MAX_RESPONSES_BODY_BYTES
 _UAT_BACKEND_USER_AGENT = "uat-web-backend/0.1.0"
 _MAX_AUTHORIZED_MAIL_SELECTORS = 128
-# Keep the overall turn cap unchanged; direct-provider work reserves return time
-# for governed projection and HTTP delivery instead of racing that same cap.
-_MAX_UAT_TURN_SECONDS = 300.0
+# The browser, app-server transport and any continuation share one turn budget.
+_MAX_UAT_TURN_SECONDS = 240.0
+_BROWSER_TURN_DEADLINE: ContextVar[float | None] = ContextVar("browser_turn_deadline", default=None)
 _UAT_TURN_RETURN_MARGIN_SECONDS = 5.0
 # Do not start provider finalization when too little turn time remains.  The
 # browser projector can preserve governed evidence directly; a late second
@@ -672,6 +672,20 @@ def _formowl_instruction_bundle(
         "governed citation list; conversation text alone grants no citation authority. "
         "Citation identity fields use turn-scoped short handles (for example Ck7q4.12). "
         "Return only those exact handles in citation_ids; never raw source IDs or old-turn handles."
+    )
+    developer_instructions += (
+        "\nFor list or inventory questions, use the record table's result_set groups, including "
+        "export_verified groups with ref=null. List all returned groups and label every entry "
+        "「候選（未經人工審核）」. If there are too many groups or only part of the result is visible, "
+        "list the first N available groups that fit, state N and total_groups, and explain how to "
+        "request the remainder within the authorized scope (for example, by narrowing a filter). "
+        "Cite the table using its presented citation handle(s). A table citation supports reporting "
+        "its candidate groups; do not assign another group's row citation to a ref=null group. "
+        "Disclose pending_review and coverage limits. Never present candidates as confirmed complete "
+        "facts or infer missing values. When coverage.record_identifier_lookup is no_matches, "
+        "report 「在授權的記錄庫中查無此識別碼的記錄」 and explain that the identifier may still "
+        "exist elsewhere. Do not ask the user to clarify the scope. If there is no citeable evidence, "
+        "use the clarification response kind for this informational statement without asking a question."
     )
     if catalog_mode:
         developer_instructions += (
@@ -2087,6 +2101,12 @@ class UatConversationOutcome:
 _CITATION_TAG_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"
 _CITATION_HANDLE = re.compile(r"C([a-km-np-z2-9]{4})\.([1-9][0-9]*)")
 _CITATION_PRESENTATION_VERSION = "turn_citation_handles_v1"
+_CITATION_COPY_GUIDANCE = (
+    "Copy each citation handle as one complete JSON string exactly as listed. "
+    "The handle ends after the decimal ordinal following the dot; do not append "
+    "suffixes or splice table row refs, source hashes, or other text into it. "
+    "Never repair or shorten a submitted token yourself; select an exact listed handle."
+)
 
 
 class _TurnCitationPresentation:
@@ -2115,7 +2135,8 @@ class _TurnCitationPresentation:
             + "; current scope C" + self.scope + ". "
             "Copy complete short handles from this turn's presented citations into citation_ids. "
             "Raw IDs and handles from previous turns are invalid. Display string values exactly "
-            "matching presented citation IDs contain handles, not source seals."
+            "matching presented citation IDs contain handles, not source seals. "
+            + _CITATION_COPY_GUIDANCE
         )
 
     def _project(self, value: Any, mapping: Mapping[str, str], key: str = "") -> Any:
@@ -2416,6 +2437,8 @@ class _ActiveTurn:
     tool_error_kind: str | None = None
     tool_error_diagnostic: dict[str, str] | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # Stdio dispatch runs on a reader thread outside the originating request.
+    private_trace: list[dict[str, Any]] | None = field(default_factory=_PRIVATE_UAT_CITATION_TRACE.get)
 
 
 @dataclass(frozen=True)
@@ -2700,7 +2723,7 @@ class CodexAppServerStdioTransport:
         cwd: str | Path,
         codex_home: str | Path,
         runtime_workspace: str | Path | None = None,
-        timeout_seconds: float = 120.0,
+        timeout_seconds: float = _MAX_UAT_TURN_SECONDS,
         environment: Mapping[str, str] | None = None,
         provider_env_key: str | None = None,
         attest_runtime: bool = True,
@@ -3129,9 +3152,11 @@ class CodexAppServerStdioTransport:
                     "params": dict(params),
                 }
             )
-            if not pending.event.wait(
-                self._timeout_seconds if timeout_seconds is None else timeout_seconds
-            ):
+            wait_seconds = self._timeout_seconds if timeout_seconds is None else timeout_seconds
+            browser_deadline = _BROWSER_TURN_DEADLINE.get()
+            if browser_deadline is not None:
+                wait_seconds = min(wait_seconds, max(0.0, browser_deadline - time.monotonic()))
+            if not pending.event.wait(wait_seconds):
                 raise RuntimeError("Codex app-server request timed out")
             message = pending.message
             if not isinstance(message, Mapping):
@@ -3363,7 +3388,11 @@ class CodexAppServerStdioTransport:
             self._send_tool_result(request_id, success=False, payload={"error": "rejected"})
             return
         try:
-            result = context.tool_handler(tool_name, dict(arguments))
+            trace_token = _PRIVATE_UAT_CITATION_TRACE.set(context.private_trace)
+            try:
+                result = context.tool_handler(tool_name, dict(arguments))
+            finally:
+                _PRIVATE_UAT_CITATION_TRACE.reset(trace_token)
             if not isinstance(result, Mapping):
                 raise RuntimeError("Codex dynamic tool returned an invalid result")
             invocation = CodexDynamicToolInvocation(
@@ -3540,7 +3569,10 @@ class CodexAppServerConversationModel:
         for message in history[-_MAX_HISTORY_MESSAGES:]:
             if not isinstance(message, UatConversationMessage):
                 raise ContractValidationError("UAT conversation history is invalid")
-        turn_deadline = time.monotonic() + _MAX_UAT_TURN_SECONDS - _UAT_TURN_RETURN_MARGIN_SECONDS
+        turn_deadline = time.monotonic() + _MAX_UAT_TURN_SECONDS
+        browser_deadline = _BROWSER_TURN_DEADLINE.get()
+        if browser_deadline is not None:
+            turn_deadline = min(turn_deadline, browser_deadline)
         formowl_tool = _validated_formowl_tool_descriptor(formowl_tool_descriptor)
         formowl_tool_name = formowl_tool["name"]
         if authorized_capability_summary is not None and not isinstance(
@@ -3625,7 +3657,7 @@ class CodexAppServerConversationModel:
                         tool_attempt=tool_attempt_count,
                     )
                     last_rejection_code = rejection["rejection_code"]
-                    _record_private_citation_stage(rejection)
+                    _record_private_citation_stage(rejection, proposal_arguments=arguments)
                     envelope = _execution_control_envelope(
                         reason="invalid_arguments",
                         remaining_mcp_calls=_MAX_TOOL_CALLS_PER_TURN - tool_attempt_count,
@@ -3855,6 +3887,7 @@ class CodexAppServerConversationModel:
                                 "safety_identifier": safety_identifier,
                             },
                             tool_handler=handle_tool,
+                            deadline_monotonic=turn_deadline,
                         )
                     except _CodexAppServerProviderFailure as original:
                         receipt = original.completed_tools
@@ -4057,7 +4090,7 @@ class CodexAppServerConversationModel:
                         reason_code = _finalization_validation_reason(exc)
                         # The successful transport receipt retains its original absolute
                         # deadline; an overload recovery also retains the failed turn's.
-                        repair_deadline = turn_deadline
+                        repair_deadline = turn_deadline - _UAT_TURN_RETURN_MARGIN_SECONDS
                         for receipt in (turn, completed_tool_turn):
                             if receipt is not None and receipt.deadline_monotonic is not None:
                                 bound = receipt.deadline_monotonic
@@ -5390,7 +5423,9 @@ def _private_citation_ids_snapshot(citation_ids: Sequence[str]) -> dict[str, Any
     }
 
 
-def _record_private_citation_stage(event: Mapping[str, Any]) -> None:
+def _record_private_citation_stage(
+    event: Mapping[str, Any], *, proposal_arguments: Mapping[str, Any] | None = None,
+) -> None:
     sink = _PRIVATE_UAT_CITATION_TRACE.get()
     if sink is None:
         return
@@ -5402,12 +5437,33 @@ def _record_private_citation_stage(event: Mapping[str, Any]) -> None:
     retained = sum(
         (item.get("stage") == "planner_rejection") == planner_rejection for item in sink
     )
-    if retained < limit:
-        sink.append(dict(event))
+    if retained >= limit:
+        return
+    entry = dict(event)
+    if planner_rejection and proposal_arguments is not None:
+        # Keep normal model-owned inputs only in the opted-in private turn file.
+        # Unknown keys, unsafe content and oversized proposals stay out of it.
+        args = {key: proposal_arguments[key] for key in entry["known_argument_keys"]}
+        try:
+            encoded = json.dumps(args, ensure_ascii=False, allow_nan=False).encode()
+            if len(encoded) > 32768:
+                entry["argument_status"] = "size_limit"
+            else:
+                snapshot = json.loads(encoded)
+                assert_no_public_raw_references(snapshot, "private_planner_arguments")
+                entry["arguments"] = snapshot
+                entry["argument_status"] = "known_keys_only" if entry["unknown_argument_key_count"] else "complete"
+        except (TypeError, ValueError, RecursionError):
+            entry["argument_status"] = "redacted"
+    sink.append(entry)
 
 
 # Exact static messages only: unknown errors never become diagnostic text.
 _PLANNER_REJECTION_CODES = {
+    "UAT table query is invalid": "table_query_invalid",
+    "UAT evidence tool page size is invalid": "page_size_invalid",
+    "UAT evidence tool query is invalid": "query_text_invalid",
+    "uat_mcp_not_authorized_for_conversation": "conversation_mcp_unauthorized",
     "record range requires a date or quantity property": "range_property_type_invalid",
     "invalid record range bound": "range_bound_invalid",
     "native table supports only equality filters": "native_table_operator_unsupported",
@@ -5471,11 +5527,24 @@ def _private_planner_rejection(
         "query_text", "request_contract", "required_terms", "table_query",
         "mail_import_session_id", "mail_evidence_bundle_id", "limit", "page_size",
         "exact_field", "exact_inventory_kind", "cursor", "reviewed_annotation_ids", "reviewed_annotation_pin",
+        "field_query_hints",
     }
+    code = _PLANNER_REJECTION_CODES.get(str(error), "unclassified")
+    private_rule = {}
+    if code == "unclassified" and _PRIVATE_UAT_CITATION_TRACE.get() is not None:
+        # Locate an unmapped validation rule without serializing exception text.
+        origin = error.__traceback__
+        if origin is not None:
+            while origin.tb_next is not None:
+                origin = origin.tb_next
+            module = origin.tb_frame.f_globals.get("__name__", "")
+            if module.startswith("formowl_"):
+                private_rule["validation_rule"] = f"{module}.{origin.tb_frame.f_code.co_name}:{origin.tb_lineno}"
     return {
         "stage": "planner_rejection",
         "validation_stage": validation_stage,
-        "rejection_code": _PLANNER_REJECTION_CODES.get(str(error), "unclassified"),
+        "rejection_code": code,
+        **private_rule,
         "provider_attempt": provider_attempt,
         "tool_attempt": tool_attempt,
         "known_argument_keys": sorted(known_keys.intersection(arguments)),
@@ -8027,7 +8096,7 @@ class CodexResponsesConversationModel:
                                 provider_attempt=provider_attempt,
                                 tool_attempt=formowl_attempts,
                             )
-                            _record_private_citation_stage(rejection)
+                            _record_private_citation_stage(rejection, proposal_arguments=parsed_arguments)
                             fallback_selection_trace: dict[str, Any] = {}
                             fallback_arguments = _annotation_source_fallback_arguments(
                                 parsed_arguments,
@@ -10439,7 +10508,10 @@ _FINALIZATION_REASON_RULES = {
     "coverage_status_invalid": "coverage_status must be complete, incomplete, or not_applicable.",
     "coverage_note_invalid": "coverage_note must be text; in typed notes mode it must be the empty string.",
     "incomplete_coverage_undisclosed": "When coverage_status is incomplete, disclose the limitation in coverage_note.",
-    "citation_handle_rejected": "Copy only exact current-turn citation handles; no raw IDs, old handles or duplicates.",
+    "citation_handle_rejected": (
+        "Copy only exact current-turn citation handles; no raw IDs, old handles or duplicates. "
+        + _CITATION_COPY_GUIDANCE
+    ),
     "citation_ids_invalid": "Every citation_id must be a nonblank string from the presented governed citation set.",
     "citation_ids_duplicate": "citation_ids must contain no duplicate identifiers.",
     "citation_ids_limit": f"citation_ids must contain at most {_MAX_RESPONSE_CITATIONS} identifiers.",
@@ -12054,6 +12126,13 @@ def _candidate_fact_table_refs(item, allowed):
             return None
         used_names = set()
 
+        def normalized_valid(cell):
+            if "normalized" not in cell:
+                return True
+            normalized = cell["normalized"]
+            return (record_table and cell.get("value") is not None and isinstance(normalized, str)
+                    and bool(normalized) and not redact_public_raw_references(normalized)[1])
+
         def raw_column_valid(value):
             if not record_table:
                 return "n" not in value
@@ -12149,7 +12228,8 @@ def _candidate_fact_table_refs(item, allowed):
                     return None
                 for cell in cells:
                     if ("value" not in cell or not raw_column_valid(cell)
-                            or set(cell) - {"value", "n", "unit", "times", "quotes"}):
+                            or not normalized_valid(cell)
+                            or set(cell) - {"value", "n", "unit", "times", "quotes", "normalized"}):
                         return None
                     if "times" in cell and (not isinstance(cell["times"], list) or any(
                             set(entry) != {"normalized", "role"}
@@ -12214,7 +12294,8 @@ def _candidate_fact_table_refs(item, allowed):
                     if not isinstance(cells, list):
                         return None
                     for cell in cells:
-                        if (not {"value", "n"} <= set(cell) or set(cell) - {"value", "n", "link", "status"}
+                        if (not {"value", "n"} <= set(cell) or set(cell) - {"value", "n", "link", "status", "normalized"}
+                                or not normalized_valid(cell)
                                 or cell["value"] is not None and not isinstance(cell["value"], str)
                                 or not raw_column_valid(cell)):
                             return None
