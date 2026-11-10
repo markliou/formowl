@@ -260,6 +260,40 @@ class HeaderMappingTests(unittest.TestCase):
             self.assertEqual(list(variant["properties"]), ["reason", "column_index", "property_id", "date_role"])
             self.assertEqual(variant["required"], ["reason", "column_index", "property_id", "date_role"])
 
+    def test_order_remap_uses_only_selected_properties_and_reason_first(self):
+        properties = {key: mapper.PROPERTIES[key] for key in ("po_number", "sales_order_number")}
+        fields = list(mapper.collect_fields([signature(["Fictional order code"])]).values())
+        data = {"columns": [{"reason": "Fictional sales order identifier.", "column_index": 0,
+                             "property_id": "sales_order_number", "date_role": None}]}
+        client = mock.Mock(return_value=(data, {"attempted": True}))
+        batch = mapper.call_batch(fields, client, mock.Mock(), {}, properties=properties,
+                                  instructions="Fictional scoped instructions.")
+        self.assertEqual(batch["status"], "complete")
+        self.assertEqual(batch["mappings"], [{"property_id": "sales_order_number", "date_role": None}])
+        system, user, schema = client.call_args.args
+        self.assertEqual(system, "Fictional scoped instructions.")
+        self.assertEqual(json.loads(user)["properties"], properties)
+        variants = schema["properties"]["columns"]["items"]["anyOf"]
+        self.assertEqual(len(variants), 1)
+        self.assertEqual(variants[0]["properties"]["property_id"]["enum"],
+                         ["po_number", "sales_order_number", None])
+        self.assertEqual(variants[0]["required"], ["reason", "column_index", "property_id", "date_role"])
+        self.assertEqual(batch["prompt_profile_sha256"], mapper.sha256_json({
+            "instructions": system, "properties": properties}))
+        for property_id in ("quantity", "manufacturer", "delivery_date"):
+            data["columns"][0]["property_id"] = property_id
+            with self.subTest(property_id=property_id), self.assertRaises(ValueError):
+                mapper.validate_response(data, ["Fictional order code"], properties)
+        for property_id in ("po_number", "sales_order_number", None):
+            data["columns"][0]["property_id"] = property_id
+            mapper.validate_response(data, ["Fictional order code"], properties)
+
+    def test_sales_order_is_an_identifier_and_has_no_purchase_order_entity_binding(self):
+        from formowl_records.store import ENTITY_TYPES, PROPERTY_TYPES
+
+        self.assertEqual(PROPERTY_TYPES["sales_order_number"], "identifier")
+        self.assertNotIn("sales_order_number", ENTITY_TYPES)
+
     def test_call_budget_includes_schema_retry_without_overrun(self):
         client = mock.Mock(return_value=({}, {"attempted": True}))
         with tempfile.TemporaryDirectory() as temporary:

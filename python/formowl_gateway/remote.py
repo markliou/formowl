@@ -189,6 +189,17 @@ _STRUCTURED_TABLE_QUERY_INPUT_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
             },
         },
+        "order_by": {
+            "type": "object",
+            "description": "Order matching records and result groups before display limits. Use source_date for the sending time of the source email or the attachment's parent email. Missing dates sort last and are counted. Groups use their latest value for descending order and earliest for ascending order.",
+            "properties": {
+                "field": {"type": "string", "minLength": 1, "maxLength": 120,
+                          "description": "A record property, an authorized raw column, or source_date."},
+                "direction": {"type": "string", "enum": ["asc", "desc"], "default": "desc"},
+            },
+            "required": ["field"],
+            "additionalProperties": False,
+        },
         "projection_fields": {
             "type": "array",
             "minItems": 1,
@@ -1377,11 +1388,11 @@ def _prepare_tool_arguments(
 def _validate_structured_table_query_argument(value: Any) -> None:
     if value is None:
         return
-    if not isinstance(value, Mapping) or set(value) != {
-        "filters",
-        "projection_fields",
-    }:
+    if not isinstance(value, Mapping) or set(value) - {"order_by"} != {"filters", "projection_fields"}:
         raise ContractValidationError("connected structured table query is invalid")
+    if "order_by" in value:
+        from formowl_mail.human_uat_orchestrator import _validate_table_order_by
+        _validate_table_order_by(value["order_by"])
     filters = value["filters"]
     projection_fields = value["projection_fields"]
     if (

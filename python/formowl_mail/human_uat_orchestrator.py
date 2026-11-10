@@ -9799,12 +9799,18 @@ def _authorized_mail_selectors(
     )
 
 
-def _validate_table_query(table_query: Mapping[str, Any]) -> None:
-    if not isinstance(table_query, Mapping) or set(table_query) != {
-        "filters",
-        "projection_fields",
-    }:
+def _validate_table_order_by(order: Mapping[str, Any]) -> None:
+    if (not isinstance(order, Mapping) or set(order) not in ({"field"}, {"field", "direction"})
+            or not isinstance(order["field"], str) or not order["field"].strip()
+            or len(order["field"]) > 120 or order.get("direction", "desc") not in ("asc", "desc")):
         raise ContractValidationError("UAT table query is invalid")
+
+
+def _validate_table_query(table_query: Mapping[str, Any]) -> None:
+    if not isinstance(table_query, Mapping) or set(table_query) - {"order_by"} != {"filters", "projection_fields"}:
+        raise ContractValidationError("UAT table query is invalid")
+    if "order_by" in table_query:
+        _validate_table_order_by(table_query["order_by"])
     filters = table_query["filters"]
     projection_fields = table_query["projection_fields"]
     if (
@@ -10147,6 +10153,9 @@ def _tool_request_fingerprint(
                 "projection_fields": projections,
             },
         }
+        if "order_by" in request.table_query:
+            order = request.table_query["order_by"]
+            value["table_query"]["order_by"] = {"field": order["field"], "direction": order.get("direction", "desc")}
     for key in ("exact_inventory_kind", "exact_field", "cursor"):
         raw_value = getattr(request, key)
         if raw_value is not None:
@@ -12257,8 +12266,16 @@ def _candidate_fact_table_refs(item, allowed):
                 quotes(subject)
         if result_set is not None:
             if (proof.get("result_set_hash") != sha256_json([table["total"], columns, names, result_set])
-                    or set(result_set) - {"total_groups", "shown_groups", "memberships", "groups"}
+                    or set(result_set) - {"total_groups", "shown_groups", "memberships", "groups", "order_by", "null_source_date_count"}
                     or type(table["total"]) is not int or table["shown"] != len(rows)):
+                return None
+            if "order_by" in result_set:
+                _validate_table_order_by(result_set["order_by"])
+            dated = "null_source_date_count" in result_set
+            if dated and (type(result_set["null_source_date_count"]) is not int
+                          or not 0 <= result_set["null_source_date_count"] <= table["total"]):
+                return None
+            if "order_by" in result_set and not dated:
                 return None
             groups = result_set["groups"]
             k, j = result_set["total_groups"], result_set["shown_groups"]
@@ -12272,6 +12289,19 @@ def _candidate_fact_table_refs(item, allowed):
             combinations = set()
             for index, group in enumerate(groups):
                 keys = {"values", "count", "ref"}
+                if dated:
+                    keys.update(("earliest_source_date", "latest_source_date"))
+                    earliest, latest = group["earliest_source_date"], group["latest_source_date"]
+                    if (earliest is None) != (latest is None):
+                        return None
+                    if earliest is not None:
+                        for stamp in (earliest, latest):
+                            if not isinstance(stamp, str) or not re.fullmatch(
+                                    r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|\+00:00))?", stamp):
+                                return None
+                        if (datetime.fromisoformat(earliest).replace(tzinfo=timezone.utc)
+                                > datetime.fromisoformat(latest).replace(tzinfo=timezone.utc)):
+                            return None
                 if export_basis and group.get("ref") is None:
                     keys.add("basis")
                     if group.get("basis") != "export_verified":

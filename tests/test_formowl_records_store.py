@@ -1041,6 +1041,302 @@ class RecordStoreTests(unittest.TestCase):
         self.assertIsNone(cells["a"][1][0][3])
         self.assertEqual(cells["b"][1][0][3], "10")
 
+    def test_source_order_and_dates_cover_all_admitted_group_members_before_page(self):
+        specs = [("a-old", "2032-01-01T23:00:00-02:00", "10", "blue"),
+                 ("a-new", "2032-02-01T10:20:30.123456+02:00", "10", "blue"),
+                 ("a-null", None, "10", "blue"),
+                 ("b-middle", "2032-01-15", "20", "blue"),
+                 ("z-null", "2032-02-31T00:00:00Z", "30", "blue"),
+                 ("hidden", "2099-01-01T00:00:00Z", "10", "red"),
+                 ("rejected", "2098-01-01T00:00:00Z", "10", "blue"),
+                 ("stale", "2097-01-01T00:00:00Z", "10", "blue")]
+        rows = []
+        for rid, source, quantity, scope in specs:
+            row = export_row(rid, {"quantity": quantity}, scope=scope)
+            row["outer_mail_date"]["value"] = source
+            rows.append(row)
+        write_export(self.path, rows)
+        store.load_candidate_fact_exports(self.path, connection=self.conn)
+        pin = sha256_json("serving")
+        self.conn.execute("UPDATE record SET fact_serving_revision_sha256=%s", (pin,))
+        self.conn.execute("UPDATE record SET fact_serving_revision_sha256=%s WHERE record_id='stale'", (sha256_json("stale"),))
+        plan = {"return": ["quantity"], "limit": 1, "order_by": {"field": "source_date"}}
+        options = dict(connection=self.conn, source_revision_sha256=pin,
+                       _admit=lambda record: record["record_id"] != "rejected", _result_groups=True)
+        result = store.execute(plan, ["blue"], **options)
+        self.assertEqual((result["total"], result["null_source_date_count"]), (5, 2))
+        self.assertEqual([r["record_id"] for r in result["rows"]], ["a-new"])
+        self.assertEqual(result["rows"][0]["source_date"], "2032-02-01T08:20:30.123456Z")
+        self.assertEqual([g[1] for g in result["result_groups"]], [3, 1, 1])
+        self.assertTrue(all(len(g) == 5 for g in result["result_groups"]))
+        self.assertEqual(result["result_group_metadata"], [
+            {"latest_source_date": "2032-02-01T08:20:30.123456Z",
+             "earliest_source_date": "2032-01-02T01:00:00Z", "null_source_date_count": 1},
+            {"latest_source_date": "2032-01-15", "earliest_source_date": "2032-01-15", "null_source_date_count": 0},
+            {"latest_source_date": None, "earliest_source_date": None, "null_source_date_count": 1}])
+        ascending = store.execute({**plan, "order_by": {"field": "source_date", "direction": "asc"}}, ["blue"], **options)
+        self.assertEqual(ascending["rows"][0]["record_id"], "a-old")
+        self.assertEqual([g[2] for g in ascending["result_groups"]], ["a-old", "b-middle", "z-null"])
+        second = store.execute({**plan, "offset": 1}, ["blue"], **options)
+        self.assertEqual(second["rows"][0]["record_id"], "b-middle")
+        self.assertEqual(second["result_group_metadata"], result["result_group_metadata"])
+        empty = store.execute(plan, [], **options)
+        self.assertEqual((empty["null_source_date_count"], empty["result_group_metadata"]), (0, []))
+
+    def test_typed_and_literal_ordering_use_all_values_and_keep_projection_coverage(self):
+        rows = [export_row("a", {"quantity": "2", "delivery_date": "2032-12-01", "supplier": "Zulu"}),
+                export_row("b", {"quantity": "10", "delivery_date": "2032-01-01", "supplier": "alpha"}),
+                export_row("c", {"quantity": "unknown", "supplier": "beta"}),
+                export_row("d", {"origin_country": "Canada"})]
+        rows[0]["fields"]["quantity"].append({**rows[0]["fields"]["quantity"][0], "value": "100"})
+        for row in rows:
+            if "supplier" in row["fields"]:
+                row["fields"]["supplier"][0]["raw_property"] = 'Label; SELECT 1 --'
+        write_export(self.path, rows)
+        store.load_candidate_fact_exports(self.path, connection=self.conn)
+        plan = {"return": ["quantity"], "order_by": {"field": "quantity"}}
+        options = dict(connection=self.conn, _result_groups=True)
+        descending = store.execute(plan, ["blue"], **options)
+        self.assertEqual([r["record_id"] for r in descending["rows"]], ["a", "b", "c", "d"])
+        self.assertEqual((descending["without_projection"], descending["quantity_only"]), (1, 3))
+        ascending = store.execute({**plan, "order_by": {"field": "quantity", "direction": "asc"}}, ["blue"], **options)
+        self.assertEqual([r["record_id"] for r in ascending["rows"]], ["a", "b", "c", "d"])
+        date = store.execute({**plan, "order_by": {"field": "delivery_date", "direction": "asc"}}, ["blue"], **options)
+        self.assertEqual([r["record_id"] for r in date["rows"]][:2], ["b", "a"])
+        raw = store.execute({**plan, "order_by": {"field": 'column:Label; SELECT 1 --', "direction": "asc"}}, ["blue"], **options)
+        self.assertEqual([r["record_id"] for r in raw["rows"]], ["b", "c", "a", "d"])
+        self.assertEqual([g[2] for g in raw["result_groups"]], ["b", "c", "a", "d"])
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM record").fetchone()[0], 4)
+        legacy = store.execute({**plan, "order_by": "projection_coverage"}, ["blue"], **options)
+        self.assertEqual((legacy["without_projection"], legacy["quantity_only"]), (1, 3))
+        self.assertTrue(all(row["projection_hits"] == 1 for row in raw["rows"] if row["record_id"] != "d"))
+
+    def test_source_dates_reject_naive_and_invalid_but_normalize_offsets_before_sort(self):
+        dates = {"early": "2032-01-02T00:00:00+02:00", "late": "2032-01-01T23:00:00Z",
+                 "naive": "2032-01-03T00:00:00", "invalid": "2032-02-31", "blank": ""}
+        rows = []
+        for rid, source in dates.items():
+            row = export_row(rid, {"quantity": "1"})
+            row["outer_mail_date"]["value"] = source
+            rows.append(row)
+        write_export(self.path, rows)
+        store.load_candidate_fact_exports(self.path, connection=self.conn)
+        result = store.execute({"return": ["quantity"], "order_by": {"field": "source_date"}}, ["blue"],
+                               connection=self.conn, _result_groups=True)
+        self.assertEqual([r["record_id"] for r in result["rows"]], ["late", "early", "blank", "invalid", "naive"])
+        self.assertEqual(result["null_source_date_count"], 3)
+        self.assertEqual(result["result_group_metadata"], [{"latest_source_date": "2032-01-01T23:00:00Z",
+            "earliest_source_date": "2032-01-01T22:00:00Z", "null_source_date_count": 3}])
+        # Page-independent counts remain available when the detail page is empty.
+        paged = store.execute({"return": ["quantity"], "offset": 10,
+            "order_by": {"field": "source_date"}}, ["blue"], connection=self.conn, _result_groups=True)
+        self.assertEqual(paged["rows"], [])
+        self.assertEqual(paged["result_group_metadata"], result["result_group_metadata"])
+        self.assertEqual(paged["null_source_date_count"], 3)
+
+    def test_native_attachment_source_date_uses_sealed_parent_mail_value_or_null(self):
+        rows = []
+        for rid, source, scope in (("attachment", "2032-03-01T12:00:00+03:00", "blue"),
+                ("missing-parent", None, "blue"), ("hidden-parent", "2099-01-01T00:00:00Z", "red")):
+            rows.append(dict(observation_id=rid, observation_hash=sha256_json(rid),
+                table_index=0, row_index=1, permission_scope_id=scope, header_signature=["ETD"],
+                sent_at=source, source_family="attachment_table", mail_observation_id="mail-"+rid,
+                mail_message_occurrence_id="occurrence-"+rid, attachment_observation_id="parent-"+rid,
+                cells=[dict(cell_index=0, column_name="ETD", observation_hash=sha256_json(rid+"cell"), text="2032-04-01")]))
+        path = self.path / "native.jsonl"
+        path.write_text("".join(json.dumps(row)+"\n" for row in rows))
+        store.load_native_rows(path, connection=self.conn)
+        self.conn.execute("SET LOCAL DateStyle='German, DMY'")
+        result = store.execute({"return": ["column:ETD"], "order_by": {"field": "source_date"}}, ["blue"],
+                               connection=self.conn, _result_groups=True)
+        self.assertEqual([r["record_id"] for r in result["rows"]], ["native:attachment", "native:missing-parent"])
+        self.assertEqual(result["rows"][0]["native_locator"]["mail_observation_id"], "mail-attachment")
+        self.assertEqual(result["rows"][0]["source_date"], "2032-03-01T09:00:00Z")
+        self.assertEqual(result["null_source_date_count"], 1)
+        self.assertEqual(result["result_group_metadata"], [{"latest_source_date": "2032-03-01T09:00:00Z",
+            "earliest_source_date": "2032-03-01T09:00:00Z", "null_source_date_count": 1}])
+
+    def test_sorted_detail_page_skips_missing_projection_and_material_groups_sort_by_their_own_keys(self):
+        part = export_row("parts", {"part_number": "AA-101"})
+        part["fields"]["part_number"].append({**part["fields"]["part_number"][0], "value": "ZZ-999"})
+        recent = export_row("no-part", {"quantity": "5"})
+        recent["outer_mail_date"]["value"] = "2035-01-01"
+        write_export(self.path, [part, recent])
+        store.load_candidate_fact_exports(self.path, connection=self.conn)
+        plan = {"return": ["part_number"], "order_by": {"field": "source_date"}, "limit": 1}
+        options = dict(connection=self.conn, _result_groups=True, _answer_bearing_page=True)
+        page = store.execute(plan, ["blue"], **options)
+        self.assertEqual((page["total"], page["without_projection"]), (2, 1))
+        self.assertEqual([r["record_id"] for r in page["rows"]], ["parts"])
+        sorted_parts = store.execute({**plan, "order_by": {"field": "part_number"}}, ["blue"], **options)
+        self.assertEqual([g[0][0] for g in sorted_parts["result_groups"] if g[2]=="parts"], [["ZZ-999"], ["AA-101"]])
+
+    def test_ordering_contract_rejects_sql_directions_and_unknown_properties(self):
+        for order_by in ({}, {"field": "quantity", "direction": "desc; DROP TABLE record"},
+                         {"field": "quantity", "extra": True}, {"field": "missing"},
+                         {"field": "column:"}, {"field": None}, ["quantity"]):
+            with self.subTest(order_by=order_by), self.assertRaises(ValueError):
+                store.execute({"return": ["quantity"], "order_by": order_by}, ["blue"], connection=self.conn)
+
+
+    def _property_remap_fixture(self):
+        from formowl_graph.ontology import fold_property_label
+        rows = []
+        definitions = [("a", ["SO.No.","Drop.Code","PO Number","Qty"], ["SOX-9","TEMP-8","PO-303","10"]),
+                       ("blank", ["SO.No.","Drop.Code","PO Number","Qty"], ["","","PO-304","20"]),
+                       ("unmapped", ["ＳＯ　Ｎｏ","Other"], ["SOX-10","note"]),
+                       ("other", ["so no","Other"], ["SOX-11","note"]),
+                       ("mention", ["Notes"], ["SOX-9"])]
+        mapping = {}
+        for rid,names,values in definitions:
+            entries = ([{"property_id":p} for p in ("po_number","po_number","po_number","quantity")]
+                       if rid in ("a","blank") else [None,None] if rid == 'unmapped' else
+                       [{"property_id":"supplier"},None] if rid == 'other' else [{"property_id":"supplier"}])
+            mapping[sha256_json(names)] = entries
+            rows.append(dict(observation_id=rid,observation_hash=sha256_json(rid),table_index=0,row_index=1,
+                permission_scope_id="blue",source_family="attachment_table",header_signature=names,
+                cells=[dict(cell_index=i,column_name=name,text=value,observation_id=f"{rid}-{i}",
+                            observation_hash=sha256_json([rid,i])) for i,(name,value) in enumerate(zip(names,values))]))
+        path = self.path / 'native.jsonl'
+        path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+        store.load_native_rows(path,mapping,connection=self.conn)
+        fact = export_row('sealed',{'po_number':'FACT-200','delivery_date':'pending'})
+        fact['fields']['po_number'][0]['raw_property'] = 'SO.No.'
+        write_export(self.path,[fact])
+        store.load_candidate_fact_exports(self.path,connection=self.conn)
+        pin = sha256_json('serving')
+        self.conn.execute("""UPDATE record SET source_revision_sha256=%s,verified_at_export=true,
+            export_binding=%s WHERE kind='table_row'""", (pin,psycopg.types.json.Jsonb({
+            'exporter_sha256':store._NATIVE_FAMILY_EXPORTER,'shard':'ab','shard_sha256':sha256_json('shard')})))
+        revision = self._summary_revision(pin)
+        with patch('formowl_mail.issue56_sealed_source._authorized_mail_selector_for_asset',return_value=None):
+            store.verify_fact_serving_spans(revision,connection=self.conn)
+        diff = [dict(normalized_name=fold_property_label(label),column_name=label,old_property_id='po_number',
+                     new_property_id=new,named_cell_count=count,reason='offline fixture',row_count=count,
+                     review_status='pending_review') for label,new,count in
+                [('SO.No.','sales_order_number',4),('Drop.Code',None,2)]]
+        return diff,pin,revision
+
+    def _property_remap_snapshot(self):
+        return [self.conn.execute(query).fetchall() for query in (
+            'SELECT to_jsonb(r) FROM record r ORDER BY record_id',
+            'SELECT to_jsonb(v) FROM record_value v ORDER BY record_id,ordinal',
+            'SELECT * FROM header_signature ORDER BY header_signature_id',
+            'SELECT * FROM record_entity ORDER BY record_id,entity_id,via_property',
+            'SELECT * FROM entity ORDER BY entity_id',
+            'SELECT * FROM record_unresolved_value_summary ORDER BY 1,2,3,4,5,6,7',
+            'SELECT * FROM record_unresolved_value_summary_coverage ORDER BY 1,2,3')]
+
+    def test_property_remap_preserves_evidence_facts_and_other_mappings_and_is_retryable(self):
+        diff,pin,_ = self._property_remap_fixture()
+        before = self._property_remap_snapshot()
+        fact_buckets = self.conn.execute("SELECT * FROM record_unresolved_value_summary WHERE property_id='delivery_date'").fetchall()
+        # The false native PO seed currently leaks through a quote mention.
+        self.assertIn('native:mention',{r['record_id'] for r in self.query('po_number','eq',['SOX-9'])['rows']})
+        path = self.path / 'diff.jsonl'
+        path.write_text(''.join(json.dumps(item)+'\n' for item in diff))
+        result = store.update_property_mapping(path,connection=self.conn)
+        self.assertEqual((result['changed_value_count'],result['header_signature_count']),(4,1))
+        sales = result['changes'][0]
+        self.assertEqual((sales['inventory_value_count'],sales['changed_value_count'],sales['skipped_value_count']),(4,2,2))
+        self.assertEqual({item['property_id']:item['count'] for item in sales['after_counts']},
+                         {'po_number':0,'sales_order_number':2,None:1,'supplier':1})
+        self.assertEqual(self.query('po_number','eq',['SOX-9'])['total'],0)
+        self.assertEqual(self.query('sales_order_number','eq',['ＳＯＸ－９'])['total'],1)
+        self.assertEqual(self.query('sales_order_number','contains',['sox'])['total'],1)
+        self.assertEqual(self.query('sales_order_number','in',['SOX-9','OTHER'])['total'],1)
+        self.assertEqual(self.query('po_number','eq',['FACT-200'])['total'],1)
+        self.assertEqual(self.query('po_number','eq',['PO-303'])['total'],1)
+        self.assertEqual(self.query('sales_order_number','eq',['SOX-9'],scopes=['red'])['total'],0)
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM entity WHERE entity_type NOT IN ('part','purchase_order')").fetchone()[0],0)
+        self.assertEqual(self.conn.execute("SELECT * FROM record_unresolved_value_summary WHERE property_id='delivery_date'").fetchall(),fact_buckets)
+        self.assertEqual(self.conn.execute("""SELECT property_id,total_unresolved,complete FROM record_unresolved_value_summary_coverage
+            WHERE serving_revision=%s AND property_id IN ('po_number','sales_order_number') ORDER BY property_id""",(pin,)).fetchall(),
+            [('po_number',0,True),('sales_order_number',1,True)])
+        self.assertEqual(self.conn.execute("SELECT property_id,value_count,source_proven FROM record_unresolved_value_summary WHERE property_id='sales_order_number'").fetchall(),
+                         [('sales_order_number',1,True)])
+        mapping = self.conn.execute("SELECT column_mapping FROM header_signature WHERE column_names=%s",(['SO.No.','Drop.Code','PO Number','Qty'],)).fetchone()[0]
+        self.assertEqual(mapping[:2],[{'property_id':'sales_order_number','date_role':None},None])
+        after = self._property_remap_snapshot()
+        self.assertEqual(after[0],before[0])
+        for old,new in zip(before[1],after[1]):
+            mutable = {'property_id','value_type','date_role','date_roles','unit'}
+            self.assertEqual({k:v for k,v in old[0].items() if k not in mutable},
+                             {k:v for k,v in new[0].items() if k not in mutable})
+        self.assertEqual([row for row in before[1] if row[0]['record_id']=='sealed'],
+                         [row for row in after[1] if row[0]['record_id']=='sealed'])
+        repeated = store.update_property_mapping(diff,connection=self.conn)
+        self.assertEqual((repeated['changed_value_count'],repeated['header_signature_count']),(0,0))
+        self.assertEqual(self._property_remap_snapshot(),after)
+
+    def test_property_remap_invalid_diff_inventory_and_midwrite_failure_roll_back_every_table(self):
+        diff,_,_ = self._property_remap_fixture()
+        before = self._property_remap_snapshot()
+        bad = [dict(diff[0],named_cell_count=3),dict(diff[0],old_property_id='supplier'),
+               dict(diff[0],new_property_id='part_number'),dict(diff[0],normalized_name='other'),
+               dict(diff[0],named_cell_count=True)]
+        for item in bad:
+            with self.subTest(item=item),self.assertRaises(ValueError):
+                store.update_property_mapping([item],connection=self.conn)
+            self.assertEqual(self._property_remap_snapshot(),before)
+        with self.assertRaises(ValueError):
+            store.update_property_mapping([diff[0],diff[0]],connection=self.conn)
+        with patch.object(store,'_link_entities',side_effect=RuntimeError('midwrite fixture')):
+            with self.assertRaisesRegex(RuntimeError,'midwrite fixture'):
+                store.update_property_mapping(diff,connection=self.conn)
+        self.assertEqual(self._property_remap_snapshot(),before)
+        with self.assertRaisesRegex(RuntimeError,'outer fixture'):
+            with self.conn.transaction():
+                store.update_property_mapping(diff,connection=self.conn)
+                raise RuntimeError('outer fixture')
+        self.assertEqual(self._property_remap_snapshot(),before)
+        self.assertEqual(store.update_property_mapping(diff,connection=self.conn)['changed_value_count'],4)
+
+    def test_property_remap_serializes_writers_and_readers_see_atomic_commit(self):
+        diff,_,_ = self._property_remap_fixture()
+        # Publish only this disposable fixture so a second PostgreSQL session can
+        # exercise the real advisory lock and MVCC boundary.
+        self.conn.commit()
+        self.conn.execute('SET search_path TO r2_fixture')
+        self.conn.commit()
+        def cleanup_schema():
+            self.conn.rollback()
+            self.conn.autocommit = True
+            self.conn.execute('DROP SCHEMA IF EXISTS r2_fixture CASCADE')
+        self.addCleanup(cleanup_schema)
+        with psycopg.connect(os.environ['FORMOWL_RECORDS_TEST_DSN'],autocommit=True) as other:
+            other.execute('SET search_path TO r2_fixture')
+            other.execute("SET lock_timeout='100ms'")
+            with self.conn.transaction():
+                self.conn.execute('SELECT pg_advisory_xact_lock(198281031, 2)')
+                with self.assertRaises(psycopg.errors.LockNotAvailable):
+                    store.update_property_mapping(diff,connection=other)
+                self.assertEqual(other.execute("SELECT count(*) FROM record_value WHERE property_id='sales_order_number'").fetchone()[0],0)
+                store.update_property_mapping(diff,connection=self.conn)
+                self.assertEqual(other.execute("SELECT count(*) FROM record_value WHERE property_id='sales_order_number'").fetchone()[0],0)
+                self.assertEqual(other.execute("SELECT count(*) FROM record_unresolved_value_summary WHERE property_id='sales_order_number'").fetchone()[0],0)
+                self.assertEqual(other.execute("SELECT count(*) FROM header_signature WHERE column_mapping::text LIKE '%sales_order_number%'").fetchone()[0],0)
+            self.assertEqual(other.execute("SELECT count(*) FROM record_value WHERE property_id='sales_order_number'").fetchone()[0],2)
+            self.assertEqual(other.execute("SELECT value_count FROM record_unresolved_value_summary WHERE property_id='sales_order_number'").fetchone()[0],1)
+            self.assertEqual(store.update_property_mapping(diff,connection=other)['changed_value_count'],0)
+            self.assertEqual(other.execute("SELECT count(*) FROM record_entity WHERE via_property='sales_order_number'").fetchone()[0],0)
+
+    def test_property_remap_stale_summary_fails_closed_and_bound_rebuild_preserves_fact_proof(self):
+        diff,pin,revision = self._property_remap_fixture()
+        self.conn.execute("UPDATE record_unresolved_value_summary_coverage SET complete=false WHERE property_id='po_number'")
+        before = self._property_remap_snapshot()
+        with self.assertRaisesRegex(ValueError,'summary is not current'):
+            store.update_property_mapping(diff,connection=self.conn)
+        self.assertEqual(self._property_remap_snapshot(),before)
+        with patch('formowl_mail.issue56_sealed_source._authorized_mail_selector_for_asset',return_value=None):
+            store.rebuild_unresolved_value_summaries(revision,connection=self.conn)
+            result = store.update_property_mapping(diff,connection=self.conn,revision=revision)
+        self.assertEqual(result['changed_value_count'],4)
+        result = store.execute({'filters':[{'property':'delivery_date','op':'gte','values':['2032-01-01']}]},
+            ['blue'],connection=self.conn,source_revision_sha256=pin,_require_unresolved_summary=True,
+            _summary_source_families=['mail'])
+        self.assertEqual(result['unresolved_value_count'],1)
+
 
 class EntityProjectionKeyTests(unittest.TestCase):
     def test_existing_seed_shape_is_preserved_except_whitespace_composites(self):

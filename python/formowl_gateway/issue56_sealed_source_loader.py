@@ -1708,9 +1708,10 @@ def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None, _verif
     counts = _counts
     if counts is None and record_total is not None:
         counts = (len(rows), record_total["without_projection"])
-        rows = sorted(rows, key=lambda row: row["_projection_rank"], reverse=True)
-        rows, selected = _merge_candidate_fact_rows(rows, selected, deadline, exact_projection=True,
-                                                    minimum_rows=3 if record_total.get("export_revision") else 0)
+        if "order_by" not in record_total:
+            rows = sorted(rows, key=lambda row: row["_projection_rank"], reverse=True)
+            rows, selected = _merge_candidate_fact_rows(rows, selected, deadline, exact_projection=True,
+                                                        minimum_rows=3 if record_total.get("export_revision") else 0)
         _merged_count = counts[0] - len(rows)
     elif counts is None:
         original_count = len(rows)
@@ -1779,7 +1780,8 @@ def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None, _verif
                     _merged_count=_merged_count, verified_items=verified_items, record_total=record_total,
                     _result_limit=0)
                 return len(json.dumps(_candidate_table_for_model(single), ensure_ascii=False).encode()) if single else float("inf")
-            rows = sorted(rows, key=detail_size)
+            if "order_by" not in record_total:
+                rows = sorted(rows, key=detail_size)
             reserved, reserved_table = largest_prefix(reserved, lambda count: render(0, count))
 
         # Even an empty group object consumes more than two JSON bytes.
@@ -1918,7 +1920,8 @@ def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None, _verif
                         cell["link"] = link
                     cells.append(cell)
             values.append(cells)
-        result_lines.append({"values": values, "count": group["count"], "ref": ref,
+        dates = {key: group[key] for key in ("earliest_source_date", "latest_source_date") if key in group}
+        result_lines.append({"values": values, "count": group["count"], "ref": ref, **dates,
                              **({"basis":"export_verified"} if ref is None and record_total.get("export_revision") else {})})
     citations = []
     header_refs = {}
@@ -1986,6 +1989,12 @@ def _candidate_fact_table(rows, selected, pin, *, deadline, _counts=None, _verif
                 f"結果集共 {k} 組，顯示 {j} 組。"
                 f"唯一記錄 {total} 筆，共 {memberships} 次歸組，每組內同一筆只計一次。"
                 f"詳細列 {len(display)} 列，代表 {represented} 筆，附已補驗的原文證據。")
+            if "null_source_date_count" in record_total:
+                missing_dates = record_total["null_source_date_count"]
+                preamble["result_set"]["null_source_date_count"] = missing_dates
+                preamble["disclosure"] += f"其中 {missing_dates} 筆記錄缺少可用的來源郵件日期。"
+            if "order_by" in record_total:
+                preamble["result_set"]["order_by"] = record_total["order_by"]
             if j == k:
                 preamble["disclosure"] += "本表已列出完整結果集。回答清單題時請列出全部組，組數多時可摘要全部組，並引用本表。"
             else:
@@ -3351,6 +3360,14 @@ def _build_source_start_semantic_handler(
                 "disclosure": (coverage.get("disclosure", "") + " " + disclosure).strip()}}
 
         def native_table():
+            if table_query and "order_by" in table_query:
+                coverage = {"status": "incomplete", "absence_claim": False,
+                            "disclosure": "本次未取得可依指定欄位排序的記錄庫結果。"}
+                if record_total is not None:
+                    coverage["record_store_total"] = record_total["total"]
+                    coverage["null_source_date_count"] = record_total["null_source_date_count"]
+                return {"status": "partial", "citations": [], "evidence": [], "exact_result": None,
+                        "deterministic_exact": False, "coverage": coverage}
             if (source_budget.get("record_lookup_unavailable") and record_total is None and table_query
                     and any(item.get("op","eq") != "eq" for item in table_query["filters"])):
                 partial = {"status":"partial", "citations":[], "evidence":[], "exact_result":None,
@@ -3409,7 +3426,8 @@ def _build_source_start_semantic_handler(
             if explicit:
                 from formowl_mail.human_uat_orchestrator import _validate_table_query
                 _validate_table_query(table_query)
-            if not explicit or all(item.get("op", "eq") == "eq" for item in table_query["filters"]):
+            if not explicit or ("order_by" not in table_query and all(
+                    item.get("op", "eq") == "eq" for item in table_query["filters"])):
                 source_budget["deadline"] = started + .75 * max(0, source_end - started)
             try:
                 record_rows, record_total = query_records(

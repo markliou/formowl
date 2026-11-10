@@ -46,6 +46,12 @@
       "Supplier",
       "Vendor",
       "Supplier Name"
+    ],
+    "sales_order_number": [
+      "Sales Order Number",
+      "SO Number",
+      "Sales Order No.",
+      "銷售單號"
     ]
   }
 }

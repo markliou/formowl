@@ -29,7 +29,8 @@ from .normalize import normalize
 
 PROPERTY_TYPES = {
     "part_number": "identifier", "manufacturer_part_number": "identifier",
-    "po_number": "identifier", "po_date": "date", "delivery_date": "date",
+    "po_number": "identifier", "sales_order_number": "identifier",
+    "po_date": "date", "delivery_date": "date",
     "quantity": "quantity", "origin_country": "country",
     "supplier": "text", "manufacturer": "text",
 }
@@ -774,6 +775,164 @@ def load_native_rows(path, mapping=None, *, connection=None, revision=None):
     return counts
 
 
+def _mapping_summary_deltas(db):
+    """Move native unresolved buckets, retaining unrelated fact-family proofs."""
+    query = sql.SQL("""SELECT r.permission_scope,r.source_revision_sha256,m.new_property_id,
+        CASE WHEN {receipt} THEN ARRAY[CASE WHEN r.native_locator->>'source_family'='mail_inline_table'
+            THEN 'mail' ELSE r.native_locator->>'source_family' END] ELSE ARRAY[]::text[] END,
+        coalesce({receipt},false),count(*)
+        FROM record_value v JOIN record r USING(record_id)
+        JOIN property_remap_names m ON v.column_name_raw=m.column_name
+        WHERE r.kind='table_row' AND v.property_id='po_number' AND v.norm_status<>'ok'
+        AND r.verified_at_export AND r.export_binding IS NOT NULL AND r.source_revision_sha256 IS NOT NULL
+        AND coalesce(r.row_role,'') NOT IN ('header','header_candidate') GROUP BY 1,2,3,4,5""").format(
+            receipt=_native_family_receipt("r"))
+    deltas = db.execute(query).fetchall()
+    for scope,pin,new,families,proven,count in deltas:
+        # A missing/stale counter is never promoted into complete coverage by a remap.
+        coverage = db.execute("""SELECT total_unresolved FROM record_unresolved_value_summary_coverage
+            WHERE permission_scope=%s AND serving_revision=%s AND property_id='po_number'
+            AND complete AND summary_version=1""", (scope,pin)).fetchone()
+        bucket_key = (scope,pin,'po_number',families,proven)
+        bucket = db.execute("""SELECT value_count FROM record_unresolved_value_summary
+            WHERE permission_scope=%s AND serving_revision=%s AND property_id=%s
+            AND source_families=%s AND source_proven=%s AND mail_selector='' AND NOT selector_proven""",
+            bucket_key).fetchone()
+        if coverage is None or coverage[0] < count or bucket is None or bucket[0] < count:
+            raise ValueError("property mapping summary is not current")
+        db.execute("""DELETE FROM record_unresolved_value_summary WHERE permission_scope=%s
+            AND serving_revision=%s AND property_id=%s AND source_families=%s AND source_proven=%s
+            AND mail_selector='' AND NOT selector_proven AND value_count=%s""", (*bucket_key,count))
+        db.execute("""UPDATE record_unresolved_value_summary SET value_count=value_count-%s
+            WHERE permission_scope=%s AND serving_revision=%s AND property_id=%s
+            AND source_families=%s AND source_proven=%s AND mail_selector='' AND NOT selector_proven""",
+            (count,*bucket_key))
+        db.execute("""UPDATE record_unresolved_value_summary_coverage SET total_unresolved=total_unresolved-%s
+            WHERE permission_scope=%s AND serving_revision=%s AND property_id='po_number'""", (count,scope,pin))
+        if new is not None:
+            db.execute("""INSERT INTO record_unresolved_value_summary VALUES (%s,%s,%s,%s,%s,'',false,%s)
+                ON CONFLICT (permission_scope,serving_revision,property_id,source_families,source_proven,mail_selector,selector_proven)
+                DO UPDATE SET value_count=record_unresolved_value_summary.value_count+excluded.value_count""",
+                (scope,pin,new,families,proven,count))
+            db.execute("""UPDATE record_unresolved_value_summary_coverage SET total_unresolved=total_unresolved+%s
+                WHERE permission_scope=%s AND serving_revision=%s AND property_id=%s""", (count,scope,pin,new))
+
+
+def update_property_mapping(changes, *, connection=None, revision=None):
+    """Apply an offline R24a JSONL diff (path or iterable) to native table mappings.
+
+    Only po_number -> sales_order_number/null is supported. R3's lexical folding
+    selects labels; values never select classifications. Other properties and
+    sealed candidate fact exports are untouched. named_cell_count is inventory
+    coverage, including cells that were never PO-mapped; it is not the write count.
+    Repeated applications are no-ops. Counts are returned to the operator; this
+    function does not persist the private diff or authorize a production apply.
+    A supplied bound revision refreshes its existing summary proofs after deltas.
+    """
+    from formowl_graph.ontology import fold_property_label
+    if isinstance(changes, (str, Path)):
+        with Path(changes).open() as stream:
+            changes = [json.loads(line) for line in stream if line.strip()]
+    pending = {}
+    for item in changes:
+        key = _text(item["normalized_name"])
+        if (key != fold_property_label(_text(item["column_name"])) or key in pending
+                or item["old_property_id"] != "po_number"
+                or item["new_property_id"] not in ("sales_order_number", None)
+                or type(item["named_cell_count"]) is not int or item["named_cell_count"] < 0):
+            raise ValueError("invalid property mapping diff")
+        pending[key] = item
+    if not pending:
+        return {"changed_value_count":0,"header_signature_count":0,"changes":[]}
+    results = []
+    with _transaction(connection) as db:
+        db.execute("SELECT pg_advisory_xact_lock(198281031, 2)")
+        # Serialize with loaders and protect the count/metadata/write preconditions
+        # against other writers, while ordinary record readers remain unblocked.
+        db.execute("LOCK TABLE record,record_value,header_signature,record_entity,entity,"
+                   "record_unresolved_value_summary,record_unresolved_value_summary_coverage IN SHARE ROW EXCLUSIVE MODE")
+        db.execute("CREATE TEMP TABLE property_remap_names (column_name text PRIMARY KEY,new_property_id text) ON COMMIT DROP")
+        counts = defaultdict(lambda: defaultdict(int))
+        labels = []
+        for label,prop,count in db.execute("""SELECT v.column_name_raw,v.property_id,count(*)
+                FROM record_value v JOIN record r USING(record_id)
+                WHERE r.kind='table_row' AND v.column_name_raw IS NOT NULL GROUP BY 1,2"""):
+            key = fold_property_label(label)
+            if key in pending:
+                counts[key][prop] += count
+                labels.append((label,pending[key]["new_property_id"]))
+        with db.cursor() as cursor:
+            cursor.executemany("INSERT INTO property_remap_names VALUES (%s,%s) ON CONFLICT DO NOTHING", labels)
+        for key,item in pending.items():
+            before = counts[key]
+            if sum(before.values()) != item["named_cell_count"]:
+                raise ValueError("property mapping inventory count mismatch")
+            changed = before.get("po_number",0)
+            after = dict(before)
+            after["po_number"] = 0
+            target = item["new_property_id"]
+            after[target] = before.get(target,0) + changed
+            results.append({"normalized_name":key,"inventory_value_count":sum(before.values()),
+                "changed_value_count":changed,"already_mapped_value_count":before.get(target,0),
+                "skipped_value_count":sum(n for prop,n in before.items() if prop not in ('po_number',target)),
+                "before_counts":[{"property_id":prop,"count":n} for prop,n in sorted(before.items(),key=lambda pair: pair[0] or "")],
+                "after_counts":[{"property_id":prop,"count":n} for prop,n in sorted(after.items(),key=lambda pair: pair[0] or "")]})
+        # A newly introduced property has no legacy coverage rows. Establish zero
+        # only from the actual eligible values, never from an absent summary.
+        pairs = db.execute("""SELECT DISTINCT r.permission_scope,r.source_revision_sha256 FROM record r
+            JOIN record_value v USING(record_id) JOIN property_remap_names m ON v.column_name_raw=m.column_name
+            WHERE r.kind='table_row' AND r.verified_at_export AND r.export_binding IS NOT NULL
+            AND r.source_revision_sha256 IS NOT NULL AND coalesce(r.row_role,'') NOT IN ('header','header_candidate')
+            AND m.new_property_id='sales_order_number'""").fetchall()
+        for scope,pin in pairs:
+            db.execute("""INSERT INTO record_unresolved_value_summary_coverage
+                SELECT %s,%s,'sales_order_number',1,true,0 WHERE NOT EXISTS (
+                    SELECT FROM record_value v JOIN record r USING(record_id)
+                    WHERE r.permission_scope=%s AND v.property_id='sales_order_number' AND v.norm_status<>'ok'
+                    AND r.verified_at_export AND r.export_binding IS NOT NULL
+                    AND CASE WHEN r.kind='table_row' THEN r.source_revision_sha256 ELSE r.fact_serving_revision_sha256 END=%s
+                    AND coalesce(r.row_role,'') NOT IN ('header','header_candidate'))
+                ON CONFLICT DO NOTHING""", (scope,pin,scope,pin))
+        _mapping_summary_deltas(db)
+        changed = db.execute("""UPDATE record_value v SET property_id=m.new_property_id,
+            value_type=CASE WHEN m.new_property_id IS NULL THEN 'text' ELSE 'identifier' END,
+            date_role=NULL,date_roles='{}'::text[],unit=NULL
+            FROM record r,property_remap_names m WHERE v.record_id=r.record_id AND r.kind='table_row'
+            AND v.column_name_raw=m.column_name AND v.property_id='po_number'""").rowcount
+        observed = defaultdict(lambda: defaultdict(int))
+        for label,prop,count in db.execute("""SELECT v.column_name_raw,v.property_id,count(*)
+                FROM record_value v JOIN record r USING(record_id)
+                JOIN property_remap_names m ON v.column_name_raw=m.column_name
+                WHERE r.kind='table_row' GROUP BY 1,2"""):
+            observed[fold_property_label(label)][prop] += count
+        for result in results:
+            actual = observed[result['normalized_name']]
+            expected = {item['property_id']:item['count'] for item in result['after_counts']}
+            if {p:n for p,n in actual.items() if n} != {p:n for p,n in expected.items() if n}:
+                raise ValueError("property mapping count invariant failed")
+            result['after_counts'] = [{"property_id":prop,"count":actual.get(prop,0)}
+                                     for prop in sorted(expected,key=lambda prop: prop or "")]
+        headers = 0
+        for sid,names,mapping in db.execute("SELECT header_signature_id,column_names,column_mapping FROM header_signature"):
+            updated = list(mapping)
+            for index,label in enumerate(names):
+                item = pending.get(fold_property_label(label)) if label is not None else None
+                if item is None or not updated or not updated[index] or updated[index].get('property_id') != 'po_number':
+                    continue
+                updated[index] = ({**updated[index],"property_id":item['new_property_id'],"date_role":None}
+                                  if item['new_property_id'] is not None else None)
+            if updated != mapping:
+                db.execute("UPDATE header_signature SET column_mapping=%s,mapping_status='pending_review' WHERE header_signature_id=%s",
+                           (Jsonb(updated),sid))
+                headers += 1
+        if changed:
+            _link_entities(db)
+        if revision is not None:
+            rebuild_unresolved_value_summaries(revision, connection=db)
+        db.execute("DROP TABLE property_remap_names")
+    return {"changed_value_count":changed,"header_signature_count":headers,"changes":results}
+
+
 def _invalidate_unresolved_summaries(db):
     # Imports replace counts and their coverage in the same writer transaction.
     db.execute("UPDATE record_unresolved_value_summary_coverage SET complete=false")
@@ -1286,7 +1445,7 @@ def _scope_exclusions(db, prefix, args, admit, *, qualified_native=False):
     return rejected
 
 
-def _record_result_groups(columns, filters, bounds, column_variants=None):
+def _record_result_groups(columns, filters, bounds, column_variants=None, *, order_by=None):
     """Compute distinct material memberships, original surfaces and counts in PostgreSQL."""
     requested = [
         (i, prop, _column(prop), ENTITY_TYPES.get(prop), bool(
@@ -1309,18 +1468,30 @@ def _record_result_groups(columns, filters, bounds, column_variants=None):
             args.append(Decimal(bound) if PROPERTY_TYPES[prop] == "quantity" else bound)
         checks.append(sql.SQL(" AND (q.label<>%s OR (") + sql.SQL(" AND ").join(tests) + sql.SQL("))"))
     args.extend([_ENTITY_DIGIT_PATTERN, _ENTITY_WHITESPACE_PATTERN, _ENTITY_WHITESPACE_PATTERN])
+    direction = (order_by or {}).get("direction", "desc")
+    detail_order = (sql.SQL("sort_value {} NULLS LAST,").format(sql.SQL(direction.upper()))
+                    if order_by else sql.SQL(""))
+    aggregate = sql.SQL("min" if direction == "asc" else "max")
+    group_key = sql.SQL("m.sort_value")
+    # A material membership can expose a different part from another group of
+    # the same record. Order a projected property by the values in that group.
+    field = (order_by or {}).get("field")
+    if field in columns and field in PROPERTY_TYPES:
+        norm = sql.SQL("(cell->>3)::numeric" if PROPERTY_TYPES[field] == "quantity" else "cell->>3")
+        group_key = sql.SQL("(SELECT {agg}({norm}) FROM jsonb_array_elements(m.labels->{slot}) cell)").format(
+            agg=aggregate, norm=norm, slot=sql.Literal(columns.index(field)))
     group_query = sql.SQL("""
         , requested(i,label,col,kind,constant_filter) AS (
             SELECT * FROM unnest(%s::int[],%s::text[],%s::text[],%s::text[],%s::bool[])),
-        ordered AS MATERIALIZED (SELECT record_id,
-            row_number() OVER (ORDER BY hits DESC,newest DESC NULLS LAST,record_id) AS position FROM ranked),
+        ordered AS MATERIALIZED (SELECT record_id,source_time,source_date,sort_value,
+            row_number() OVER (ORDER BY {detail_order} hits DESC,newest DESC NULLS LAST,record_id) AS position FROM ranked),
         cells AS MATERIALIZED (
             SELECT o.record_id, q.i, q.kind, v.raw_value AS raw, v.column_name_raw AS name,
                 CASE WHEN v.norm_status='ok' THEN v.norm_value END AS norm
             FROM ordered o JOIN record_value v USING(record_id) JOIN requested q ON
               ((q.col IS NULL AND v.property_id=q.label) OR v.column_name_raw=ANY(
                   ARRAY(SELECT jsonb_array_elements_text(%s::jsonb -> q.label)))) WHERE true
-        """) + sql.SQL("").join(checks) + sql.SQL("""
+        """).format(detail_order=detail_order) + sql.SQL("").join(checks) + sql.SQL("""
         ), needs_link AS MATERIALIZED (
             SELECT o.record_id,q.i,q.kind,q.label FROM ordered o CROSS JOIN requested q WHERE q.kind IS NOT NULL),
         edge_candidates AS MATERIALIZED (
@@ -1365,13 +1536,16 @@ def _record_result_groups(columns, filters, bounds, column_variants=None):
         material_keys AS MATERIALIZED (
             SELECT DISTINCT record_id,norm FROM projected WHERE kind='part' AND norm IS NOT NULL),
         axes AS (
-            SELECT record_id,norm,position FROM (
-                SELECT record_id,norm,max(position) OVER w AS position,count(norm) OVER w AS materials
-                FROM (SELECT record_id,norm,NULL::bigint AS position FROM material_keys
-                      UNION ALL SELECT record_id,NULL,position FROM ordered) keys
+            SELECT record_id,norm,position,source_time,source_date,sort_value FROM (
+                SELECT record_id,norm,max(position) OVER w AS position,count(norm) OVER w AS materials,
+                    max(source_time) OVER w AS source_time,max(source_date) OVER w AS source_date,
+                    max(sort_value) OVER w AS sort_value
+                FROM (SELECT record_id,norm,NULL::bigint AS position,NULL AS source_time,NULL AS source_date,NULL AS sort_value
+                      FROM material_keys UNION ALL SELECT record_id,NULL,position,source_time,source_date,sort_value FROM ordered) keys
                 WINDOW w AS (PARTITION BY record_id)) m WHERE norm IS NOT NULL OR materials=0),
         buckets AS (
             SELECT a.record_id,a.position,a.norm AS material,q.i,
+              max(a.source_time) AS source_time,max(a.source_date) AS source_date,max(a.sort_value) AS sort_value,
               CASE WHEN q.constant_filter THEN '[]'::jsonb ELSE coalesce(to_jsonb(array_agg(
                 DISTINCT p.raw COLLATE "C" ORDER BY p.raw COLLATE "C" NULLS FIRST)
                 FILTER (WHERE p.i IS NOT NULL)),'[]'::jsonb) END AS raw_key,
@@ -1383,19 +1557,28 @@ def _record_result_groups(columns, filters, bounds, column_variants=None):
             GROUP BY a.record_id,a.position,a.norm,q.i,q.constant_filter),
         vectors AS (
             SELECT record_id,position,material,jsonb_agg(raw_key ORDER BY i) AS signature,
+                max(source_time) AS source_time,max(source_date) AS source_date,max(sort_value) AS sort_value,
                 jsonb_agg(labels ORDER BY i) AS labels,bool_and(proved) AS proved
             FROM buckets GROUP BY record_id,position,material),
         members AS (SELECT DISTINCT ON (record_id,signature) * FROM vectors
             ORDER BY record_id,signature,material COLLATE "C" NULLS LAST)
-        ,result_groups AS (SELECT signature,count(*) AS count,(array_agg(record_id ORDER BY position,material COLLATE "C"))[1] AS representative,
+        ,result_groups AS (SELECT signature,count(*) AS count,(array_agg(m.record_id ORDER BY position,material COLLATE "C"))[1] AS representative,
                jsonb_agg(DISTINCT labels) AS labels,bool_and(proved) AS proved,
                min(position) AS position,min(material COLLATE "C") AS first_material
-        FROM members GROUP BY signature)""")
+               ,
+               (array_agg(m.source_date ORDER BY m.source_time DESC, m.record_id)
+                    FILTER (WHERE m.source_time IS NOT NULL))[1] AS latest_source_date,
+               (array_agg(m.source_date ORDER BY m.source_time ASC, m.record_id)
+                    FILTER (WHERE m.source_time IS NOT NULL))[1] AS earliest_source_date,
+               count(*) FILTER (WHERE m.source_time IS NULL) AS null_source_date_count,
+               {aggregate}({group_key}) AS group_sort
+        FROM members m GROUP BY signature)""").format(
+            aggregate=aggregate, group_key=group_key)
     return group_query, args
 
 
 def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
-            _result_groups=False, _record_ids=None, _admit=None, _restricted=False, source_revision_sha256=None,
+            _result_groups=False, _answer_bearing_page=False, _record_ids=None, _admit=None, _restricted=False, source_revision_sha256=None,
             _deadline=None, _native_source_families=None, _summary_source_families=None,
             _summary_selector=None, _require_unresolved_summary=False):
     """Count authorized matching data records and page them in deterministic order.
@@ -1408,8 +1591,18 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
     if not isinstance(plan, dict) or set(plan) - {"filters", "return", "group_by", "limit", "offset",
                                                  "order_by", "include_unmapped_text", "column_variants"}:
         raise ValueError("invalid record query plan")
-    rank_projection = plan.get("order_by") == "projection_coverage"
-    if plan.get("order_by") not in (None, "projection_coverage") or plan.get("include_unmapped_text", True) is not True:
+    order_by = plan.get("order_by")
+    explicit_order = isinstance(order_by, dict)
+    if explicit_order:
+        if (set(order_by) - {"field", "direction"} or not isinstance(order_by.get("field"), str)
+                or order_by.get("direction", "desc") not in ("asc", "desc")):
+            raise ValueError("invalid record ordering")
+        if order_by["field"] != "source_date":
+            _column(order_by["field"])
+    elif order_by not in (None, "projection_coverage"):
+        raise ValueError("unsupported record query option")
+    rank_projection = order_by == "projection_coverage" or explicit_order
+    if plan.get("include_unmapped_text", True) is not True:
         raise ValueError("unsupported record query option")
     filters, returns, group = plan.get("filters", []), plan.get("return", []), plan.get("group_by")
     limit, offset = plan.get("limit", 100), plan.get("offset", 0)
@@ -1449,11 +1642,14 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
     material_groups = group == "料件"
     group_type = "part" if material_groups else ENTITY_TYPES.get(group)
     props = [f["property"] for f in filters] + returns + ([group] if group is not None and not material_groups else [])
+    if explicit_order and order_by["field"] != "source_date":
+        props.append(order_by["field"])
     raw_columns = {name for prop in props for name in _column_names(prop, column_variants)}
     if not scopes:
         empty = {"total": 0, "rows": [], "truncated": False, "grouped_total": 0, "unlinked_count": 0}
         if _result_groups:
-            empty["result_groups"] = []
+            empty.update(result_groups=[], result_group_metadata=[])
+        empty["null_source_date_count"] = 0
         if rank_projection:
             empty.update(without_projection=0, quantity_only=0)
         if comparison_properties:
@@ -1538,26 +1734,71 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
     else:
         ranking = sql.SQL("SELECT m.*, 0 AS hits, NULL::text AS newest, false AS quantity_only FROM memberships m")
     match_prefix = visible + sql.SQL(", matched AS MATERIALIZED (SELECT record_id FROM visible {})").format(where)
+    # ISO dates retain their precision; timestamps require a timezone. Neither
+    # arbitrary prose nor a naive timestamp acquires an invented timezone.
+    source_time = sql.SQL("""CASE WHEN r.sent_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+            AND pg_input_is_valid(r.sent_at,'date')
+        THEN r.sent_at::date::timestamp AT TIME ZONE 'UTC'
+        WHEN r.sent_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt ][0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?([Zz]|[+-][0-9]{2}:[0-9]{2})$'
+            AND pg_input_is_valid(r.sent_at,'timestamptz')
+        THEN r.sent_at::timestamptz END""")
+    sort_value, sort_join = sql.SQL("NULL::text"), sql.SQL("")
+    if explicit_order:
+        prop, direction = order_by["field"], order_by.get("direction", "desc")
+        if prop == "source_date":
+            sort_value = sql.SQL("d.source_time")
+        else:
+            column = _column(prop)
+            expr = (sql.SQL("CASE WHEN v.norm_status='ok' THEN v.norm_value::numeric END")
+                    if PROPERTY_TYPES.get(prop) == "quantity" else
+                    sql.SQL("CASE WHEN v.norm_status='ok' THEN v.norm_value END") if column is None else
+                    sql.SQL("v.column_text_norm"))
+            condition = sql.SQL("v.column_name_raw=ANY(%s)") if column is not None else sql.SQL("v.property_id=%s")
+            sort_join = sql.SQL(""" CROSS JOIN LATERAL (SELECT {aggregate}({expr}) AS sort_value
+                FROM record_value v WHERE v.record_id=p.record_id AND {condition}) sv""").format(
+                    aggregate=sql.SQL("min" if direction == "asc" else "max"), expr=expr, condition=condition)
+            params.append(_column_names(prop, column_variants) if column is not None else prop)
+            sort_value = sql.SQL("sv.sort_value")
     rank_prefix = sql.SQL(""", grouped AS MATERIALIZED (SELECT m.record_id, {} AS group_keys FROM matched m),
-        memberships AS ({}), ranked AS MATERIALIZED ({})""").format(groups, memberships, ranking)
+        memberships AS ({}), projection_ranked AS MATERIALIZED ({}),
+        ranked AS MATERIALIZED (SELECT p.*, d.source_time,
+            CASE WHEN d.source_time IS NULL THEN NULL WHEN length(r.sent_at)=10 THEN r.sent_at
+                ELSE to_char(d.source_time AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS') ||
+                    CASE WHEN extract(microseconds FROM d.source_time)::bigint %% 1000000=0 THEN ''
+                        ELSE '.' || rtrim(to_char(d.source_time AT TIME ZONE 'UTC','US'),'0') END || 'Z'
+                END AS source_date,
+            {} AS sort_value FROM projection_ranked p JOIN visible r USING(record_id)
+            CROSS JOIN LATERAL (SELECT {} AS source_time) d {})""").format(
+                groups, memberships, ranking, sort_value, source_time, sort_join)
     group_field = sql.SQL("")
     if _result_groups:
         if not rank_projection:
             raise ValueError("table result groups require projection ranking")
-        group_query, group_args = _record_result_groups(returns, filters, bounds, column_variants)
+        group_query, group_args = _record_result_groups(returns, filters, bounds, column_variants,
+                                                       order_by=order_by if explicit_order else None)
         rank_prefix += group_query
         params.extend(group_args)
+        group_order = (sql.SQL("group_sort {} NULLS LAST,").format(sql.SQL(order_by.get("direction", "desc").upper()))
+                       if explicit_order else sql.SQL("")) + sql.SQL('position,first_material COLLATE "C",signature')
         group_field = sql.SQL(""", (SELECT coalesce(jsonb_agg(jsonb_build_array(signature,count,representative,labels,proved)
-                            ORDER BY position,first_material COLLATE "C",signature),'[]'::jsonb) FROM result_groups)""")
+                            ORDER BY {ordering}),'[]'::jsonb) FROM result_groups),
+            (SELECT coalesce(jsonb_agg(jsonb_build_object('latest_source_date',latest_source_date,
+                'earliest_source_date',earliest_source_date,'null_source_date_count',null_source_date_count)
+                ORDER BY {ordering}),'[]'::jsonb) FROM result_groups)""").format(ordering=group_order)
+    detail_order = (sql.SQL("sort_value {} NULLS LAST,").format(sql.SQL(order_by.get("direction", "desc").upper()))
+                    if explicit_order else sql.SQL("")) + sql.SQL("hits DESC,newest DESC NULLS LAST,group_keys,record_id")
+    display_order = (sql.SQL("p.sort_value {} NULLS LAST,").format(sql.SQL(order_by.get("direction", "desc").upper()))
+                    if explicit_order else sql.SQL("")) + sql.SQL("p.hits DESC,p.newest DESC NULLS LAST,p.group_keys,p.record_id")
     page_sql = sql.SQL(""",
-        page AS (SELECT * FROM ranked ORDER BY hits DESC, newest DESC NULLS LAST, group_keys, record_id LIMIT %s OFFSET %s)
+        page AS (SELECT * FROM ranked {detail_filter} ORDER BY {detail_order} LIMIT %s OFFSET %s)
         SELECT (SELECT count(*) FROM grouped), (SELECT count(*) FROM memberships), (SELECT count(*) FROM grouped WHERE cardinality(group_keys)=0),
         (SELECT count(*) FROM ranked WHERE hits=0), (SELECT count(*) FROM ranked WHERE quantity_only),
         coalesce(jsonb_agg((to_jsonb(r) - ARRAY['import_key','export_members','verified_at_export','source_revision_sha256','export_binding','fact_serving_revision_sha256']) ||
-            jsonb_build_object('projection_hits',p.hits,'projection_date',p.newest,'quantity_only',p.quantity_only,
+            jsonb_build_object('projection_hits',p.hits,'projection_date',p.newest,'quantity_only',p.quantity_only,'source_date',p.source_date,
                 'values', vals.fields, 'group_keys', p.group_keys, 'entities', links.entities,
                 'export_row_ids', ARRAY(SELECT jsonb_object_keys(r.export_members) ORDER BY 1))
-            ORDER BY p.hits DESC,p.newest DESC NULLS LAST,p.group_keys,p.record_id) FILTER (WHERE p.record_id IS NOT NULL), '[]'::jsonb){}
+            ORDER BY {display_order}) FILTER (WHERE p.record_id IS NOT NULL), '[]'::jsonb),
+        (SELECT count(DISTINCT record_id) FROM ranked WHERE source_time IS NULL){group_field}
         FROM page p JOIN record r USING(record_id)
         CROSS JOIN LATERAL (SELECT jsonb_agg(to_jsonb(v) - 'record_id' - 'column_text_norm' ORDER BY v.ordinal) AS fields
             FROM record_value v WHERE v.record_id=p.record_id) vals
@@ -1565,7 +1806,8 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
             'entity_type', e.entity_type, 'norm_key', e.norm_key, 'raw_key', re.raw_key, 'citation_hash', re.citation_hash,
             'via_property', re.via_property, 'via', CASE WHEN re.via_property='quote_mention' THEN 'quote_mention'
             ELSE 'value' END) ORDER BY e.entity_type, e.norm_key, re.via_property), '[]'::jsonb) AS entities
-            FROM record_entity re JOIN entity e USING(entity_id) WHERE re.record_id=p.record_id) links""").format(group_field)
+            FROM record_entity re JOIN entity e USING(entity_id) WHERE re.record_id=p.record_id) links""").format(group_field=group_field, detail_order=detail_order, display_order=display_order,
+            detail_filter=sql.SQL("WHERE hits > 0") if _answer_bearing_page else sql.SQL(""))
     with _transaction(connection) as db:
         def remaining_budget():
             if _deadline is not None:
@@ -1622,9 +1864,12 @@ def execute(plan, permission_scopes, *, connection=None, _unresolved_only=False,
         prefix = match_prefix + rank_prefix
         query = prefix + page_sql
         remaining_budget()
-        total, grouped_total, unlinked, missing, quantity_only, rows, *group_result = db.execute(
+        total, grouped_total, unlinked, missing, quantity_only, rows, null_dates, *group_result = db.execute(
             query, [*params, limit, offset]).fetchone()
-        comparison = {"result_groups":[tuple(g) for g in group_result[0]]} if group_result else {}
+        comparison = {"null_source_date_count": null_dates}
+        if group_result:
+            comparison.update(result_groups=[tuple(g) for g in group_result[0]],
+                              result_group_metadata=group_result[1])
         summary = None
         if comparison_properties and not _unresolved_only:
             remaining_budget()

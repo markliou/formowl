@@ -350,6 +350,75 @@ class RecordTableTests(unittest.TestCase):
         plan["filters"][0]["values"] = ["2032-04"]
         self.assertIsNone(records._candidate(record, None, plan, {}, {"r": {"fields": {"delivery_date": [fact]}}}, {}))
 
+    def test_explicit_order_contract_resolves_authorized_fields_and_defaults_desc(self):
+        from formowl_gateway.remote import _STRUCTURED_TABLE_QUERY_INPUT_SCHEMA, _validate_structured_table_query_argument
+        from formowl_mail.human_uat_orchestrator import _validate_table_query
+        from formowl_contract import ContractValidationError
+
+        base = {"filters": [{"field": "PO Number", "value": "REF-704"}], "projection_fields": ["Quantity"]}
+        self.assertNotIn("order_by", _STRUCTURED_TABLE_QUERY_INPUT_SCHEMA["required"])
+        self.assertEqual(_STRUCTURED_TABLE_QUERY_INPUT_SCHEMA["properties"]["order_by"]["required"], ["field"])
+        for field, expected in [("source_date", "source_date"), ("Delivery Date", "delivery_date"),
+                                ("Fictional score", "column:Fictional score")]:
+            query = {**base, "order_by": {"field": field}}
+            _validate_structured_table_query_argument(query)
+            _validate_table_query(query)
+            plan = records.plan_for(query, {"raw_columns": ["Fictional score"]}, [])
+            self.assertEqual(plan["order_by"], {"field": expected, "direction": "desc"})
+            if expected.startswith("column:"):
+                self.assertEqual(records._raw_plan_columns(plan), {"Fictional score"})
+        self.assertEqual(records.plan_for(base, {}, ["latest"])["order_by"], "projection_coverage")
+        for invalid in (None, {}, {"field": " "}, {"field": "x" * 121}, {"field": "source_date", "direction": "later"},
+                        {"field": "source_date", "offset": 2}):
+            for validate in (_validate_table_query, _validate_structured_table_query_argument):
+                with self.subTest(invalid=invalid, validator=validate.__name__), self.assertRaises(ContractValidationError):
+                    validate({**base, "order_by": invalid})
+        with self.assertRaises(records.RecordFieldValidationError):
+            records.plan_for({**base, "order_by": {"field": "unknown fixture"}}, {}, [])
+
+    def test_explicit_order_and_group_dates_survive_citation_bound_presentation(self):
+        import time
+        from copy import deepcopy
+        from formowl_contract import sha256_json
+        from formowl_mail.human_uat_orchestrator import _candidate_fact_table_refs
+
+        rows, selected, groups = [], {}, []
+        for i, (value, stamp) in enumerate([("2", "2032-03-08T08:03:42Z"), ("7", None)]):
+            rid = f"r{i}"
+            digest = sha256_json(rid)
+            span = {"observation_hash": digest, "observation_id": rid, "native_locator": {"page": i + 1},
+                    "source_extractor_run_id": "run", "quote": value, "start": 0, "end": 1}
+            field = {"value": value, "raw_property": "Qty", "evidence_spans": [span]}
+            row = {"row_id": rid, "item_or_row": rid, "fields": {"quantity": [field]}, "_projection_rank": (i, "")}
+            rows.append(row)
+            selected[digest] = [{"span": span, "row": row, "field": field, "property": "quantity"}]
+            groups.append({"cells": [{value: {("Qty", None)}}], "count": 1, "detail_span": span,
+                           "representative": rid, "earliest_source_date": stamp, "latest_source_date": stamp})
+
+        counts = {"columns": ["quantity"], "total": 2, "without_projection": 0, "quantity_only": 2,
+                  "groups": groups, "order_by": {"field": "source_date", "direction": "desc"},
+                  "null_source_date_count": 1, "export_revision": sha256_json("serving")}
+        def render(current):
+            return loader._candidate_fact_table(rows, selected, sha256_json("pin"), deadline=time.monotonic()+10,
+                                                record_total=current)
+
+        item = render(counts)
+        refs = set(selected)
+        self.assertEqual(_candidate_fact_table_refs(item, refs), refs)
+        model = compact_evidence_for_model({"status": "partial", "coverage": {"status": "incomplete"},
+                                           "evidence": [item], "citations": sorted(refs)})
+        table = json.loads(model["evidence"][0]["snippet"].split("\n", 1)[1])
+        self.assertEqual([row["item"] for row in table["rows"]], ["r0", "r1"])
+        rs = table["result_set"]
+        self.assertEqual(rs["order_by"], counts["order_by"])
+        self.assertEqual(rs["null_source_date_count"], 1)
+        self.assertEqual([g["latest_source_date"] for g in rs["groups"]], ["2032-03-08T08:03:42Z", None])
+        self.assertEqual([g["earliest_source_date"] for g in rs["groups"]], ["2032-03-08T08:03:42Z", None])
+        for invalid in ("not a timestamp", "2032-02-31", None, "2031-01-10T12:00:00Z"):
+            changed = deepcopy(counts)
+            changed["groups"][0]["latest_source_date"] = invalid
+            self.assertIsNone(_candidate_fact_table_refs(render(changed), refs))
+
     def test_operator_contract_and_native_rejection(self):
         from formowl_contract import ContractValidationError
         from formowl_gateway.remote import _validate_structured_table_query_argument

@@ -219,7 +219,13 @@ def plan_for(query, capabilities, requested):
         range_bounds(predicates)
     except ValueError as exc:
         raise ContractValidationError(str(exc)) from None
-    return {"filters": predicates, "return": projections, "limit": 128, "order_by": "projection_coverage"}
+    order = "projection_coverage"
+    if "order_by" in query:
+        specified = query["order_by"]
+        field = specified["field"]
+        order = {"field": field if field == "source_date" else resolve(field),
+                 "direction": specified.get("direction", "desc")}
+    return {"filters": predicates, "return": projections, "limit": 128, "order_by": order}
 
 
 def _automatic_plan(required_terms, capabilities, requested, scopes, pin, db, *, admit=None, native_families=None):
@@ -243,11 +249,17 @@ def _automatic_plan(required_terms, capabilities, requested, scopes, pin, db, *,
     return {"filters": predicates, "return": projections, "limit": 128, "order_by": "projection_coverage"}, None
 
 
+def _raw_plan_columns(plan):
+    labels = [*plan["return"], *(item["property"] for item in plan["filters"])]
+    if isinstance(plan.get("order_by"), dict):
+        labels.append(plan["order_by"]["field"])
+    return {label.removeprefix("column:") for label in labels if label.startswith("column:")}
+
+
 def _resolve_raw_plan(plan, scopes, pin, db, *, admit=None, native_families=None, deadline=None, fact_columns=None):
     from formowl_records.store import resolve_raw_columns
 
-    labels = [*plan["return"], *(item["property"] for item in plan["filters"])]
-    raw = {label.removeprefix("column:") for label in labels if label.startswith("column:")}
+    raw = _raw_plan_columns(plan)
     if not raw:
         return plan
     resolved = resolve_raw_columns(raw, scopes, source_revision_sha256=pin, connection=db,
@@ -790,7 +802,7 @@ def query_records(revision, table_query, contract, capabilities, selector, budge
                     budget["record_lookup_reason"] = reason
                     return [], None
             fact_columns = None
-            if any(label.startswith("column:") for label in [*plan["return"], *(f["property"] for f in plan["filters"])]):
+            if _raw_plan_columns(plan):
                 fact_column_names = getattr(revision.candidate_fact_rows, "raw_column_names", None)
                 if callable(fact_column_names):
                     fact_columns = fact_column_names()
@@ -799,7 +811,8 @@ def query_records(revision, table_query, contract, capabilities, selector, budge
                 fact_columns=fact_columns)
             bounds = range_bounds(plan["filters"])
             equal_fields = {f["property"] for f in plan["filters"] if f["op"] == "eq"}
-            page = execute({**plan,"limit":_RECORD_PROOF_PAGE}, scopes, connection=db, _result_groups=True, _admit=admit if restricted else None,
+            page = execute({**plan,"limit":_RECORD_PROOF_PAGE}, scopes, connection=db, _result_groups=True,
+                           _answer_bearing_page=isinstance(plan.get("order_by"), dict), _admit=admit if restricted else None,
                            _restricted=restricted, source_revision_sha256=pin, _deadline=budget["deadline"],
                            _native_source_families=native_families, _summary_source_families=families,
                            _summary_selector=selector, _require_unresolved_summary=True)
@@ -810,7 +823,9 @@ def query_records(revision, table_query, contract, capabilities, selector, budge
             result_groups = []
             summaries = page["result_groups"]
             projection_cache = {}
-            for index, (signature, count, rid, variants, proved) in enumerate(summaries):
+            dates = page.get("result_group_metadata", [])
+            for summary, date_range in zip(summaries, dates, strict=True):
+                signature, count, rid, variants, proved = summary
                 if proved is False:
                     raise ValueError("record result group missing identity proof")
                 cells = [{} for _ in plan["return"]]
@@ -820,7 +835,9 @@ def query_records(revision, table_query, contract, capabilities, selector, budge
                             if any(isinstance(v,str) and redact_public_raw_references(v)[1] for v in (raw,name,normalized)):
                                 raise ValueError("unavailable public result value")
                             bucket.setdefault(raw,set()).add((name,via,normalized))
-                group = {"cells":cells,"count":count,"seed":None,"representative":rid}
+                group = {"cells": cells, "count": count, "seed": None, "representative": rid,
+                         "earliest_source_date": date_range["earliest_source_date"],
+                         "latest_source_date": date_range["latest_source_date"]}
                 if rid in representatives:
                     if rid not in projection_cache:
                         projected = {}
@@ -830,6 +847,10 @@ def query_records(revision, table_query, contract, capabilities, selector, budge
                     group["seed"] = source["seed"]
                 result_groups.append(group)
         rows = _convert_records(selected, revision, plan, budget, result_groups)
+        if "null_source_date_count" in page:
+            counts["null_source_date_count"] = page["null_source_date_count"]
+        if isinstance(plan.get("order_by"), dict):
+            counts["order_by"] = {**plan["order_by"], "field": table_query["order_by"]["field"]}
         counts["export_revision"] = pin
         counts["groups"] = result_groups
         counts["columns"] = plan["return"]
@@ -849,7 +870,7 @@ def query_records(revision, table_query, contract, capabilities, selector, budge
             raise RecordFieldValidationError(server_fields) from None
         budget["record_lookup_unavailable"] = True
         budget["record_lookup_reason"] = "lookup_timeout" if isinstance(exc, (TimeoutError, psycopg.errors.QueryCanceled)) else "record_store_unavailable"
-        if (budget["record_lookup_reason"] == "lookup_timeout" and table_query is not None
+        if (budget["record_lookup_reason"] == "lookup_timeout" and table_query is not None and "order_by" not in table_query
                 and plan and len(plan["filters"]) == 1 and required_terms):
             from formowl_records.normalize import normalize
             from formowl_records.store import ENTITY_TYPES
